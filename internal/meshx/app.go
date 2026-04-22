@@ -222,6 +222,15 @@ type model struct {
 	// were doing) leaves the cursor stuck "on" with no animation.
 	initialFocusCmd tea.Cmd
 
+	// syncPendingGhosts — snapshot of unresolved-peer count at the
+	// moment a /sync fires. When the next radioConfigCompleteMsg
+	// lands we diff against the current count to emit a summary
+	// systemLine ("sync complete — N peers identified"). Zero means
+	// no /sync is in flight; setting it to -1 signals "pending but
+	// initial count was zero" to disambiguate from the start-of-day
+	// ConfigComplete that fires after handshake.
+	syncPendingGhosts int
+
 	// Live-radio state. Zero-value is "demo mode — no transport".
 	pump        *pump          // non-nil when connected to a real radio
 	connectDest string         // "" = demo, else "/dev/cu.usbmodem2101" / tcp host
@@ -736,9 +745,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = modeInput
 			m.input.Focus()
 		}
-		// No flash — the top status bar's "● online" dot is the
-		// canonical connection indicator; flashing "radio connected"
-		// at the bottom was duplicate signal in the same mesh-green.
+		// If the user issued /sync and we snapshotted a ghost count,
+		// emit a completion systemLine with the delta so they see
+		// what the re-dump actually changed. syncPendingGhosts > 0
+		// means the snapshot had placeholders; == -1 is the sentinel
+		// for "/sync fired with zero ghosts baseline"; == 0 means
+		// this is the startup handshake and we stay quiet.
+		if m.syncPendingGhosts != 0 {
+			current := 0
+			for _, n := range m.nodes {
+				if strings.HasPrefix(n.callsign, "node 0x") {
+					current++
+				}
+			}
+			baseline := m.syncPendingGhosts
+			if baseline < 0 {
+				baseline = 0
+			}
+			resolved := baseline - current
+			total := len(m.nodes)
+			m.systemBlock("sync complete",
+				fmt.Sprintf("NodeDB re-dump done — %d peers in NodeDB", total),
+				fmt.Sprintf("placeholders: %d → %d  (%d resolved this sync)", baseline, current, resolved),
+			)
+			m.syncPendingGhosts = 0
+		}
+		// Otherwise no flash — the top status bar's "● online" dot is
+		// the canonical connection indicator; flashing "radio
+		// connected" at the bottom was duplicate signal in the same
+		// mesh-green.
 		return m, nil
 
 	case radioDisconnectedMsg:
@@ -1021,7 +1056,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// down" shapes across vim / less / irssi; PgDown / PgUp cover
 	// off-laptop keymaps. `d` / `u` retained as single-key
 	// shortcuts in the grid where no textinput is active.
-	case "ctrl+f", "ctrl+d", "d", "pgdown":
+	case "ctrl+f", "ctrl+d", "f", "d", "pgdown":
 		for i := 0; i < 10; i++ {
 			m.moveSelectionGrid(0, +1)
 		}
@@ -2133,24 +2168,19 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// pretending a partial whois is a whole one.
 		ghost := strings.HasPrefix(n.callsign, "node 0x")
 
-		// Multi-line "server reply" block, irssi-style.
+		// Multi-line "server reply" block, irssi-style. Lines that
+		// begin with "⚠ " are recognised by renderMessageRow's
+		// system branch and rendered with the glyph in warn-orange
+		// while the prose stays in the regular lavender sys-style —
+		// no ANSI leakage, no reset mid-line.
 		var lines []string
 		if ghost {
-			// Pre-render the ⚠ in warn-orange so it punches out of
-			// the surrounding lavender sys-style. lipgloss passes
-			// through embedded ANSI unmodified — the orange code
-			// resets mid-string and the outer sys-wrap resumes
-			// lavender for the rest of the sentence.
-			warnGlyph := lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhOrange)).
-				Bold(true).
-				Render("⚠")
 			lines = append(lines,
-				warnGlyph+" no NodeInfo received for this peer",
-				"   we've heard text packets from them but never their",
-				"   User broadcast, so longname / shortname / hw are",
-				"   unknown. Their NodeInfo may arrive in the next",
-				"   ~15 min, or try /sync to force a NodeDB re-dump.",
+				"⚠ no NodeInfo received for this peer",
+				"  we've heard text packets from them but never their",
+				"  User broadcast, so longname / shortname / hw are",
+				"  unknown. Their NodeInfo may arrive in the next",
+				"  ~15 min, or try /sync to force a NodeDB re-dump.",
 				"",
 			)
 		}
@@ -2361,9 +2391,27 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "/sync dropped — outbound buffer full"
 			return nil
 		}
+		// Snapshot current ghost count so we can report the delta
+		// when the matching ConfigComplete lands.
+		ghosts := 0
+		for _, n := range m.nodes {
+			if strings.HasPrefix(n.callsign, "node 0x") {
+				ghosts++
+			}
+		}
+		// Store as non-zero sentinel even when zero ghosts exist, so
+		// the ConfigComplete handler can tell a pending /sync apart
+		// from the startup handshake.
+		if ghosts == 0 {
+			m.syncPendingGhosts = -1
+		} else {
+			m.syncPendingGhosts = ghosts
+		}
 		m.systemBlock("sync",
 			fmt.Sprintf("requested NodeDB re-dump (nonce=0x%x)", nonce),
-			"expect a burst of NodeInfo packets; ghost peers may resolve over the next few seconds",
+			fmt.Sprintf("baseline: %d unresolved peers", ghosts),
+			"watching for incoming NodeInfo — any placeholder that resolves",
+			"will fire its own `identified` line; summary lands on completion.",
 		)
 	case "help", "h":
 		// /help             → open the full scrollable overlay
@@ -3621,9 +3669,20 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 	// Per-sender callsign color — irssi/weechat-style nick hash so
 	// each peer picks a stable color from the accent palette. Turns
 	// a cyan-wall log into something you can skim by hue; each
-	// conversation reads as a distinct thread at a glance.
+	// conversation reads as a distinct thread at a glance. Ghost
+	// peers ("node 0x…" placeholders whose NodeInfo never arrived)
+	// render drained instead so they don't compete visually with
+	// resolved names. Hash the RESOLVED name (via displayFrom),
+	// not the raw msg.from — otherwise a ghost that later resolved
+	// still gets drained because its stored from-string still
+	// starts with "node 0x".
+	resolvedName := m.displayFrom(msg)
+	peerColor := nickColor(resolvedName)
+	if strings.HasPrefix(resolvedName, "node 0x") {
+		peerColor = mhDrained
+	}
 	peer := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(nickColor(msg.from))).
+		Foreground(lipgloss.Color(peerColor)).
 		Background(lipgloss.Color(rowBg)).
 		Bold(true)
 	text := lipgloss.NewStyle().Foreground(lipgloss.Color(mhFG)).Background(lipgloss.Color(rowBg))
@@ -3657,7 +3716,10 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 	//    to show "who's talking" at a glance. Default maps the accent
 	//    to the same hash bucket the peer name renders in, so the
 	//    tick and the callsign pick the same color.
-	senderAccentColor := nickColor(msg.from)
+	senderAccentColor := nickColor(resolvedName)
+	if strings.HasPrefix(resolvedName, "node 0x") {
+		senderAccentColor = mhDrained
+	}
 	if msg.mine {
 		senderAccentColor = mhMagenta
 	}
@@ -3692,6 +3754,29 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 			// Width must match header's "   HH:MM  " (10 cells) so the
 			// `-!-` prefix column lines up between header and body.
 			timeCol = "          "
+		}
+		// Warn-glyph special case — systemBlock lines whose continuation
+		// body starts with "⚠ " render the glyph in warn-orange bold
+		// while the prose stays in the regular sys (lavender italic)
+		// style. Embedding ANSI directly in the text doesn't work
+		// because sys.Render wraps the whole string; any mid-string
+		// reset bleeds the rest of the line into default color.
+		// Splitting lets each half render with its own style,
+		// concatenated on the same zebra bg.
+		body := msg.text
+		prefixIdx := strings.Index(body, "⚠ ")
+		if prefixIdx >= 0 {
+			warn := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhOrange)).
+				Background(lipgloss.Color(rowBg)).
+				Bold(true)
+			pre := body[:prefixIdx]
+			post := body[prefixIdx+len("⚠ "):]
+			line := accent + tstamp.Render(timeCol) +
+				sys.Render(pre) +
+				warn.Render("⚠") +
+				sys.Render(" "+post)
+			return wrapSelection(line, selected, m.isMsgSearchHit(msg), inner, rowBg)
 		}
 		line := accent + tstamp.Render(timeCol) + sys.Render(msg.text)
 		return wrapSelection(line, selected, m.isMsgSearchHit(msg), inner, rowBg)

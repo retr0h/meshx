@@ -736,7 +736,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateInput(msg)
 		}
 	}
-	return m, nil
+	// Any other message (cursor.BlinkMsg in particular — bubbles
+	// uses it to alternate the cursor's on/off state every ~500ms)
+	// gets forwarded to the input widget. Without this the blink
+	// chain dies after the first tick since we'd never feed
+	// BlinkMsg back into textinput.Update.
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
 }
 
 // openOverlay pops one of the named overlays (channels/nodes) over

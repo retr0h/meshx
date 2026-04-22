@@ -454,6 +454,28 @@ func newModel(demo *Demo, dest string) model {
 					if m.selectedMsg < 0 {
 						m.selectedMsg = 0
 					}
+					// Ghost-peer replay — every historical message
+					// with a fromNum we haven't seen in m.nodes gets
+					// a placeholder so /whois / /cqr / /rs / /ping
+					// can target it by id without waiting for a
+					// fresh live packet. The entry is upgraded in
+					// place once NodeInfo arrives during handshake.
+					for _, msg := range past {
+						if msg.fromNum == 0 {
+							continue
+						}
+						if _, ok := m.nodesByNum[msg.fromNum]; ok {
+							continue
+						}
+						m.nodes = append(m.nodes, nodeItem{
+							callsign:  msg.from,
+							state:     "offline",
+							lastHeard: msg.time,
+							lastSNR:   msg.snr,
+							lastHops:  msg.hops,
+						})
+						m.nodesByNum[msg.fromNum] = len(m.nodes) - 1
+					}
 				}
 			}
 		}

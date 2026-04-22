@@ -22,38 +22,25 @@ package meshx
 
 import (
 	"database/sql"
+	"embed"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/pressly/goose/v3"
 
 	// SQLite driver registration — we talk to it via database/sql.
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// messageSchema is the CREATE statement for the sole table we persist —
-// a flat mirror of messageItem's fields. Only live-mode radio traffic
-// (incoming text + our outgoing commands/text) is written; demo mode
-// stays in-memory so screenshot sessions never pollute the real log.
-// System lines (/whois cards, flash messages) are skipped because
-// their content is derived state that would be stale on replay.
-const messageSchema = `
-CREATE TABLE IF NOT EXISTS messages (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel    TEXT    NOT NULL,
-    time       TEXT    NOT NULL,
-    sender     TEXT    NOT NULL,
-    text       TEXT    NOT NULL,
-    mine       INTEGER NOT NULL,
-    bang       TEXT    NOT NULL DEFAULT '',
-    status     TEXT    NOT NULL DEFAULT '',
-    hops       INTEGER NOT NULL DEFAULT 0,
-    snr        TEXT    NOT NULL DEFAULT '',
-    packet_id  INTEGER NOT NULL DEFAULT 0,
-    reply_id   INTEGER NOT NULL DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_messages_channel_id ON messages(channel, id);
-`
+// embedMigrations ships every SQL file under migrations/ into the
+// binary so goose can apply them against a user's ~/.meshx/meshx.db
+// without needing the source tree at runtime. Same pattern freebies
+// uses — `001_schema.sql` is the initial create, every subsequent
+// file is an incremental ALTER / CREATE / etc.
+//
+//go:embed migrations/*.sql
+var embedMigrations embed.FS
 
 // defaultStoragePath returns "$HOME/.meshx/meshx.db" with the parent
 // directory created on demand. Used by live-radio mode (RunRadio) to
@@ -71,22 +58,41 @@ func defaultStoragePath() (string, error) {
 }
 
 // openStorage opens (creating if needed) the SQLite file at path and
-// runs the schema DDL. Caller is responsible for closing the db.
+// runs the goose migration chain. Caller closes the db.
 func openStorage(path string) (*sql.DB, error) {
 	// WAL journal mode survives power loss better than the default
-	// rollback journal and also lets readers (us on startup replay)
-	// not block writers. _busy_timeout=5000 means transient locks
-	// during concurrent writes retry for up to 5s instead of failing.
+	// rollback journal and also lets a startup reader not block
+	// writers. _busy_timeout=5000 rides out transient lock
+	// contention during concurrent writes.
 	dsn := path + "?_journal_mode=WAL&_busy_timeout=5000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
-	if _, err := db.Exec(messageSchema); err != nil {
+	if err := db.Ping(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("apply schema: %w", err)
+		return nil, fmt.Errorf("ping sqlite: %w", err)
+	}
+	if err := runMigrations(db); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	return db, nil
+}
+
+// runMigrations applies every embedded migration via goose. Same
+// dialect / base-FS / Up flow as freebies — no bespoke migration
+// logic here, we let goose track applied versions in its
+// goose_db_version table.
+func runMigrations(db *sql.DB) error {
+	goose.SetBaseFS(embedMigrations)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		return fmt.Errorf("goose dialect: %w", err)
+	}
+	if err := goose.Up(db, "migrations"); err != nil {
+		return fmt.Errorf("goose up: %w", err)
+	}
+	return nil
 }
 
 // saveMessage persists one messageItem under a channel. System rows
@@ -106,10 +112,10 @@ func saveMessage(db *sql.DB, channel string, msg messageItem) error {
 	}
 	_, err := db.Exec(`
         INSERT INTO messages
-        (channel, time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (channel, time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		channel, msg.time, msg.from, msg.text, mine, msg.bang, msg.status,
-		msg.hops, msg.snr, msg.packetID, msg.replyID,
+		msg.hops, msg.snr, msg.packetID, msg.replyID, msg.fromNum,
 	)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
@@ -128,7 +134,7 @@ func loadMessages(db *sql.DB, channel string, limit int) ([]messageItem, error) 
 		return nil, nil
 	}
 	query := `
-        SELECT time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id
+        SELECT time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num
         FROM messages`
 	var args []any
 	if channel != "" {
@@ -154,7 +160,7 @@ func loadMessages(db *sql.DB, channel string, limit int) ([]messageItem, error) 
 		)
 		if err := rows.Scan(
 			&msg.time, &msg.from, &msg.text, &mine, &msg.bang, &msg.status,
-			&msg.hops, &msg.snr, &msg.packetID, &msg.replyID,
+			&msg.hops, &msg.snr, &msg.packetID, &msg.replyID, &msg.fromNum,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}

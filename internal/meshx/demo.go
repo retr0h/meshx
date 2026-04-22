@@ -218,7 +218,7 @@ func initialModel() model {
 	in.CharLimit = 200
 	in.Placeholder = "type a message, or /help for commands"
 	in.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(mhFG))
-	in.CursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen))
+	in.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen))
 	in.Focus()
 
 	return model{
@@ -1736,66 +1736,6 @@ func paneAccentColor(paneIdx int) string {
 	}
 }
 
-// bigDigit renders the pane number as 5-row block-art in the pane's
-// accent color. Used for the tmux-prefix-q-style overlay when the
-// user triggers Ctrl+W.
-func bigDigit(n int, color string) string {
-	digits := map[int][]string{
-		1: {
-			"  ██  ",
-			"████  ",
-			"  ██  ",
-			"  ██  ",
-			"██████",
-		},
-		2: {
-			"██████",
-			"    ██",
-			"██████",
-			"██    ",
-			"██████",
-		},
-		3: {
-			"██████",
-			"    ██",
-			"██████",
-			"    ██",
-			"██████",
-		},
-	}
-	s := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(true)
-	lines := digits[n]
-	out := make([]string, len(lines))
-	for i, l := range lines {
-		out[i] = s.Render(l)
-	}
-	return strings.Join(out, "\n")
-}
-
-// paneNumberOverlay returns a pane-filling block that centers a giant
-// number — used when Ctrl+W is armed and we want to flash the pane
-// index like tmux does with prefix+q.
-func paneNumberOverlay(paneIdx, width, height int, focused bool) string {
-	accent := paneAccentColor(paneIdx)
-	border := lipgloss.NormalBorder()
-	borderFg := lipgloss.Color(mhDrained)
-	if focused {
-		border = lipgloss.DoubleBorder()
-		borderFg = lipgloss.Color(accent)
-	}
-	content := lipgloss.Place(
-		width-2, height-2,
-		lipgloss.Center, lipgloss.Center,
-		bigDigit(paneIdx+1, accent),
-	)
-	return lipgloss.NewStyle().
-		Border(border).
-		BorderForeground(borderFg).
-		Width(width - 2).
-		Height(height - 2).
-		Render(content)
-}
-
 // paneHeader renders a plain bold uppercase header in the pane's
 // signature accent color when focused, quiet drained when not.
 func paneHeader(text string, paneIdx int, focused bool) string {
@@ -1826,7 +1766,7 @@ func paneStyle(width, height, paneIdx int, focused bool) lipgloss.Style {
 func (m model) renderChannelsPane(width, height int) string {
 	header := paneHeader("CHANNELS", paneChannels, m.focused == paneChannels)
 
-	var lines []string
+	lines := make([]string, 0, 2+len(m.channels))
 	lines = append(lines, header, "")
 	for i, c := range m.channels {
 		lines = append(
@@ -1954,7 +1894,8 @@ func (m model) renderNodesPane(width, height int) string {
 		gridLines = append(gridLines, strings.Join(cells, strings.Repeat(" ", cellPad)))
 	}
 
-	lines := []string{header + count, "", legend, ""}
+	lines := make([]string, 0, 4+len(gridLines))
+	lines = append(lines, header+count, "", legend, "")
 	lines = append(lines, gridLines...)
 
 	return paneStyle(width, height, paneNodes, m.focused == paneNodes).
@@ -2364,169 +2305,6 @@ func padOrTruncate(s string, w int) string {
 	}
 	b.WriteRune('…')
 	return b.String()
-}
-
-// tailStart returns the index of the first message that should be
-// rendered so that only the last `rowsBudget` rows of card output
-// fit in view. Each regular card takes 3 rows (header+body+blank);
-// cards with an acks sub-line take 4. The most recent message must
-// always render, so worst case we show only the very last card.
-func tailStart(msgs []messageItem, rowsBudget int) int {
-	rows := 0
-	for i := len(msgs) - 1; i >= 0; i-- {
-		cost := 3
-		if msgs[i].acks != "" {
-			cost = 4
-		}
-		if msgs[i].status == "system" {
-			cost = 2
-		}
-		if rows+cost > rowsBudget {
-			return i + 1
-		}
-		rows += cost
-	}
-	return 0
-}
-
-func (m model) renderMessageBlock(msg messageItem, selected bool, inner int) string {
-	tstamp := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	me := lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta)).Bold(true)
-	peer := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan)).Bold(true)
-	text := lipgloss.NewStyle().Foreground(lipgloss.Color(mhFG))
-	ack := lipgloss.NewStyle().Foreground(lipgloss.Color(mhGreen))
-	fail := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
-	bang := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
-	sys := lipgloss.NewStyle().Foreground(lipgloss.Color(mhLavender)).Italic(true)
-	hopStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen))
-
-	// Content width must leave room for the selection gutter (3 cells)
-	// that wrapSelection prepends. Anything composed here targets this
-	// width, otherwise wrapSelection truncates and strips the right side.
-	contentW := inner - gutterWidth
-	if contentW < 20 {
-		contentW = 20
-	}
-
-	if msg.status == "system" {
-		return wrapSelection(
-			tstamp.Render(msg.time+" ")+sys.Render(msg.text),
-			selected,
-			m.isMsgSearchHit(msg),
-			inner,
-		)
-	}
-
-	// ── Avatar: 2-char block of the sender's initials (or "me"), bg
-	//    colored, like the circular avatars in the reference mobile UI.
-	avatarFg, avatarBg := meshGreen, "#1c3a28"
-	if msg.mine {
-		avatarFg, avatarBg = mhMagenta, "#3a1c36"
-	}
-	avatar := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(avatarFg)).
-		Background(lipgloss.Color(avatarBg)).
-		Bold(true).
-		Padding(0, 1).
-		Render(initials(msg.from, msg.mine))
-	avatarW := lipgloss.Width(avatar)
-
-	// ── Header row: avatar · sender · time, then hop / SNR right-aligned.
-	senderStyle := peer
-	sender := msg.from
-	if msg.mine {
-		senderStyle = me
-		sender = "me"
-	}
-	left := avatar + " " + senderStyle.Render(sender) + "  " + tstamp.Render(msg.time)
-
-	var rightParts []string
-	if msg.hops > 0 {
-		rightParts = append(rightParts, hopStyle.Render(fmt.Sprintf("↝ %d hops", msg.hops)))
-	}
-	if msg.snr != "" {
-		rightParts = append(rightParts, hopStyle.Render("SNR "+msg.snr))
-	}
-	switch msg.status {
-	case "ack":
-		rightParts = append(rightParts, ack.Render("✓"))
-	case "fail":
-		rightParts = append(rightParts, fail.Render("✗"))
-	}
-	right := strings.Join(rightParts, "  ")
-
-	// Shed right-side fields progressively if the header won't fit.
-	for len(rightParts) > 0 && lipgloss.Width(left)+lipgloss.Width(right)+2 > contentW {
-		rightParts = rightParts[:len(rightParts)-1]
-		right = strings.Join(rightParts, "  ")
-	}
-	headerRow := padBetween(left, right, contentW)
-
-	// ── Body row: bang prefix + text, indented under the sender name.
-	indent := strings.Repeat(" ", avatarW+1)
-	body := indent
-	if msg.bang != "" {
-		body += bang.Render(msg.bang + " ")
-	}
-	body += text.Render(msg.text)
-
-	lines := []string{headerRow, body}
-	if msg.acks != "" {
-		lines = append(lines, indent+sys.Render(msg.acks))
-	}
-	return wrapSelection(strings.Join(lines, "\n"), selected, m.isMsgSearchHit(msg), inner)
-}
-
-// initials returns 2 display-cells worth of sender marker for the
-// avatar block. For "me" messages it uses "me"; otherwise the first
-// alphanumeric/emoji pair found in the sender name.
-func initials(from string, mine bool) string {
-	if mine {
-		return "me"
-	}
-	// Take the first two runes that aren't whitespace.
-	var out []rune
-	for _, r := range from {
-		if r == ' ' || r == '\t' {
-			if len(out) > 0 {
-				break
-			}
-			continue
-		}
-		out = append(out, r)
-		if len(out) == 2 {
-			break
-		}
-	}
-	if len(out) == 0 {
-		return "??"
-	}
-	if len(out) == 1 {
-		return string(out[0]) + " "
-	}
-	return string(out)
-}
-
-// padBetween joins left + right so that total visible width == targetW,
-// with spaces filling the gap. If left+right already exceeds targetW,
-// drops right.
-func padBetween(left, right string, targetW int) string {
-	if right == "" {
-		return left
-	}
-	lw := lipgloss.Width(left)
-	rw := lipgloss.Width(right)
-	if lw+rw+1 > targetW {
-		return left
-	}
-	return left + strings.Repeat(" ", targetW-lw-rw) + right
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // gutterWidth is the left margin reserved for the selection indicator —

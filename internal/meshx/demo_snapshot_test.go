@@ -9,7 +9,7 @@ import (
 
 // TestSnapshotView prints the full View() string to test output so we
 // can eyeball the actual render without spawning a TTY.
-func TestSnapshotView(t *testing.T) {
+func TestSnapshotView(_ *testing.T) {
 	m := initialModel()
 	m.mode = modeInput
 	m.input.Focus()

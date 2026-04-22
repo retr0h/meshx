@@ -152,24 +152,39 @@ func (m model) computeCompletions(text string, cursor int) (matches []string, st
 // a given stem. Prefix matches sort first, substring matches
 // second, with hex-id matches folded into substring. "me" is
 // always a candidate so `/reply me` works.
+//
+// Empty / whitespace-only stems return no matches — Tab-cycling
+// through every node in the mesh isn't useful (that's what the
+// /nodes overlay is for). Requiring at least one non-space char
+// before offering suggestions matches irssi / BitchX behavior
+// too: Tab on empty input is a no-op, not a dump-the-world.
+//
+// Matching is case-sensitive — the user typed the case they
+// meant, and Meshtastic longnames carry real case information
+// worth preserving ("ATAK 8ca7" ≠ "atak 8ca7" at the UI level).
+// The hex-id path still lower-cases its needle because hex digits
+// are case-insensitive by convention.
 func (m model) nickUniverse(word string) []string {
-	lw := strings.ToLower(strings.TrimSpace(word))
+	stem := strings.TrimSpace(word)
+	if stem == "" {
+		return nil
+	}
 	var prefixHits, substrHits []string
 	for _, n := range m.nodes {
-		lc := strings.ToLower(n.callsign)
 		switch {
-		case strings.HasPrefix(lc, lw):
+		case strings.HasPrefix(n.callsign, stem):
 			prefixHits = append(prefixHits, n.callsign)
-		case strings.Contains(lc, lw):
+		case strings.Contains(n.callsign, stem):
 			substrHits = append(substrHits, n.callsign)
 		}
 	}
 	// Hex-id completion — if the stem looks like a hex prefix
 	// ("0x", "0xd6", "d64") walk nodesByNum and offer the real
 	// callsign for any node whose num matches. Addresses the
-	// "node 0x…" placeholder peers by id.
-	if looksLikeHexStem(word) {
-		needle := strings.TrimPrefix(strings.ToLower(word), "0x")
+	// "node 0x…" placeholder peers by id. Hex is inherently
+	// case-insensitive so this path keeps the lower-case fold.
+	if looksLikeHexStem(stem) {
+		needle := strings.TrimPrefix(strings.ToLower(stem), "0x")
 		for num, idx := range m.nodesByNum {
 			if idx >= len(m.nodes) {
 				continue
@@ -185,7 +200,7 @@ func (m model) nickUniverse(word string) []string {
 	out := make([]string, 0, len(prefixHits)+len(substrHits)+1)
 	out = append(out, prefixHits...)
 	out = append(out, substrHits...)
-	if strings.HasPrefix("me", lw) {
+	if strings.HasPrefix("me", stem) {
 		out = append(out, "me")
 	}
 	return out

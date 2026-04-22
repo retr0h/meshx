@@ -549,6 +549,13 @@ func (m model) Init() tea.Cmd {
 		tea.Tick(3*time.Second, func(time.Time) tea.Msg {
 			return splashTimeoutMsg{}
 		}),
+		// Kick off the cursor blink ticker. textinput.Blink returns a
+		// tea.Cmd that schedules the first cursor.BlinkMsg; each
+		// subsequent Update on the input re-schedules the next tick.
+		// Without this the cursor stays in its "on" (pink) state
+		// forever — no blink — because we'd never feed blink msgs
+		// back into the tea loop.
+		textinput.Blink,
 	}
 	// Live-radio mode: kick off the pump from within the running
 	// program. Deferring to Init (rather than RunRadio) guarantees

@@ -24,7 +24,38 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 )
+
+// normalizeCallsign converts a raw Meshtastic longname into the
+// tab-friendly form meshx stores and displays. Collapses every run
+// of whitespace into a single underscore so multi-word callsigns
+// read as a single token ("0aac Base" → "0aac_Base", "Rural Signal
+// 📡" → "Rural_Signal_📡"). Case is preserved exactly — the
+// completer then matches strictly, no folding. Emoji and
+// punctuation are kept verbatim since they're often the only thing
+// distinguishing otherwise-identical ham callsigns.
+func normalizeCallsign(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inSpace := false
+	seenNonSpace := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			if seenNonSpace {
+				inSpace = true
+			}
+			continue
+		}
+		if inSpace {
+			b.WriteByte('_')
+			inSpace = false
+		}
+		b.WriteRune(r)
+		seenNonSpace = true
+	}
+	return b.String()
+}
 
 // looksLikeHexStem reports whether the user's partial word reads as
 // the beginning of a Meshtastic node-num hex id — "0x" prefix, or
@@ -120,11 +151,15 @@ func (m model) computeCompletions(text string, cursor int) (matches []string, st
 	start, end = wordBounds(text, cursor)
 	word := text[start:end]
 
-	var universe []string
-	switch {
-	case strings.HasPrefix(word, "/"):
-		// Command completion. Strip the `/` for matching, add it back
-		// per candidate when returning.
+	// Only two completion universes: /command names and callsigns.
+	// No channel completion, no "me" completion — any command that
+	// takes an argument targets a user, and the /nodes overlay is
+	// for browsing the mesh. Keeping the surface tight means Tab
+	// never suggests something the user didn't reach for.
+	if strings.HasPrefix(word, "/") {
+		// Command completion. `/foo<Tab>` with no matches leaves the
+		// input alone; a command that takes no argument just doesn't
+		// auto-append anything after the verb.
 		stripped := strings.ToLower(strings.TrimPrefix(word, "/"))
 		for _, c := range slashCommands {
 			if strings.HasPrefix(c, stripped) {
@@ -132,26 +167,13 @@ func (m model) computeCompletions(text string, cursor int) (matches []string, st
 			}
 		}
 		return matches, start, end
-	case strings.HasPrefix(word, "#") || strings.HasPrefix(word, "*"):
-		// Channel completion — match both public (#foo) and private
-		// (*secret*) channels by any prefix.
-		for _, c := range m.channels {
-			if strings.HasPrefix(strings.ToLower(c.name), strings.ToLower(word)) {
-				matches = append(matches, c.name)
-			}
-		}
-		return matches, start, end
-	default:
-		universe = m.nickUniverse(word)
 	}
-
-	return universe, start, end
+	return m.nickUniverse(word), start, end
 }
 
 // nickUniverse returns the ranked list of callsign completions for
 // a given stem. Prefix matches sort first, substring matches
-// second, with hex-id matches folded into substring. "me" is
-// always a candidate so `/reply me` works.
+// second, with hex-id matches folded into substring.
 //
 // Empty / whitespace-only stems return no matches — Tab-cycling
 // through every node in the mesh isn't useful (that's what the
@@ -159,36 +181,23 @@ func (m model) computeCompletions(text string, cursor int) (matches []string, st
 // before offering suggestions matches irssi / BitchX behavior
 // too: Tab on empty input is a no-op, not a dump-the-world.
 //
-// Matching is smart-case (vim convention): if the stem contains
-// any uppercase rune we match case-sensitively, otherwise we
-// fold. That way `/whois rural` still finds "Rural Signal 📡"
-// while `/whois ATAK` restricts to the literal "ATAK" callsigns.
-// The hex-id path always folds case because hex digits are
+// Matching is strictly case-sensitive. Callsigns are normalized
+// at ingest (normalizeCallsign collapses whitespace to `_`), so
+// the user's stem and the stored callsign already share one
+// canonical shape. `o` is `o`; `O` is `O`; no folding.
+// The hex-id path still folds case because hex digits are
 // conventionally case-insensitive (0xD64B01BE == 0xd64b01be).
 func (m model) nickUniverse(word string) []string {
 	stem := strings.TrimSpace(word)
 	if stem == "" {
 		return nil
 	}
-	fold := !hasUpper(stem)
-	hasPrefix := func(s string) bool {
-		if fold {
-			return strings.HasPrefix(strings.ToLower(s), strings.ToLower(stem))
-		}
-		return strings.HasPrefix(s, stem)
-	}
-	contains := func(s string) bool {
-		if fold {
-			return strings.Contains(strings.ToLower(s), strings.ToLower(stem))
-		}
-		return strings.Contains(s, stem)
-	}
 	var prefixHits, substrHits []string
 	for _, n := range m.nodes {
 		switch {
-		case hasPrefix(n.callsign):
+		case strings.HasPrefix(n.callsign, stem):
 			prefixHits = append(prefixHits, n.callsign)
-		case contains(n.callsign):
+		case strings.Contains(n.callsign, stem):
 			substrHits = append(substrHits, n.callsign)
 		}
 	}
@@ -214,27 +223,7 @@ func (m model) nickUniverse(word string) []string {
 	out := make([]string, 0, len(prefixHits)+len(substrHits)+1)
 	out = append(out, prefixHits...)
 	out = append(out, substrHits...)
-	meMatch := strings.HasPrefix("me", stem)
-	if fold {
-		meMatch = strings.HasPrefix("me", strings.ToLower(stem))
-	}
-	if meMatch {
-		out = append(out, "me")
-	}
 	return out
-}
-
-// hasUpper reports whether s contains any uppercase rune. Used by
-// the smart-case nick matcher — the presence of any uppercase
-// flips matching from case-insensitive to case-sensitive (vim
-// `smartcase` convention).
-func hasUpper(s string) bool {
-	for _, r := range s {
-		if r >= 'A' && r <= 'Z' {
-			return true
-		}
-	}
-	return false
 }
 
 // commandArgStart checks whether the input line reads as

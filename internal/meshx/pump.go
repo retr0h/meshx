@@ -432,6 +432,28 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 				altitude:    pos.GetAltitude(),
 				at:          time.Unix(int64(pos.GetTime()), 0),
 			}
+		case pb.PortNum_NODEINFO_APP:
+			// Live NodeInfo broadcast — a peer announcing their User
+			// (longname + shortname + hw). The FromRadio_NodeInfo
+			// envelope handles config-time NodeDB dumps; THIS is how
+			// we pick up NodeInfo updates that arrive mid-session.
+			// Without this case we'd stay stuck on "node 0x…" for
+			// any peer whose text packet arrived before the radio
+			// happened to see their NodeInfo.
+			u := &pb.User{}
+			if err := proto.Unmarshal(dec.GetPayload(), u); err != nil {
+				return nil
+			}
+			return radioNodeInfoMsg{
+				nodeNum:     p.GetFrom(),
+				longName:    u.GetLongName(),
+				shortName:   u.GetShortName(),
+				hwModel:     transport.HwModelName(int(u.GetHwModel())),
+				snr:         fmt.Sprintf("%.1f", p.GetRxSnr()),
+				rssi:        fmt.Sprintf("%d", p.GetRxRssi()),
+				hops:        int(p.GetHopStart()) - int(p.GetHopLimit()),
+				lastHeardAt: time.Unix(int64(p.GetRxTime()), 0),
+			}
 		}
 		return nil
 

@@ -862,6 +862,22 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cycleChannel(-1)
 		m.tab = nil
 		return m, nil
+	case "ctrl+f", "pgdown":
+		// Scroll messages pane half-page down without leaving input
+		// mode — user composing can catch up on a fresh burst of
+		// traffic without Esc-ing into nav. Matches vim / less's
+		// Ctrl+F convention.
+		m.focused = paneMessages
+		for i := 0; i < 10; i++ {
+			m.moveSelectionGrid(0, +1)
+		}
+		return m, nil
+	case "ctrl+u", "pgup":
+		m.focused = paneMessages
+		for i := 0; i < 10; i++ {
+			m.moveSelectionGrid(0, -1)
+		}
+		return m, nil
 	case "tab":
 		m.handleTab(+1)
 		return m, nil
@@ -2372,7 +2388,7 @@ func (m model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.helpScroll > 0 {
 			m.helpScroll--
 		}
-	case "d", "ctrl+d", "pgdown":
+	case "ctrl+f", "ctrl+d", "d", "pgdown":
 		m.helpScroll += 10
 	case "u", "ctrl+u", "pgup":
 		m.helpScroll -= 10

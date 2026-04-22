@@ -159,22 +159,36 @@ func (m model) computeCompletions(text string, cursor int) (matches []string, st
 // before offering suggestions matches irssi / BitchX behavior
 // too: Tab on empty input is a no-op, not a dump-the-world.
 //
-// Matching is case-sensitive — the user typed the case they
-// meant, and Meshtastic longnames carry real case information
-// worth preserving ("ATAK 8ca7" ≠ "atak 8ca7" at the UI level).
-// The hex-id path still lower-cases its needle because hex digits
-// are case-insensitive by convention.
+// Matching is smart-case (vim convention): if the stem contains
+// any uppercase rune we match case-sensitively, otherwise we
+// fold. That way `/whois rural` still finds "Rural Signal 📡"
+// while `/whois ATAK` restricts to the literal "ATAK" callsigns.
+// The hex-id path always folds case because hex digits are
+// conventionally case-insensitive (0xD64B01BE == 0xd64b01be).
 func (m model) nickUniverse(word string) []string {
 	stem := strings.TrimSpace(word)
 	if stem == "" {
 		return nil
 	}
+	fold := !hasUpper(stem)
+	hasPrefix := func(s string) bool {
+		if fold {
+			return strings.HasPrefix(strings.ToLower(s), strings.ToLower(stem))
+		}
+		return strings.HasPrefix(s, stem)
+	}
+	contains := func(s string) bool {
+		if fold {
+			return strings.Contains(strings.ToLower(s), strings.ToLower(stem))
+		}
+		return strings.Contains(s, stem)
+	}
 	var prefixHits, substrHits []string
 	for _, n := range m.nodes {
 		switch {
-		case strings.HasPrefix(n.callsign, stem):
+		case hasPrefix(n.callsign):
 			prefixHits = append(prefixHits, n.callsign)
-		case strings.Contains(n.callsign, stem):
+		case contains(n.callsign):
 			substrHits = append(substrHits, n.callsign)
 		}
 	}
@@ -200,10 +214,27 @@ func (m model) nickUniverse(word string) []string {
 	out := make([]string, 0, len(prefixHits)+len(substrHits)+1)
 	out = append(out, prefixHits...)
 	out = append(out, substrHits...)
-	if strings.HasPrefix("me", stem) {
+	meMatch := strings.HasPrefix("me", stem)
+	if fold {
+		meMatch = strings.HasPrefix("me", strings.ToLower(stem))
+	}
+	if meMatch {
 		out = append(out, "me")
 	}
 	return out
+}
+
+// hasUpper reports whether s contains any uppercase rune. Used by
+// the smart-case nick matcher — the presence of any uppercase
+// flips matching from case-insensitive to case-sensitive (vim
+// `smartcase` convention).
+func hasUpper(s string) bool {
+	for _, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			return true
+		}
+	}
+	return false
 }
 
 // commandArgStart checks whether the input line reads as

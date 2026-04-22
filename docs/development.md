@@ -31,8 +31,11 @@ just just::fmt     # format justfiles
 ## Running
 
 ```bash
-go run . --demo                   # irssi-style UI with canned data
-go run .                          # (future) connect to real Meshtastic radio
+go run . --demo                   # irssi-style UI with canned data, no radio
+go run .                          # auto-detect USB Meshtastic radio, connect
+go run . --port /dev/cu.usbmodem2101  # explicit serial path
+go run . --port 10.0.0.50:4403    # TCP to meshtasticd / WiFi radio
+go run . probe                    # scan USB ports, label each as Meshtastic or not
 go build -o meshx . && ./meshx --demo
 ```
 
@@ -42,35 +45,58 @@ go build -o meshx . && ./meshx --demo
 meshx/
 ├── main.go                   # tiny — forwards to cmd.Execute()
 ├── cmd/
-│   └── root.go               # cobra root + --demo flag
+│   ├── root.go               # cobra root + --demo / --port flags
+│   └── probe.go              # `meshx probe` — USB discovery dumper
 └── internal/meshx/
     ├── demo.go               # Bubble Tea model: state, Update, View,
-    │                         # executeCommand, renderers
+    │                         # executeCommand, renderers, newModel()
+    ├── fixture.go            # Demo struct + DefaultDemo() canonical
+    │                         # "KC7XYZ Retr0h Base" persona
+    ├── pump.go               # transport → tea.Msg goroutine, one
+    │                         # radio<Name>Msg per FromRadio envelope
+    ├── storage.go            # SQLite scrollback persistence
+    │                         # (live-radio mode only)
     ├── splash.go             # BitchX-style rotating graffiti banner
     │                         # (4 variants, pickSplash at launch)
     ├── complete.go           # Tab completion — /cmd, #chan, nicks
     ├── palette.go            # maxheadroom color constants
     ├── doc.go                # package doc
-    └── demo_snapshot_test.go # golden-view snapshot for visual diffs
+    ├── demo_snapshot_test.go # golden-view snapshot for visual diffs
+    └── transport/
+        ├── client.go         # Client interface, Dial() factory
+        ├── framing.go        # 0x94 0xc3 <hi> <lo> <proto> wire frame
+        ├── serial.go         # USB-serial transport (go.bug.st/serial)
+        ├── tcp.go            # TCP transport (meshtasticd / WiFi)
+        ├── stream.go         # FromRadio reader → chan FromRadio
+        └── identify.go       # AutoDetectMeshtastic() USB probe
 ```
 
 ### Public API
 
 ```go
-meshx.RunDemo()  // tea.NewProgram(initialModel(), tea.WithAltScreen()).Run()
+meshx.RunDemo()                            // demo fixture, no radio
+meshx.RunRadio("/dev/cu.usbmodem2101")     // live — serial or TCP dest
+meshx.DefaultDemo() *Demo                  // canonical persona
+meshx.Demo                                 // exported fixture type
 ```
 
-Internals (model, modes, commands) are unexported. `cmd/root.go` is the only
-consumer.
+`RunDemo` / `RunRadio` both boil down to
+`tea.NewProgram(newModel(demo, dest), tea.WithAltScreen()).Run()`; the only
+difference is which Demo pointer they pass. Internals (model, modes, commands,
+renderers, transport pump) are unexported.
 
 ## Dependencies
 
-| Package                   | Purpose                                     |
-| ------------------------- | ------------------------------------------- |
-| `charmbracelet/bubbletea` | Elm-style TUI framework                     |
-| `charmbracelet/bubbles`   | textinput widget for input + search prompts |
-| `charmbracelet/lipgloss`  | colors, borders, layout primitives          |
-| `spf13/cobra`             | CLI command tree                            |
+| Package                            | Purpose                                          |
+| ---------------------------------- | ------------------------------------------------ |
+| `charmbracelet/bubbletea`          | Elm-style TUI framework                          |
+| `charmbracelet/bubbles`            | textinput widget for input + search prompts     |
+| `charmbracelet/lipgloss`           | colors, borders, layout primitives               |
+| `spf13/cobra`                      | CLI command tree                                 |
+| `lmatte7/gomesh/...gomeshproto`    | Meshtastic protobuf definitions                  |
+| `go.bug.st/serial`                 | cross-platform USB-serial                        |
+| `google.golang.org/protobuf`       | proto marshal / unmarshal                        |
+| `mattn/go-sqlite3`                 | SQLite driver (CGo) for scrollback persistence   |
 
 ## Modal UI — where the code lives
 
@@ -128,10 +154,85 @@ n := m.lookupNode(target)          // pointer to node or nil
 report := signalReport(n)          // "hop 2, SNR -8.5 dB, RSSI -92 dBm"
 ```
 
-When the transport layer lands, every field on `nodeItem` (`lastSNR`,
-`lastRSSI`, `lastHops`, `hwModel`, `firmware`) populates from Meshtastic
-protobuf — `MeshPacket.rx_snr`, `rx_rssi`, `hop_start - hop_limit`,
-`MyNodeInfo.HardwareModel`, `firmware_version`.
+Every field on `nodeItem` (`lastSNR`, `lastRSSI`, `lastHops`, `hwModel`,
+`firmware`) is populated from Meshtastic protobuf in live-radio mode —
+`MeshPacket.rx_snr`, `rx_rssi`, `hop_start - hop_limit`,
+`MyNodeInfo.HardwareModel`, `firmware_version`. In demo mode the same fields
+are seeded from `DefaultDemo()` so the render code has one path.
+
+## Demo fixture — one model, two producers
+
+There is no "demo renderer" or "live renderer" — the tea model has a single
+set of fields (`myNodeNum`, `nodes`, `channels`, `messages`, `radioFirmware`,
+`radioRegion`, `radioTxPower`, `batteryLevel`, `myGrid`, …) that every view
+function reads from. Two producers populate those fields:
+
+1. **Live radio** — the transport pump (`pump.go`) decodes each `FromRadio`
+   envelope into a `radio<Name>Msg` and sends it to the tea program; `Update`
+   in `demo.go` writes into the model fields.
+2. **Demo fixture** — `newModel(DefaultDemo(), "")` copies the Demo struct's
+   values into those same fields at construction time, sets `connected = true`
+   and `hasTelemetry = true`, and hands control straight to the UI.
+
+Two `isDemo()` checks survive because those semantics genuinely differ:
+
+- The `[DEMO]` badge on the rightmost status-bar segment.
+- `sendBang`'s fake-ack status (demo flips pending → ack immediately since no
+  radio will echo back).
+
+Adding a new field to the UI means: add it to `Demo`, set it in `DefaultDemo`,
+copy it inside `newModel` when demo != nil, and read `m.<Field>` in whatever
+renderer needs it. Works in both modes with zero branching.
+
+## Radio transport
+
+`internal/meshx/transport` wraps the Meshtastic USB-serial / TCP wire protocol.
+`Dial(dest)` returns a `Client` whose `Send(*ToRadio)` enqueues outbound
+envelopes and `Stream(ctx)` returns a `<-chan *FromRadio`. The framing is
+identical across serial and TCP: `0x94 0xc3 <hi> <lo> <protobuf>` — see
+`framing.go`.
+
+`AutoDetectMeshtastic(timeout)` walks `/dev/cu.*` ports, handshakes each, and
+returns the first that talks Meshtastic. Used by `cmd.Execute` when no
+`--port` is given.
+
+`pump.go` runs as a goroutine kicked off from the model's `Init()` via
+`openPumpMsg` — deferring the spawn until after `tea.Program.Run()` avoids a
+`program.Send()` deadlock. Each `FromRadio` envelope is mapped to exactly one
+`radio<Name>Msg` type and sent to the tea loop.
+
+## Persistence — SQLite scrollback
+
+Live-radio mode opens `~/.meshx/meshx.db` (WAL journal, `_busy_timeout=5000`)
+via `openStorage(path)` and replays the last 500 messages on boot. `storage.go`
+is the whole surface: `defaultStoragePath`, `openStorage`, `saveMessage`,
+`loadMessages`. The schema is one flat `messages` table mirroring
+`messageItem` plus a `channel` column.
+
+Demo mode never touches the DB (`m.db == nil`). System / flash rows are
+skipped on save — stale by the time you read them back. Write errors are
+logged-then-swallowed; losing history beats crashing the UI.
+
+## Threading
+
+Directed ham verbs (`/73 <call>`, `/qsl <call>`, `/sk <call>`, `/rs <call>`,
+`/cqr <call>`, `/k <call>`, `/qrm <call>`, `/qsb <call>`) set
+`Data.reply_id` on the outgoing packet pointing at the target's most recent
+message's `MeshPacket.id`. The lookup runs via `replyTargetFor(call)` in
+`demo.go`; `newTextToRadio(text, channel, replyID)` threads it onto the wire.
+
+Receive side: `radioTextMsg` captures both `packetID` (the incoming packet's
+id) and `replyID`, and `applyTextMessage` records them on `messageItem`. The
+renderer checks `msg.replyID != 0` and, when the parent is findable in
+`m.messages`, prepends a dim quoted-parent line above the reply row:
+
+```
+  ┌ KC7XYZ 🦀 13:52  "Test, plz confirm"
+› me  13:53  /73 KC7XYZ — 73 KC7XYZ                                  ✓
+```
+
+`findMessageByPacketID` resolves parent lookups; `truncateRunes` caps the
+quoted body so long parents don't blow the width budget.
 
 ## Testing
 

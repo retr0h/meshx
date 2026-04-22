@@ -84,19 +84,39 @@ client reads them as plain chat.
 | `/cq [tail]`       | broadcast CQ with optional custom tail                      |
 | `/cqr <call>`      | respond to someone's CQ with a real copy report             |
 | `/rs <call>`       | send a formatted signal report (SNR dB · RSSI dBm · hops)   |
-| `/73 [call]`       | sign-off ("best regards")                                   |
+| `/73 [call]`       | sign-off — broadcast, or directed to `<call>` when supplied |
 | `/88`              | love-and-kisses ham slang                                   |
-| `/qsl`             | acknowledge / confirm receipt                               |
+| `/qsl [call]`      | acknowledge / confirm receipt — directed when `<call>` set  |
 | `/qth [grid]`      | broadcast your location / grid square                       |
 | `/grid [locator]`  | just the Maidenhead grid square                             |
 | `/sked <call>`     | propose a scheduled contact                                 |
 | `/qrz`             | "who is calling me?" — prompt for ID                        |
 | `/qrm <call>`      | report interference on their signal                         |
 | `/qsb <call>`      | report that their signal is fading                          |
-| `/sk`              | final sign-off — stronger than `/73`                        |
+| `/sk [call]`       | final sign-off (stronger than `/73`) — directed when `<call>` set |
 | `/wx [conditions]` | weather at your QTH                                         |
 | `/mesh`            | live summary of the mesh you can hear (Meshtastic-specific) |
 | `/k <call>`        | "over — go ahead" (ragchew turn-taking)                     |
+
+### Directed replies and threading
+
+Every target-taking ham verb (`/73 <call>`, `/qsl <call>`, `/sk <call>`, `/rs
+<call>`, `/cqr <call>`, `/k <call>`, `/qrm <call>`, `/qsb <call>`) is still a
+**channel broadcast** — not a DM — so the exchange stays visible to everyone on
+the mesh (ham etiquette). What's different is the outgoing packet carries
+`Data.reply_id` pointing at `<call>`'s most recent message we've seen, so any
+receiving client with threading support can display it as a reply.
+
+meshx renders incoming replies as a dim one-line quoted reference above the
+row:
+
+```
+  ┌ KC7XYZ 🦀 13:52  "Test, plz confirm"
+› me  13:53  /73 KC7XYZ — 73 KC7XYZ                                  ✓
+```
+
+The quote resolves from `msg.replyID` → parent `msg.packetID`, so threading
+only renders when both ends are in the loaded scrollback.
 
 ## Messaging /commands
 
@@ -141,3 +161,15 @@ Every report-producing command (`/rs`, `/cqr`, `/ping`, `/tr`, `/whois`) pulls
 from **real node telemetry** — `rx_snr`, `rx_rssi`, and hop count as recorded
 for the target's last-seen packet. If the node is unknown, the flash bar says so
 honestly rather than making up numbers.
+
+## Notes on persistence
+
+Live-radio mode persists the message log to `~/.meshx/meshx.db` (SQLite, WAL
+journal) so scrollback survives restarts. The last 500 messages across all
+channels are replayed on boot. System/transient rows (`/whois` cards, flash
+messages) are skipped — their content is derived state and would be stale on
+replay. Demo mode never writes to disk by design; canned fixture data has no
+business in the real log.
+
+To wipe history: `rm ~/.meshx/meshx.db` (or `/clear` clears only the in-memory
+view for this session).

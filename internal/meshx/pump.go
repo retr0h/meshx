@@ -124,15 +124,20 @@ type (
 
 	// radioTextMsg arrives whenever a text packet lands on any
 	// channel. From and To are node nums; channel is the channel index.
+	// packetID is MeshPacket.id — we capture it so outgoing replies
+	// can reference it via Data.reply_id. replyID, when non-zero,
+	// is the parent packet this one is answering.
 	radioTextMsg struct {
-		fromNum uint32
-		toNum   uint32
-		channel int
-		text    string
-		snr     string
-		rssi    string
-		hops    int
-		at      time.Time
+		fromNum  uint32
+		toNum    uint32
+		channel  int
+		text     string
+		snr      string
+		rssi     string
+		hops     int
+		at       time.Time
+		packetID uint32
+		replyID  uint32
 	}
 
 	// radioMetadataMsg delivers firmware_version + hw identity
@@ -370,14 +375,16 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 		switch dec.GetPortnum() {
 		case pb.PortNum_TEXT_MESSAGE_APP:
 			return radioTextMsg{
-				fromNum: p.GetFrom(),
-				toNum:   p.GetTo(),
-				channel: int(p.GetChannel()),
-				text:    string(dec.GetPayload()),
-				snr:     fmt.Sprintf("%.1f", p.GetRxSnr()),
-				rssi:    fmt.Sprintf("%d", p.GetRxRssi()),
-				hops:    int(p.GetHopStart()) - int(p.GetHopLimit()),
-				at:      time.Unix(int64(p.GetRxTime()), 0),
+				fromNum:  p.GetFrom(),
+				toNum:    p.GetTo(),
+				channel:  int(p.GetChannel()),
+				text:     string(dec.GetPayload()),
+				snr:      fmt.Sprintf("%.1f", p.GetRxSnr()),
+				rssi:     fmt.Sprintf("%d", p.GetRxRssi()),
+				hops:     int(p.GetHopStart()) - int(p.GetHopLimit()),
+				at:       time.Unix(int64(p.GetRxTime()), 0),
+				packetID: p.GetId(),
+				replyID:  dec.GetReplyId(),
 			}
 		case pb.PortNum_TELEMETRY_APP:
 			// TELEMETRY_APP payload is a Telemetry protobuf whose

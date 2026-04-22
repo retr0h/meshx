@@ -113,6 +113,14 @@ type messageItem struct {
 	// is rendered only on the first row of a group; continuation
 	// rows hide it.
 	group uint64
+
+	// packetID / replyID — Meshtastic text-message threading.
+	// packetID is MeshPacket.id as seen on the wire; replyID is
+	// Data.reply_id pointing at the message this one is answering.
+	// Both zero for in-memory-only entries (system lines, demo
+	// seeds that pre-date the feature).
+	packetID uint32
+	replyID  uint32
 }
 
 type sortMode int
@@ -986,14 +994,17 @@ func (m *model) sendPlainMessage(text string) {
 	m.flash = fmt.Sprintf("sent in %s", m.currentChannel)
 
 	if m.pump != nil {
-		m.pump.Enqueue(newTextToRadio(text, m.currentChannelIndex()))
+		m.pump.Enqueue(newTextToRadio(text, m.currentChannelIndex(), 0))
 	}
 }
 
 // newTextToRadio builds the ToRadio envelope for a plain text chat
 // message on a named channel index. Broadcast (to = 0xFFFFFFFF) on
 // PortNum TEXT_MESSAGE_APP (1) — the canonical Meshtastic chat path.
-func newTextToRadio(text string, channel uint32) *pb.ToRadio {
+// When replyID != 0 the packet threads to the referenced parent
+// (Data.reply_id) — this is how /73 <call> and friends tie their
+// outgoing text to the specific message from that operator.
+func newTextToRadio(text string, channel, replyID uint32) *pb.ToRadio {
 	return &pb.ToRadio{
 		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
 			To:      0xFFFFFFFF,
@@ -1002,6 +1013,7 @@ func newTextToRadio(text string, channel uint32) *pb.ToRadio {
 			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
 				Portnum: pb.PortNum_TEXT_MESSAGE_APP,
 				Payload: []byte(text),
+				ReplyId: replyID,
 			}},
 		}},
 	}
@@ -1154,13 +1166,15 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 	mine := msg.fromNum == m.myNodeNum
 
 	item := messageItem{
-		time:   msg.at.Format("15:04"),
-		from:   from,
-		mine:   mine,
-		text:   msg.text,
-		status: "ack",
-		hops:   msg.hops,
-		snr:    msg.snr,
+		time:     msg.at.Format("15:04"),
+		from:     from,
+		mine:     mine,
+		text:     msg.text,
+		status:   "ack",
+		hops:     msg.hops,
+		snr:      msg.snr,
+		packetID: msg.packetID,
+		replyID:  msg.replyID,
 	}
 	m.messages = append(m.messages, item)
 
@@ -1591,7 +1605,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = fmt.Sprintf("no telemetry for %s — node unknown", target)
 			return nil
 		}
-		m.sendBang("/cqr "+target, signalReport(n))
+		m.sendBangReply("/cqr "+target, signalReport(n), m.replyTargetFor(target))
 		m.flash = fmt.Sprintf("!cqr %s — copy report sent (%s)", target, signalReport(n))
 	case "rs":
 		target := rest
@@ -1607,19 +1621,21 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = fmt.Sprintf("no telemetry for %s — node unknown", target)
 			return nil
 		}
-		m.sendBang("/rs "+target, signalReport(n))
+		m.sendBangReply("/rs "+target, signalReport(n), m.replyTargetFor(target))
 		m.flash = fmt.Sprintf("!rs %s — %s", target, signalReport(n))
 	case "73":
 		// /73           → broadcast best-regards
 		// /73 <call>    → directed "73 <call>" — aimed at a specific
 		//                 operator you're signing off to cordially.
+		//                 Threads via Data.reply_id to that operator's
+		//                 most recent message when we have one.
 		target := strings.TrimSpace(rest)
 		if target == "" {
 			m.sendBang("/73", "73")
 			m.flash = "!73 sent"
 			return nil
 		}
-		m.sendBang("/73 "+target, "73 "+target)
+		m.sendBangReply("/73 "+target, "73 "+target, m.replyTargetFor(target))
 		m.flash = "!73 " + target + " — best regards"
 	case "88":
 		m.sendBang("/88", "88")
@@ -1628,6 +1644,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// /qsl           → broadcast acknowledgment
 		// /qsl <call>    → directed "QSL <call>" — aimed at a specific
 		//                  operator whose last transmission we copied.
+		//                  Threads via Data.reply_id to that operator's
+		//                  most recent message.
 		target := strings.TrimSpace(rest)
 		if target == "" {
 			m.sendBang("/qsl", "QSL")
@@ -1635,7 +1653,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		body := "QSL " + target
-		m.sendBang("/qsl "+target, body)
+		m.sendBangReply("/qsl "+target, body, m.replyTargetFor(target))
 		m.flash = "!qsl " + target + " — copy confirmed"
 	case "qth":
 		// PRIVACY — /qth only transmits when the user runs it
@@ -1720,7 +1738,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "usage: /qrm <callsign>"
 			return nil
 		}
-		m.sendBang("/qrm "+target, "QRM — interference on your signal")
+		m.sendBangReply("/qrm "+target, "QRM — interference on your signal", m.replyTargetFor(target))
 		m.flash = fmt.Sprintf("!qrm %s — interference reported", target)
 	case "qsb":
 		// "Your signal is fading."
@@ -1732,13 +1750,15 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "usage: /qsb <callsign>"
 			return nil
 		}
-		m.sendBang("/qsb "+target, "QSB — signal fading, copy weak")
+		m.sendBangReply("/qsb "+target, "QSB — signal fading, copy weak", m.replyTargetFor(target))
 		m.flash = fmt.Sprintf("!qsb %s — fade reported", target)
 	case "sk":
 		// Final sign-off — stronger than /73. "Signing off clear."
 		// /sk           → broadcast SK
 		// /sk <call>    → directed "SK <call>" — aimed at a specific
 		//                 operator you're closing a contact with.
+		//                 Threads via Data.reply_id to that operator's
+		//                 most recent message.
 		target := strings.TrimSpace(rest)
 		if target == "" {
 			m.sendBang("/sk", "SK — clear and out 73")
@@ -1746,7 +1766,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		body := "SK — clear and out 73, " + target
-		m.sendBang("/sk "+target, body)
+		m.sendBangReply("/sk "+target, body, m.replyTargetFor(target))
 		m.flash = "!sk " + target + " — cleared"
 	case "wx":
 		// Weather at my QTH. Optional argument supplies the conditions;
@@ -1797,7 +1817,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "usage: /k <callsign>"
 			return nil
 		}
-		m.sendBang("/k "+target, "K — over, go ahead")
+		m.sendBangReply("/k "+target, "K — over, go ahead", m.replyTargetFor(target))
 		m.flash = fmt.Sprintf("!k %s — over to you", target)
 
 	// ── IRC-style operational commands ────────────────────────────
@@ -2074,24 +2094,56 @@ func nextGroupID() uint64 {
 // /qsb, /wx, /k, /mesh. Commands that don't transmit (/whois, /ping,
 // /tr, /env, /config) use systemLine() instead.
 func (m *model) sendBang(bang, body string) {
+	m.sendBangReply(bang, body, 0)
+}
+
+// sendBangReply is sendBang with an optional reply target — when
+// replyToID is non-zero, the outgoing packet carries Data.reply_id
+// pointing at the parent message, and the local log entry records
+// the same replyID so the renderer can draw a quoted-parent line
+// above the reply.
+func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	status := "ack"
 	if !m.isDemo() {
 		status = "pending" // flipped to "ack" when the radio echoes our packet back
 	}
 	m.messages = append(m.messages, messageItem{
-		time:   timeNowHHMM(),
-		from:   "me",
-		mine:   true,
-		bang:   bang,
-		text:   body,
-		status: status,
+		time:    timeNowHHMM(),
+		from:    "me",
+		mine:    true,
+		bang:    bang,
+		text:    body,
+		status:  status,
+		replyID: replyToID,
 	})
 	m.selectedMsg = len(m.messages) - 1
 	m.focused = paneMessages
 
 	if m.pump != nil {
-		m.pump.Enqueue(newTextToRadio(body, m.currentChannelIndex()))
+		m.pump.Enqueue(newTextToRadio(body, m.currentChannelIndex(), replyToID))
 	}
+}
+
+// replyTargetFor returns the packetID of the most recent message
+// from the given callsign, or 0 if none exists. Used by directed
+// ham verbs (/73 <call>, /qsl <call>, /sk <call>, /rs <call>, etc.)
+// to thread the outgoing reply to whatever <call> most recently
+// said — the Meshtastic "reply to" semantic.
+func (m *model) replyTargetFor(call string) uint32 {
+	if call == "" {
+		return 0
+	}
+	target := strings.ToLower(strings.TrimSpace(call))
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		msg := m.messages[i]
+		if msg.mine || msg.status == "system" || msg.packetID == 0 {
+			continue
+		}
+		if strings.Contains(strings.ToLower(msg.from), target) {
+			return msg.packetID
+		}
+	}
+	return 0
 }
 
 // updateHelp handles keys while the help overlay is visible. Vim-style
@@ -3293,7 +3345,61 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 		indent := gapStyle.Render(strings.Repeat(" ", 2+2+7+fromW+2))
 		row += "\n" + indent + sys.Render(msg.acks)
 	}
+
+	// Threading — when this message carries a reply_id pointing at a
+	// parent we have in the log, render a dim one-line quoted
+	// reference ABOVE the row. Indented under the timestamp column so
+	// it reads as "this line is context for the row below". Format:
+	//   ┌ <from> <time>  "<text, truncated>"
+	// Matches how mutt / modern chat clients show reply context.
+	if msg.replyID != 0 {
+		if parent := m.findMessageByPacketID(msg.replyID); parent != nil {
+			quoteIndent := gapStyle.Render(strings.Repeat(" ", 2+2))
+			quoteW := inner - 2 - 2 - gutterWidth
+			if quoteW < 20 {
+				quoteW = 20
+			}
+			parentFrom := parent.from
+			if parentFrom == "" {
+				parentFrom = "—"
+			}
+			quoteBody := fmt.Sprintf("┌ %s %s  %q",
+				parentFrom, parent.time, truncateRunes(parent.text, 60))
+			quoteLine := quoteIndent + tstamp.Render(padOrTruncate(quoteBody, quoteW))
+			row = quoteLine + "\n" + row
+		}
+	}
+
 	return wrapSelection(row, selected, m.isMsgSearchHit(msg), inner, rowBg)
+}
+
+// findMessageByPacketID returns a pointer to the m.messages entry
+// whose packetID matches, or nil. Used by the renderer to resolve
+// reply_id → parent message for threaded quote rendering.
+func (m model) findMessageByPacketID(id uint32) *messageItem {
+	if id == 0 {
+		return nil
+	}
+	for i := range m.messages {
+		if m.messages[i].packetID == id {
+			return &m.messages[i]
+		}
+	}
+	return nil
+}
+
+// truncateRunes clamps s to at most n display runes, appending …
+// when the source was longer. Used for parent-message quote lines
+// so a long reply target doesn't blow out the width budget.
+func truncateRunes(s string, n int) string {
+	count := 0
+	for i := range s {
+		count++
+		if count > n {
+			return s[:i] + "…"
+		}
+	}
+	return s
 }
 
 // dimRow strips ANSI styling from a pre-rendered row and re-applies

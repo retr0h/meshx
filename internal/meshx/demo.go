@@ -3173,7 +3173,9 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 			!strings.HasPrefix(msg.text, "-!- ping") &&
 			!strings.HasPrefix(msg.text, "-!- traceroute") {
 			// Not the header row — blank out time, keep accent.
-			timeCol = "         "
+			// Width must match header's "   HH:MM  " (10 cells) so the
+			// `-!-` prefix column lines up between header and body.
+			timeCol = "          "
 		}
 		line := accent + tstamp.Render(timeCol) + sys.Render(msg.text)
 		return wrapSelection(line, selected, m.isMsgSearchHit(msg), inner, rowBg)
@@ -3184,7 +3186,7 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 	flagStyle := tstamp
 	switch {
 	case msg.status == "fail":
-		flag = "!"
+		flag = "✗"
 		flagStyle = fail
 	case msg.bang != "":
 		flag = "*"

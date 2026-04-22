@@ -2136,8 +2136,17 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// Multi-line "server reply" block, irssi-style.
 		var lines []string
 		if ghost {
+			// Pre-render the ⚠ in warn-orange so it punches out of
+			// the surrounding lavender sys-style. lipgloss passes
+			// through embedded ANSI unmodified — the orange code
+			// resets mid-string and the outer sys-wrap resumes
+			// lavender for the rest of the sentence.
+			warnGlyph := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhOrange)).
+				Bold(true).
+				Render("⚠")
 			lines = append(lines,
-				"⚠  no NodeInfo received for this peer",
+				warnGlyph+" no NodeInfo received for this peer",
 				"   we've heard text packets from them but never their",
 				"   User broadcast, so longname / shortname / hw are",
 				"   unknown. Their NodeInfo may arrive in the next",
@@ -2312,15 +2321,18 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 				m.radioRegion, m.radioModemPreset, m.radioTxPower, m.radioRole))
 		}
 		if ghosts > 0 {
-			lines = append(lines,
-				fmt.Sprintf("unresolved peers (first 10 of %d):", ghosts),
-			)
+			const maxList = 10
+			header := fmt.Sprintf("unresolved peers (%d):", ghosts)
+			if ghosts > maxList {
+				header = fmt.Sprintf("unresolved peers (first %d of %d):", maxList, ghosts)
+			}
+			lines = append(lines, header)
 			n := 0
 			for _, node := range m.nodes {
 				if strings.HasPrefix(node.callsign, "node 0x") {
 					lines = append(lines, "  "+node.callsign)
 					n++
-					if n >= 10 {
+					if n >= maxList {
 						break
 					}
 				}
@@ -3483,7 +3495,18 @@ func (m model) renderMessagesPane(width, height int) string {
 	lines = append(lines, header+hint, "")
 
 	// irssi-style: always the dense one-row-per-message list.
+	// Default anchors on the tail (show latest rows). If the user
+	// has scrolled the selection above the natural tail via j/k or
+	// Ctrl+F / Ctrl+U, drop the viewport back so the selected row
+	// stays visible — otherwise nav feels broken because moving
+	// selectedMsg doesn't seem to move anything on screen.
 	startIdx := tailStartList(m.messages, rowsFree)
+	if m.selectedMsg < startIdx {
+		startIdx = m.selectedMsg - rowsFree/3
+		if startIdx < 0 {
+			startIdx = 0
+		}
+	}
 	if startIdx > 0 {
 		lines = append(lines,
 			lipgloss.NewStyle().

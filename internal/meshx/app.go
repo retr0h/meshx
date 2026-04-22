@@ -967,12 +967,12 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.jumpSelection(0)
 	case "G":
 		m.jumpSelection(-1)
-	// Half-page scroll — vim / less convention. Ctrl+D / Ctrl+U are
-	// the canonical bindings; `d` / `u` alone work too when the
-	// focused surface is a node grid (no textinput is active, so
-	// no ambiguity), and PgDown / PgUp cover the off-laptop keymap
-	// case. All four shapes mean the same thing: jump ~10 rows.
-	case "ctrl+d", "d", "pgdown":
+	// Half-page scroll — Ctrl+F / Ctrl+U bindings. Ctrl+D is kept
+	// as an alias for Ctrl+F since both are common "half-page
+	// down" shapes across vim / less / irssi; PgDown / PgUp cover
+	// off-laptop keymaps. `d` / `u` retained as single-key
+	// shortcuts in the grid where no textinput is active.
+	case "ctrl+f", "ctrl+d", "d", "pgdown":
 		for i := 0; i < 10; i++ {
 			m.moveSelectionGrid(0, +1)
 		}

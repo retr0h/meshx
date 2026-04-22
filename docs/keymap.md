@@ -52,7 +52,7 @@ the universal quit.
 | `j` / `k`           | down / up (1 row in linear list, `cols` cells in users grid) |
 | `h` / `l`           | left / right (column step in users grid; alias in linear)    |
 | `gg` / `G`          | top / bottom                                                 |
-| `Ctrl+D` / `Ctrl+U` | half-page down / up                                          |
+| `Ctrl+F` / `Ctrl+U` | half-page down / up (aliases: `Ctrl+D`, `d`/`u`, `PgDn`/`PgUp`) |
 | `/`                 | search within focused surface                                |
 | `n` / `N`           | next / prev search hit                                       |
 | `Enter` or `Space`  | detail view (hop / SNR / RSSI / hex id / whois)              |
@@ -79,44 +79,43 @@ Single-letter shortcuts that operate on whatever's highlighted:
 All compose a normal text message with a `!bang` prefix — any other Meshtastic
 client reads them as plain chat.
 
-| Command            | Meaning                                                     |
-| ------------------ | ----------------------------------------------------------- |
-| `/cq [tail]`       | broadcast CQ with optional custom tail                      |
-| `/cqr <call>`      | respond to someone's CQ with a real copy report             |
-| `/rs <call>`       | send a formatted signal report (SNR dB · RSSI dBm · hops)   |
-| `/73 [call]`       | sign-off — broadcast, or directed to `<call>` when supplied |
-| `/88`              | love-and-kisses ham slang                                   |
-| `/qsl [call]`      | acknowledge / confirm receipt — directed when `<call>` set  |
-| `/qth [grid]`      | broadcast your location / grid square                       |
-| `/grid [locator]`  | just the Maidenhead grid square                             |
-| `/sked <call>`     | propose a scheduled contact                                 |
-| `/qrz`             | "who is calling me?" — prompt for ID                        |
-| `/qrm <call>`      | report interference on their signal                         |
-| `/qsb <call>`      | report that their signal is fading                          |
+| Command            | Meaning                                                           |
+| ------------------ | ----------------------------------------------------------------- |
+| `/cq [tail]`       | broadcast CQ with optional custom tail                            |
+| `/cqr <call>`      | respond to someone's CQ with a real copy report                   |
+| `/rs <call>`       | send a formatted signal report (SNR dB · RSSI dBm · hops)         |
+| `/73 [call]`       | sign-off — broadcast, or directed to `<call>` when supplied       |
+| `/88`              | love-and-kisses ham slang                                         |
+| `/qsl [call]`      | acknowledge / confirm receipt — directed when `<call>` set        |
+| `/qth [grid]`      | broadcast your location / grid square                             |
+| `/grid [locator]`  | just the Maidenhead grid square                                   |
+| `/sked <call>`     | propose a scheduled contact                                       |
+| `/qrz`             | "who is calling me?" — prompt for ID                              |
+| `/qrm <call>`      | report interference on their signal                               |
+| `/qsb <call>`      | report that their signal is fading                                |
 | `/sk [call]`       | final sign-off (stronger than `/73`) — directed when `<call>` set |
-| `/wx [conditions]` | weather at your QTH                                         |
-| `/mesh`            | live summary of the mesh you can hear (Meshtastic-specific) |
-| `/k <call>`        | "over — go ahead" (ragchew turn-taking)                     |
+| `/wx [conditions]` | weather at your QTH                                               |
+| `/mesh`            | live summary of the mesh you can hear (Meshtastic-specific)       |
+| `/k <call>`        | "over — go ahead" (ragchew turn-taking)                           |
 
 ### Directed replies and threading
 
-Every target-taking ham verb (`/73 <call>`, `/qsl <call>`, `/sk <call>`, `/rs
-<call>`, `/cqr <call>`, `/k <call>`, `/qrm <call>`, `/qsb <call>`) is still a
-**channel broadcast** — not a DM — so the exchange stays visible to everyone on
-the mesh (ham etiquette). What's different is the outgoing packet carries
+Every target-taking ham verb (`/73 <call>`, `/qsl <call>`, `/sk <call>`,
+`/rs <call>`, `/cqr <call>`, `/k <call>`, `/qrm <call>`, `/qsb <call>`) is still
+a **channel broadcast** — not a DM — so the exchange stays visible to everyone
+on the mesh (ham etiquette). What's different is the outgoing packet carries
 `Data.reply_id` pointing at `<call>`'s most recent message we've seen, so any
 receiving client with threading support can display it as a reply.
 
-meshx renders incoming replies as a dim one-line quoted reference above the
-row:
+meshx renders incoming replies as a dim one-line quoted reference above the row:
 
 ```
   ┌ KC7XYZ 🦀 13:52  "Test, plz confirm"
 › me  13:53  /73 KC7XYZ — 73 KC7XYZ                                  ✓
 ```
 
-The quote resolves from `msg.replyID` → parent `msg.packetID`, so threading
-only renders when both ends are in the loaded scrollback.
+The quote resolves from `msg.replyID` → parent `msg.packetID`, so threading only
+renders when both ends are in the loaded scrollback.
 
 ## Messaging /commands
 
@@ -134,17 +133,17 @@ mode with no argument.
 
 ## Overlay and util /commands
 
-| Command                        | Meaning                                               |
-| ------------------------------ | ----------------------------------------------------- |
-| `/channels`                    | open channels overlay                                 |
-| `/nodes`                       | open nodes overlay (BitchX-style bracketed grid)      |
-| `/join <channel>`              | switch to named channel                               |
-| `/channel list`                | same as `/channels`                                   |
-| `/search <pattern>`            | run a search and jump to first hit (aliases: `/find`) |
-| `/config`                      | show radio + identity configuration                   |
-| `/clear`                       | clear local scrollback (does not unsend)              |
-| `/help`                        | open the help overlay                                 |
-| `/exit` / `/quit` / `/q`       | exit the app                                          |
+| Command                  | Meaning                                               |
+| ------------------------ | ----------------------------------------------------- |
+| `/channels`              | open channels overlay                                 |
+| `/nodes`                 | open nodes overlay (BitchX-style bracketed grid)      |
+| `/join <channel>`        | switch to named channel                               |
+| `/channel list`          | same as `/channels`                                   |
+| `/search <pattern>`      | run a search and jump to first hit (aliases: `/find`) |
+| `/config`                | show radio + identity configuration                   |
+| `/clear`                 | clear local scrollback (does not unsend)              |
+| `/help`                  | open the help overlay                                 |
+| `/exit` / `/quit` / `/q` | exit the app                                          |
 
 ## Notes on channels
 

@@ -2169,14 +2169,14 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		ghost := strings.HasPrefix(n.callsign, "node 0x")
 
 		// Multi-line "server reply" block, irssi-style. Lines that
-		// begin with "⚠ " are recognised by renderMessageRow's
-		// system branch and rendered with the glyph in warn-orange
-		// while the prose stays in the regular lavender sys-style —
-		// no ANSI leakage, no reset mid-line.
+		// begin with "👻 " are recognised by renderMessageRow's
+		// system branch and rendered with the ghost glyph in
+		// warn-orange while the prose stays in the regular lavender
+		// sys-style — no ANSI leakage, no reset mid-line.
 		var lines []string
 		if ghost {
 			lines = append(lines,
-				"⚠ no NodeInfo received for this peer",
+				"👻 no NodeInfo received for this peer",
 				"  we've heard text packets from them but never their",
 				"  User broadcast, so longname / shortname / hw are",
 				"  unknown. Their NodeInfo may arrive in the next",
@@ -3755,26 +3755,26 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 			// `-!-` prefix column lines up between header and body.
 			timeCol = "          "
 		}
-		// Warn-glyph special case — systemBlock lines whose continuation
-		// body starts with "⚠ " render the glyph in warn-orange bold
-		// while the prose stays in the regular sys (lavender italic)
+		// Ghost-glyph special case — systemBlock lines whose body
+		// contains "👻 " render the glyph in warn-orange bold while
+		// the prose stays in the regular sys (lavender italic)
 		// style. Embedding ANSI directly in the text doesn't work
 		// because sys.Render wraps the whole string; any mid-string
 		// reset bleeds the rest of the line into default color.
 		// Splitting lets each half render with its own style,
 		// concatenated on the same zebra bg.
 		body := msg.text
-		prefixIdx := strings.Index(body, "⚠ ")
+		prefixIdx := strings.Index(body, "👻 ")
 		if prefixIdx >= 0 {
 			warn := lipgloss.NewStyle().
 				Foreground(lipgloss.Color(mhOrange)).
 				Background(lipgloss.Color(rowBg)).
 				Bold(true)
 			pre := body[:prefixIdx]
-			post := body[prefixIdx+len("⚠ "):]
+			post := body[prefixIdx+len("👻 "):]
 			line := accent + tstamp.Render(timeCol) +
 				sys.Render(pre) +
-				warn.Render("⚠") +
+				warn.Render("👻") +
 				sys.Render(" "+post)
 			return wrapSelection(line, selected, m.isMsgSearchHit(msg), inner, rowBg)
 		}
@@ -3799,10 +3799,15 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 
 	// From column — 16 visible cells, truncated w/ ellipsis.
 	// Resolve via displayFrom so "node 0x…" placeholders flip to
-	// real callsigns as NodeInfo arrives mid-session.
+	// real callsigns as NodeInfo arrives mid-session. Ghost peers
+	// (no NodeInfo ever received) get a 👻 prefix as a quick visual
+	// marker alongside the drained color — doubly obvious which
+	// senders are placeholders vs resolved.
 	fromRaw := m.displayFrom(msg)
 	if msg.mine {
 		fromRaw = "me"
+	} else if strings.HasPrefix(fromRaw, "node 0x") {
+		fromRaw = "👻 " + fromRaw
 	}
 	const fromW = 16
 	senderStyle := peer

@@ -3812,12 +3812,13 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 	} else if strings.HasPrefix(fromRaw, "node 0x") {
 		fromRaw = "👻 " + fromRaw
 	}
-	// 22-cell from column — wide enough for the ghost prefix +
-	// "node 0x<8 hex>" (21 cells) and most Meshtastic longnames
-	// ("AmputiLayag_Mes…", "SGV_Shredder__Base", "Gleep - socalme…")
-	// while still leaving the message column the dominant share
-	// of the row.
-	const fromW = 22
+	// 30-cell from column — Meshtastic longnames cap at 36 bytes per
+	// the firmware; 30 display cells covers the large majority of
+	// real callsigns ("AmputiLayag_MeshNodeQTHlab", "SGV_Shredder__
+	// Base", "Gleep - socalme.sh") without ellipsis while still
+	// leaving the message column the dominant share of the row on
+	// typical terminal widths.
+	const fromW = 30
 	senderStyle := peer
 	if msg.mine {
 		senderStyle = me

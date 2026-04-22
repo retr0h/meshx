@@ -661,6 +661,21 @@ func (m *model) closeOverlayToInput() {
 	m.flash = ""
 }
 
+// revealMessages is the "I just produced a message-pane entry, show
+// it to the user" helper used by nav-mode keys like p/t/w that fire
+// commands whose output lands as a systemBlock. Closes any open
+// overlay, focuses the messages pane, keeps nav mode so the cursor
+// sits on the fresh entry (j/k navigate the new block), and drops a
+// flash so the action feels acknowledged even when the user was
+// already looking at messages.
+func (m *model) revealMessages(flash string) {
+	m.overlay = overlayNone
+	m.focused = paneMessages
+	m.mode = modeNav
+	m.input.Blur()
+	m.flash = flash
+}
+
 // updateInput is the irssi default mode — cursor is in the bottom
 // input bar, typing composes. Special keys switch modes / open
 // overlays / switch channels.
@@ -864,11 +879,13 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		target := m.selectedSender()
 		if target != "" {
 			m.executeCommand("tr " + target)
+			m.revealMessages(fmt.Sprintf("traced %s — see messages", target))
 		}
 	case "p":
 		target := m.selectedSender()
 		if target != "" {
 			m.executeCommand("ping " + target)
+			m.revealMessages(fmt.Sprintf("pinged %s — see messages", target))
 		}
 	case "w":
 		target := m.selectedSender()
@@ -876,6 +893,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Delegate to the same code path /whois uses so nav-key
 			// output stays in lock-step with the slash command.
 			m.executeCommand("whois " + target)
+			m.revealMessages(fmt.Sprintf("whois %s — see messages", target))
 		}
 	case "*":
 		m.actOnSelectedNode(func(n *nodeItem) {
@@ -1592,19 +1610,33 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.sendBang("/rs "+target, signalReport(n))
 		m.flash = fmt.Sprintf("!rs %s — %s", target, signalReport(n))
 	case "73":
-		target := rest
-		body := "73"
-		if target != "" {
-			body = "73 " + target
+		// /73           → broadcast best-regards
+		// /73 <call>    → directed "73 <call>" — aimed at a specific
+		//                 operator you're signing off to cordially.
+		target := strings.TrimSpace(rest)
+		if target == "" {
+			m.sendBang("/73", "73")
+			m.flash = "!73 sent"
+			return nil
 		}
-		m.sendBang("/73", body)
-		m.flash = "!73 sent"
+		m.sendBang("/73 "+target, "73 "+target)
+		m.flash = "!73 " + target + " — best regards"
 	case "88":
 		m.sendBang("/88", "88")
 		m.flash = "!88 sent"
 	case "qsl":
-		m.sendBang("/qsl", "QSL")
-		m.flash = "!qsl — acknowledged"
+		// /qsl           → broadcast acknowledgment
+		// /qsl <call>    → directed "QSL <call>" — aimed at a specific
+		//                  operator whose last transmission we copied.
+		target := strings.TrimSpace(rest)
+		if target == "" {
+			m.sendBang("/qsl", "QSL")
+			m.flash = "!qsl — acknowledged"
+			return nil
+		}
+		body := "QSL " + target
+		m.sendBang("/qsl "+target, body)
+		m.flash = "!qsl " + target + " — copy confirmed"
 	case "qth":
 		// PRIVACY — /qth only transmits when the user runs it
 		// explicitly, and only the coarse Maidenhead grid (~20 km
@@ -1704,8 +1736,18 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.flash = fmt.Sprintf("!qsb %s — fade reported", target)
 	case "sk":
 		// Final sign-off — stronger than /73. "Signing off clear."
-		m.sendBang("/sk", "SK — clear and out 73")
-		m.flash = "!sk — clear"
+		// /sk           → broadcast SK
+		// /sk <call>    → directed "SK <call>" — aimed at a specific
+		//                 operator you're closing a contact with.
+		target := strings.TrimSpace(rest)
+		if target == "" {
+			m.sendBang("/sk", "SK — clear and out 73")
+			m.flash = "!sk — clear"
+			return nil
+		}
+		body := "SK — clear and out 73, " + target
+		m.sendBang("/sk "+target, body)
+		m.flash = "!sk " + target + " — cleared"
 	case "wx":
 		// Weather at my QTH. Optional argument supplies the conditions;
 		// without one we emit a placeholder so the user types their own.
@@ -2881,10 +2923,12 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 		sigilColor = mhYellow
 	}
 
+	// Name stays neutral fg for online nodes — the green `@` sigil
+	// alone carries the "alive" pulse (irssi / BitchX user-list
+	// convention). Non-online states do tint the name since those
+	// ARE worth surfacing at a glance.
 	nameColor := mhFG
 	switch n.state {
-	case "online":
-		nameColor = mhGreen
 	case "offline":
 		nameColor = mhDrained
 	case "failed":
@@ -2895,8 +2939,12 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 	if n.fav {
 		nameColor = mhYellow
 	}
+	// Selection highlight uses the nodes pane's own accent (magenta).
+	// Every pane's selected item takes that pane's accent so the
+	// focus indicator visually belongs to the pane it's in — avoids
+	// mesh-green sprawl across brand / input / online-sigils / this.
 	if selected {
-		nameColor = meshGreen
+		nameColor = mhMagenta
 	}
 
 	sigilStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(sigilColor)).Bold(true)
@@ -2906,7 +2954,7 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 	}
 	bracketStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	if selected {
-		bracketStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
+		bracketStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta)).Bold(true)
 	}
 
 	// Compute how many cells the name can occupy. cellW = "[ S name  ] "
@@ -3167,10 +3215,19 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 
 	// Right-side metadata column: hops / SNR / ack — always in the
 	// same column positions so rows line up visually as a grid.
-	// ↝N = routed via N mesh hops; SNR in dB.
+	// Hops cell is always rendered for incoming packets so absence
+	// never has to be inferred — direct (0 hop) reads "↝ dx",
+	// multi-hop reads "↝Nh". Our own outgoing messages (mine) skip
+	// the cell since "hops from me to mesh" isn't a thing we know
+	// until the packet echoes back.
 	hopCol := "      "
-	if msg.hops > 0 {
+	switch {
+	case msg.mine:
+		// blank — our outbound packet, no RX hops to report.
+	case msg.hops > 0:
 		hopCol = fmt.Sprintf("↝%dh   ", msg.hops)
+	default:
+		hopCol = "↝ dx   "
 	}
 	snrCol := "        "
 	if msg.snr != "" {

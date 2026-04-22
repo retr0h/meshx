@@ -2129,8 +2129,29 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			header = "config [DEMO]"
 		}
 		m.systemBlock(header, lines...)
-	case "help":
-		m.mode = modeHelp
+	case "help", "h":
+		// /help             → open the full scrollable overlay
+		// /help <verb>      → irssi / BitchX-style per-command usage
+		//                     + summary card dropped inline as a
+		//                     systemBlock so it lives in the log
+		//                     alongside the exchange it's helping
+		//                     with (no modal context switch).
+		verb := strings.ToLower(strings.TrimSpace(rest))
+		if verb == "" {
+			m.mode = modeHelp
+			return nil
+		}
+		verb = strings.TrimPrefix(verb, "/")
+		entry, ok := helpEntries[verb]
+		if !ok {
+			m.flash = fmt.Sprintf("no help for /%s — try /help alone for the full index", verb)
+			return nil
+		}
+		m.systemBlock(
+			fmt.Sprintf("help /%s", verb),
+			"usage:   "+entry.usage,
+			"summary: "+entry.summary,
+		)
 	case "search", "find":
 		if rest == "" {
 			m.flash = "usage: /search <pattern>"

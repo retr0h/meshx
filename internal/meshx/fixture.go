@@ -196,7 +196,16 @@ func DefaultDemo() *Demo {
 				time: "15:42", from: "retr0h", mine: true, bang: "/73",
 				text: "73 SolarRelay_HillNode", status: "ack",
 			},
-			{time: "15:47", from: "", text: "KE9NIL went offline", status: "system"},
+			// Real meshx event — fires from upsertNode when a peer
+			// that was previously a "node 0x…" placeholder gets its
+			// NodeInfo broadcast and we can finally resolve the
+			// longname. One of the features the demo should showcase.
+			{
+				time:   "15:47",
+				from:   "",
+				text:   "-!- identified BoarSense 1f4a (was node 0xe7f4aa01)",
+				status: "system",
+			},
 		},
 	}
 }

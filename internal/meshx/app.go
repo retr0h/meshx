@@ -33,6 +33,15 @@ import (
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 )
 
+// clientTag is the meshx self-identifier we splice into `/cq` beacons
+// ("via meshx (github.com/retr0h/meshx)") — ham-customary "via <rig>"
+// suffix so anyone who copies the CQ knows what client the caller is
+// running. Kept as a named constant so any future command that wants
+// to identify the client (e.g. a `/meshx` announcement) has one
+// source of truth. Only the /cq path uses this today; everyday
+// messages + reply verbs stay clean to keep the LoRa byte budget low.
+const clientTag = "meshx (github.com/retr0h/meshx)"
+
 // Mode constants — mutt-style modal UI. Normal is the default
 // three-pane view; command drops you into a `:` prompt at the bottom;
 // insert takes over the middle pane with a compose editor.
@@ -1688,10 +1697,15 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 	// Meshtastic client sees it as plain chat.
 
 	case "cq":
+		// Ham-customary "via <rig/app>" suffix on the beacon so
+		// anyone copying the CQ knows what client the caller runs.
+		// Only /cq carries this tag — routine chat + reply verbs
+		// stay clean so a 237-byte LoRa payload isn't wasted on
+		// attribution on every packet.
 		call := m.myCallsign()
-		body := fmt.Sprintf("CQ CQ CQ de %s testing signals, please ack", call)
+		body := fmt.Sprintf("CQ CQ CQ de %s via %s — testing signals, please ack", call, clientTag)
 		if rest != "" {
-			body = fmt.Sprintf("CQ de %s %s", call, rest)
+			body = fmt.Sprintf("CQ de %s via %s %s", call, clientTag, rest)
 		}
 		m.sendBang("/cq", body)
 		m.flash = "!cq broadcast — awaiting acks…"

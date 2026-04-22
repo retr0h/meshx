@@ -427,7 +427,14 @@ func newModel(demo *Demo, dest string) model {
 	in.CharLimit = 200
 	in.Placeholder = "type a message, or /help for commands"
 	in.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(mhFG))
-	in.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen))
+	// Hot-pink blinking block cursor — bubbles textinput defaults
+	// to CursorBlink mode, so setting a bg colour on Cursor.Style
+	// gives us an actual block. Pink pops against the mesh-green
+	// prompt and the cyan data color without adding more green.
+	in.Cursor.Style = lipgloss.NewStyle().
+		Background(lipgloss.Color(mhPink)).
+		Foreground(lipgloss.Color("#000000")).
+		Bold(true)
 	in.Focus()
 
 	m := model{
@@ -542,19 +549,6 @@ func (m model) Init() tea.Cmd {
 		tea.Tick(3*time.Second, func(time.Time) tea.Msg {
 			return splashTimeoutMsg{}
 		}),
-		// DEMO — fire a one-shot fake "ghost upgrade" notification
-		// 10s after launch so the user can see what the systemLine
-		// looks like even when no real NodeInfo arrives. Mirrors
-		// exactly what upsertNode emits when a real radio identifies
-		// a previously-placeholder peer. Safe to keep around as a
-		// living example; if the in-app notification later changes,
-		// this demo updates in lock-step.
-		tea.Tick(10*time.Second, func(time.Time) tea.Msg {
-			return demoGhostUpgradeMsg{
-				prev:     "node 0xdeadbeef",
-				callsign: "KE6DEMO",
-			}
-		}),
 	}
 	// Live-radio mode: kick off the pump from within the running
 	// program. Deferring to Init (rather than RunRadio) guarantees
@@ -573,15 +567,6 @@ func (m model) Init() tea.Cmd {
 // BitchX-style banner even if the user doesn't press a key.
 type splashTimeoutMsg struct{}
 
-// demoGhostUpgradeMsg fires once ~10s after launch to drop a fake
-// "ghost peer identified" systemLine into the log, so the user can
-// see the notification shape without waiting for a real mid-session
-// NodeInfo to arrive for a placeholder peer.
-type demoGhostUpgradeMsg struct {
-	prev     string // the "node 0x…" placeholder callsign
-	callsign string // the real callsign we'd upgrade to
-}
-
 // openPumpMsg is the "program is running, go open the radio" signal
 // fired by Init(). Handled in Update which calls startPump and
 // stashes the handle in the model.
@@ -595,15 +580,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = modeInput
 			m.input.Focus()
 		}
-		return m, nil
-
-	case demoGhostUpgradeMsg:
-		// Fires the exact shape of notification upsertNode would
-		// emit in a real session. Written here (rather than in
-		// upsertNode directly) so it runs in both demo and live
-		// modes — anyone launching meshx sees the message format
-		// 10 seconds in without needing a cooperating peer.
-		m.systemLine(fmt.Sprintf("identified %s (was %s)", msg.callsign, msg.prev))
 		return m, nil
 
 	case openPumpMsg:
@@ -3016,6 +2992,31 @@ func paneAccentColor(paneIdx int) string {
 	}
 }
 
+// nickColorPalette is the accent-color ring used to hash peer
+// callsigns into distinct hues — irssi/weechat convention. Avoids
+// mesh-green (already the brand) and magenta (reserved for "me"),
+// so no peer color collides with our own identity cues.
+var nickColorPalette = []string{
+	mhCyan, mhLavender, mhYellow, mhOrange, mhPink, mhGreen,
+}
+
+// nickColor deterministically maps a callsign to one of the peer
+// accent colors via FNV-ish hash. Same callsign → same color every
+// time so the eye picks each peer out of the log by hue. "me" /
+// system / empty-callsign rows fall back to a neutral drained
+// color since they have their own styling layers.
+func nickColor(callsign string) string {
+	if callsign == "" {
+		return mhDrained
+	}
+	var sum uint32 = 2166136261
+	for _, r := range callsign {
+		sum ^= uint32(r)
+		sum *= 16777619
+	}
+	return nickColorPalette[int(sum)%len(nickColorPalette)]
+}
+
 // paneHeader renders a plain bold uppercase header. Focused panes
 // already show their accent color in the double-lined border, so
 // the header itself stays neutral fg (focused) or drained (not) —
@@ -3402,8 +3403,12 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 		Foreground(lipgloss.Color(mhMagenta)).
 		Background(lipgloss.Color(rowBg)).
 		Bold(true)
+	// Per-sender callsign color — irssi/weechat-style nick hash so
+	// each peer picks a stable color from the accent palette. Turns
+	// a cyan-wall log into something you can skim by hue; each
+	// conversation reads as a distinct thread at a glance.
 	peer := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhCyan)).
+		Foreground(lipgloss.Color(nickColor(msg.from))).
 		Background(lipgloss.Color(rowBg)).
 		Bold(true)
 	text := lipgloss.NewStyle().Foreground(lipgloss.Color(mhFG)).Background(lipgloss.Color(rowBg))
@@ -3434,9 +3439,10 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 
 	// ── Thin 1-cell sender-color accent on the left edge — a ▎ tick,
 	//    not a solid block. Quiet enough to not clash, bright enough
-	//    to show "who's talking" at a glance. Color maps to sender
-	//    class:
-	senderAccentColor := mhCyan
+	//    to show "who's talking" at a glance. Default maps the accent
+	//    to the same hash bucket the peer name renders in, so the
+	//    tick and the callsign pick the same color.
+	senderAccentColor := nickColor(msg.from)
 	if msg.mine {
 		senderAccentColor = mhMagenta
 	}

@@ -3809,7 +3809,12 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 	} else if strings.HasPrefix(fromRaw, "node 0x") {
 		fromRaw = "👻 " + fromRaw
 	}
-	const fromW = 16
+	// 22-cell from column — wide enough for the ghost prefix +
+	// "node 0x<8 hex>" (21 cells) and most Meshtastic longnames
+	// ("AmputiLayag_Mes…", "SGV_Shredder__Base", "Gleep - socalme…")
+	// while still leaving the message column the dominant share
+	// of the row.
+	const fromW = 22
 	senderStyle := peer
 	if msg.mine {
 		senderStyle = me

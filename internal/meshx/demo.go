@@ -640,11 +640,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = modeInput
 			m.input.Focus()
 		}
-		m.flash = "radio connected"
+		// No flash — the top status bar's "● online" dot is the
+		// canonical connection indicator; flashing "radio connected"
+		// at the bottom was duplicate signal in the same mesh-green.
 		return m, nil
 
 	case radioDisconnectedMsg:
 		m.connected = false
+		// Disconnect IS worth a flash — "● online" flips to
+		// "● connecting" up top but users staring at the messages
+		// pane need louder in-band feedback for a state change.
 		m.flash = "radio disconnected"
 		return m, nil
 
@@ -2414,7 +2419,12 @@ func (m model) renderChannelStatus() string {
 	unread := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
 	alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
 
-	left := label.Render(m.myCallsign())
+	// Left side is intentionally empty — the top status bar already
+	// owns the callsign under `//\ retr0h`. Rendering it again here
+	// was a redundancy that pulled the eye to two separate green
+	// elements saying the same thing. A bare space keeps the layout
+	// aligned without carrying visual weight.
+	left := ""
 
 	var tabs []string
 	for i, c := range m.channels {
@@ -2856,12 +2866,17 @@ func paneAccentColor(paneIdx int) string {
 	}
 }
 
-// paneHeader renders a plain bold uppercase header in the pane's
-// signature accent color when focused, quiet drained when not.
+// paneHeader renders a plain bold uppercase header. Focused panes
+// already show their accent color in the double-lined border, so
+// the header itself stays neutral fg (focused) or drained (not) —
+// repeating the accent in the header was extra color noise that
+// made the UI read as mesh-green everywhere at once. The border
+// carries focus; the header carries the label.
 func paneHeader(text string, paneIdx int, focused bool) string {
+	_ = paneIdx
 	s := lipgloss.NewStyle().Bold(true)
 	if focused {
-		s = s.Foreground(lipgloss.Color(paneAccentColor(paneIdx)))
+		s = s.Foreground(lipgloss.Color(mhFG))
 	} else {
 		s = s.Foreground(lipgloss.Color(mhDrained))
 	}

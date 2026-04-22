@@ -1,0 +1,21 @@
+---
+github/action:
+  - changed-files:
+      - any-glob-to-any-file: ".github/**/*.yml"
+
+kind/docs:
+  - changed-files:
+      - any-glob-to-any-file: "docs/**"
+
+kind/go:
+  - changed-files:
+      - any-glob-to-any-file: "**/*.go"
+
+kind/yaml:
+  - changed-files:
+      - any-glob-to-any-file: "**/*.yaml"
+      - any-glob-to-any-file: "**/*.yml"
+
+test/unit:
+  - changed-files:
+      - any-glob-to-any-file: "**/*_test.go"

@@ -29,6 +29,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 )
 
 // Mode constants — mutt-style modal UI. Normal is the default
@@ -105,6 +106,13 @@ type messageItem struct {
 	acks   string // optional child line — "↳ 3 acks — ..."
 	hops   int    // mesh hop count; 0 = direct/self
 	snr    string // "-8.5" etc., empty to hide
+	// group — non-zero value binds a sequence of rows as a single
+	// logical entry. Used for /whois / /config / /env multi-line
+	// "server reply" blocks so every line in the block shares the
+	// same zebra stripe and visually reads as one card. Timestamp
+	// is rendered only on the first row of a group; continuation
+	// rows hide it.
+	group uint64
 }
 
 type sortMode int
@@ -156,7 +164,64 @@ type model struct {
 	tab         *tabState     // non-nil while cycling through Tab completions
 	ctrlWPend   bool          // Ctrl+W armed — next key is a window nav (j/k/i/h/l/1/2/3)
 
+	// Input history — every committed line (message or /command) is
+	// pushed to inputHistory. Up / Down arrow in input mode walk the
+	// ring, classic shell / irssi style. historyCursor = len(history)
+	// means "at the blank line past the end" (i.e. fresh input).
+	inputHistory  []string
+	historyCursor int
+	historyDraft  string // the line the user was typing before Up-arrowing — restored on Down past end
+
+	// Live-radio state. Zero-value is "demo mode — no transport".
+	pump         *pump          // non-nil when connected to a real radio
+	connectDest  string         // "" = demo, else "/dev/cu.usbmodem2101" / tcp host
+	connected    bool           // true once ConfigComplete arrives
+	myNodeNum    uint32         // populated by MyNodeInfo
+	nodesByNum   map[uint32]int // radio node id → m.nodes index, for O(1) upsert
+
+	// Telemetry + config snapshot — populated as FromRadio packets
+	// arrive. Zero-value means "not yet received" so renderers can
+	// show a — placeholder without branching on a separate flag.
+	radioFirmware    string  // FromRadio.Metadata.firmware_version
+	radioDeviceState uint32  // FromRadio.Metadata.device_state_version
+	radioHasWifi     bool
+	radioHasBT       bool
+	radioTxPower     int32   // Config.lora.tx_power (dBm)
+	radioRegion      string  // Config.lora.region (e.g. "US")
+	radioModemPreset string  // Config.lora.modem_preset (e.g. "LONG_FAST")
+	batteryLevel     uint32  // DeviceMetrics.battery_level (0-100, >100 = powered)
+	batteryVoltage   float32 // DeviceMetrics.voltage
+	channelUtil      float32 // DeviceMetrics.channel_utilization (%)
+	airUtilTx        float32 // DeviceMetrics.air_util_tx (%)
+	hasTelemetry     bool    // true once first DeviceMetrics arrives
+	radioRole        string  // Config.device.role — CLIENT / ROUTER / etc.
+	myLatitude       float64 // our own GPS position
+	myLongitude      float64
+	myAltitude       int32
+	myGrid           string // Maidenhead grid square for myLat/myLon
+
+	// Per-peer position + environment metrics. Keyed by node num,
+	// matches nodesByNum so /qth and /env can look these up.
+	peerPositions map[uint32]peerPosition
+	peerEnv       map[uint32]peerEnvMetrics
+
 	flash string
+}
+
+type peerPosition struct {
+	latitude  float64
+	longitude float64
+	altitude  int32
+	grid      string
+	at        time.Time
+}
+
+type peerEnvMetrics struct {
+	temperature float32
+	humidity    float32
+	pressure    float32
+	gas         float32
+	at          time.Time
 }
 
 // handleTab runs one step of the Tab-completion cycle in the input.
@@ -203,11 +268,115 @@ func (m *model) handleTab(dir int) {
 	}
 }
 
-// RunDemo launches the Bubble Tea demo model.
+// RunDemo launches the Bubble Tea model with canned demo data and no
+// radio transport. Used for UI iteration, screenshots, and smoke
+// testing the interface without a LoRa device handy.
 func RunDemo() error {
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
+}
+
+// RunRadio launches the Bubble Tea model connected to a live
+// Meshtastic radio at `dest`. Starts empty — no canned channels,
+// nodes, or messages — and populates as the handshake's FromRadio
+// stream arrives. While the handshake is in progress the splash
+// shows a small "connecting to <dest>…" status line.
+//
+// We defer spawning the transport pump until after program.Run()
+// begins; tea.Program.Send() blocks until the program's main loop
+// is accepting messages, so any p.Send() from a goroutine launched
+// before Run() deadlocks. The model's Init() fires a tea.Cmd that
+// returns a startPumpMsg, which is when we actually open the
+// transport — by then the main loop is pumping messages.
+func RunRadio(dest string) error {
+	m := initialRadioModel(dest)
+	program := tea.NewProgram(m, tea.WithAltScreen())
+
+	// We need a reference to the program inside the pump so it can
+	// call program.Send() from its goroutine. Stash it on a shared
+	// ptr that Init() fills once the loop is up.
+	globalProgramRef = program
+	defer func() { globalProgramRef = nil }()
+
+	_, err := program.Run()
+	return err
+}
+
+// globalProgramRef is a small hand-off slot used because tea.Program
+// doesn't expose itself to models. The pump goroutine needs program.Send.
+// Scoped to one running Bubble Tea program at a time (which is the norm).
+var globalProgramRef *tea.Program
+
+// pumpAttachedMsg hands the transport pump pointer into the model so
+// outbound messages (/cq, typed text) can enqueue ToRadio envelopes.
+type pumpAttachedMsg struct{ p *pump }
+
+// shortFirmware trims Meshtastic's long firmware-version strings
+// down to just the semver portion. "2.7.15.567b8ea" → "2.7.15" since
+// the trailing git-short-sha means very little in the UI; users who
+// care can see the full string in /config or /whois output.
+func shortFirmware(fw string) string {
+	if fw == "" {
+		return "—"
+	}
+	// Count dots — keep up to the third (so "2.7.15" stays intact).
+	dots := 0
+	for i := 0; i < len(fw); i++ {
+		if fw[i] == '.' {
+			dots++
+			if dots == 3 {
+				return fw[:i]
+			}
+		}
+	}
+	return fw
+}
+
+// maidenhead converts lat/long (degrees) to a 6-character Maidenhead
+// grid locator — the canonical ham location identifier (e.g. "CN85ow"
+// for Portland, Oregon). Used for the top-bar display and /qth output.
+func maidenhead(lat, lon float64) string {
+	lon += 180.0
+	lat += 90.0
+
+	f1 := byte('A') + byte(lon/20)
+	f2 := byte('A') + byte(lat/10)
+	s1 := byte('0') + byte(mod(lon, 20)/2)
+	s2 := byte('0') + byte(mod(lat, 10)/1)
+	ss1 := byte('a') + byte(mod(lon, 2)/(5.0/60.0))
+	ss2 := byte('a') + byte(mod(lat, 1)/(2.5/60.0))
+
+	return string([]byte{f1, f2, s1, s2, ss1, ss2})
+}
+
+// mod is a positive-only float modulus — Go's builtin `math.Mod`
+// preserves sign, but Maidenhead math wants the fractional part.
+func mod(x, y float64) float64 {
+	r := x - float64(int(x/y))*y
+	if r < 0 {
+		r += y
+	}
+	return r
+}
+
+// initialRadioModel is initialModel's live-radio sibling: drops the
+// canned channels / nodes / messages, seeds empty maps, marks
+// modeSplash with a connecting banner.
+func initialRadioModel(dest string) model {
+	m := initialModel()
+	m.channels = nil
+	m.nodes = nil
+	m.messages = nil
+	m.selectedMsg = 0
+	m.selectedCh = 0
+	m.selectedNd = 0
+	m.currentChannel = ""
+	m.connectDest = dest
+	m.nodesByNum = make(map[uint32]int)
+	m.peerPositions = make(map[uint32]peerPosition)
+	m.peerEnv = make(map[uint32]peerEnvMetrics)
+	return m
 }
 
 func initialModel() model {
@@ -304,24 +473,160 @@ func initialModel() model {
 }
 
 func (m model) Init() tea.Cmd {
-	// Auto-dismiss the splash after ~3s if the user hasn't touched a key.
-	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
-		return splashTimeoutMsg{}
-	})
+	cmds := []tea.Cmd{
+		// Auto-dismiss the splash after ~3s if the user hasn't touched a key.
+		tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+			return splashTimeoutMsg{}
+		}),
+	}
+	// Live-radio mode: kick off the pump from within the running
+	// program. Deferring to Init (rather than RunRadio) guarantees
+	// tea's main loop is up before the pump's first p.Send() — no
+	// deadlock. The tea.Cmd returns an openPumpMsg which we handle
+	// in Update by doing the actual Dial+spawn.
+	if m.connectDest != "" {
+		cmds = append(cmds, func() tea.Msg {
+			return openPumpMsg{dest: m.connectDest}
+		})
+	}
+	return tea.Batch(cmds...)
 }
 
 // splashTimeoutMsg fires once ~3s after launch to auto-dismiss the
 // BitchX-style banner even if the user doesn't press a key.
 type splashTimeoutMsg struct{}
 
+// openPumpMsg is the "program is running, go open the radio" signal
+// fired by Init(). Handled in Update which calls startPump and
+// stashes the handle in the model.
+type openPumpMsg struct{ dest string }
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case splashTimeoutMsg:
-		if m.mode == modeSplash {
+		// Only auto-dismiss if we're not still waiting for the radio.
+		if m.mode == modeSplash && (m.connectDest == "" || m.connected) {
 			m.mode = modeInput
 			m.input.Focus()
 		}
 		return m, nil
+
+	case openPumpMsg:
+		// Program is running; safe to spawn the pump now.
+		if globalProgramRef == nil {
+			m.flash = "internal error: program ref missing"
+			return m, nil
+		}
+		p, err := startPump(msg.dest, globalProgramRef)
+		if err != nil {
+			m.flash = fmt.Sprintf("radio error: %v", err)
+			return m, nil
+		}
+		m.pump = p
+		return m, nil
+
+	case pumpAttachedMsg:
+		m.pump = msg.p
+		return m, nil
+
+	case radioMyInfoMsg:
+		m.myNodeNum = msg.nodeNum
+		return m, nil
+
+	case radioNodeInfoMsg:
+		m.upsertNode(msg)
+		return m, nil
+
+	case radioChannelMsg:
+		m.applyChannel(msg)
+		return m, nil
+
+	case radioTextMsg:
+		m.applyTextMessage(msg)
+		return m, nil
+
+	case radioMetadataMsg:
+		m.radioFirmware = msg.firmwareVersion
+		m.radioDeviceState = msg.deviceStateVer
+		m.radioHasWifi = msg.hasWifi
+		m.radioHasBT = msg.hasBluetooth
+		return m, nil
+
+	case radioLoraConfigMsg:
+		m.radioTxPower = msg.txPowerDBm
+		m.radioRegion = msg.region
+		m.radioModemPreset = msg.modemPreset
+		return m, nil
+
+	case radioDeviceMetricsMsg:
+		// Only apply metrics for our own node to the "my radio"
+		// status fields. Peer metrics could later be upserted onto
+		// their nodeItem for per-peer battery display.
+		if msg.fromNodeNum == m.myNodeNum || msg.fromNodeNum == 0 {
+			m.batteryLevel = msg.batteryLevel
+			m.batteryVoltage = msg.voltage
+			m.channelUtil = msg.channelUtil
+			m.airUtilTx = msg.airUtilTx
+			m.hasTelemetry = true
+		}
+		return m, nil
+
+	case radioDeviceConfigMsg:
+		m.radioRole = msg.role
+		return m, nil
+
+	case radioPositionMsg:
+		if m.peerPositions == nil {
+			m.peerPositions = make(map[uint32]peerPosition)
+		}
+		m.peerPositions[msg.fromNodeNum] = peerPosition{
+			latitude:  msg.latitude,
+			longitude: msg.longitude,
+			altitude:  msg.altitude,
+			grid:      maidenhead(msg.latitude, msg.longitude),
+			at:        msg.at,
+		}
+		// If this is our own position, also populate the top-bar grid.
+		if msg.fromNodeNum == m.myNodeNum {
+			m.myLatitude = msg.latitude
+			m.myLongitude = msg.longitude
+			m.myAltitude = msg.altitude
+			m.myGrid = maidenhead(msg.latitude, msg.longitude)
+		}
+		return m, nil
+
+	case radioEnvMetricsMsg:
+		if m.peerEnv == nil {
+			m.peerEnv = make(map[uint32]peerEnvMetrics)
+		}
+		m.peerEnv[msg.fromNodeNum] = peerEnvMetrics{
+			temperature: msg.temperature,
+			humidity:    msg.humidity,
+			pressure:    msg.pressure,
+			gas:         msg.gas,
+			at:          time.Now(),
+		}
+		return m, nil
+
+	case radioConfigCompleteMsg:
+		m.connected = true
+		// If splash already timed out, hand the user into input mode now.
+		if m.mode == modeSplash {
+			m.mode = modeInput
+			m.input.Focus()
+		}
+		m.flash = "radio connected"
+		return m, nil
+
+	case radioDisconnectedMsg:
+		m.connected = false
+		m.flash = "radio disconnected"
+		return m, nil
+
+	case radioErrorMsg:
+		m.flash = fmt.Sprintf("radio error: %v", msg.err)
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.w = msg.Width
 		m.h = msg.Height
@@ -448,12 +753,53 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		m.handleTab(-1)
 		return m, nil
+	case "up":
+		// Recall previous input. On first Up, stash whatever's in the
+		// buffer so the user can Down-arrow back to it.
+		if len(m.inputHistory) == 0 {
+			return m, nil
+		}
+		if m.historyCursor == len(m.inputHistory) {
+			m.historyDraft = m.input.Value()
+		}
+		if m.historyCursor > 0 {
+			m.historyCursor--
+		}
+		m.input.SetValue(m.inputHistory[m.historyCursor])
+		m.input.CursorEnd()
+		return m, nil
+	case "down":
+		// Walk forward through history; past the newest entry restores
+		// the user's in-progress draft.
+		if m.historyCursor >= len(m.inputHistory) {
+			return m, nil
+		}
+		m.historyCursor++
+		if m.historyCursor == len(m.inputHistory) {
+			m.input.SetValue(m.historyDraft)
+		} else {
+			m.input.SetValue(m.inputHistory[m.historyCursor])
+		}
+		m.input.CursorEnd()
+		return m, nil
 	case "enter":
 		raw := strings.TrimSpace(m.input.Value())
 		if raw == "" {
 			return m, nil
 		}
 		m.input.SetValue("")
+		// Push to history — deduplicate consecutive repeats so the
+		// ring isn't full of the same thing.
+		if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != raw {
+			m.inputHistory = append(m.inputHistory, raw)
+			// Cap at 200 entries — plenty for a session.
+			if len(m.inputHistory) > 200 {
+				m.inputHistory = m.inputHistory[len(m.inputHistory)-200:]
+			}
+		}
+		m.historyCursor = len(m.inputHistory)
+		m.historyDraft = ""
+
 		if strings.HasPrefix(raw, "/") {
 			cmd := m.executeCommand(strings.TrimPrefix(raw, "/"))
 			return m, cmd
@@ -548,10 +894,9 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "w":
 		target := m.selectedSender()
 		if target != "" {
-			m.flash = fmt.Sprintf(
-				"%s  ·  T-Beam v1.1  ·  fw 2.3.4  ·  last heard 2m  ·  online",
-				target,
-			)
+			// Delegate to the same code path /whois uses so nav-key
+			// output stays in lock-step with the slash command.
+			m.executeCommand("whois " + target)
 		}
 	case "*":
 		m.actOnSelectedNode(func(n *nodeItem) {
@@ -634,13 +979,218 @@ func (m *model) prefillInput(text string) {
 }
 
 // sendPlainMessage appends text as an outgoing message from "me" on
-// the current channel. Real radio wiring will enqueue to ToRadio.
+// the current channel. In live-radio mode it also enqueues a ToRadio
+// text packet; in demo mode it just updates local state.
 func (m *model) sendPlainMessage(text string) {
 	m.messages = append(m.messages, messageItem{
-		time: "14:13", from: "me", mine: true, text: text, status: "ack",
+		time: timeNowHHMM(), from: "me", mine: true, text: text, status: "pending",
 	})
 	m.selectedMsg = len(m.messages) - 1
 	m.flash = fmt.Sprintf("sent in %s", m.currentChannel)
+
+	if m.pump != nil {
+		m.pump.Enqueue(newTextToRadio(text, m.currentChannelIndex()))
+	}
+}
+
+// newTextToRadio builds the ToRadio envelope for a plain text chat
+// message on a named channel index. Broadcast (to = 0xFFFFFFFF) on
+// PortNum TEXT_MESSAGE_APP (1) — the canonical Meshtastic chat path.
+func newTextToRadio(text string, channel uint32) *pb.ToRadio {
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			To:      0xFFFFFFFF,
+			Channel: channel,
+			WantAck: true,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum: pb.PortNum_TEXT_MESSAGE_APP,
+				Payload: []byte(text),
+			}},
+		}},
+	}
+}
+
+// currentChannelIndex maps m.currentChannel back to the Meshtastic
+// channel index used on the wire. Defaults to 0 (PRIMARY) when the
+// channel name isn't in our list.
+func (m model) currentChannelIndex() uint32 {
+	for i, c := range m.channels {
+		if c.name == m.currentChannel {
+			return uint32(i)
+		}
+	}
+	return 0
+}
+
+// timeNowHHMM returns the current wall time in HH:MM for message
+// timestamps. Extracted so tests can override if needed.
+func timeNowHHMM() string {
+	return time.Now().Format("15:04")
+}
+
+// isDemo reports whether we're in demo mode (no radio transport).
+// Branching on this is cleaner than `m.connectDest == ""` sprinkled
+// across renderers and commands.
+func (m model) isDemo() bool {
+	return m.connectDest == ""
+}
+
+// demoCallsign is the placeholder callsign used ONLY in demo mode
+// fixtures — the help overlay, canned ham-command message bodies
+// ("CQ de KC7XYZ testing"), and sample message seed data. Never used
+// in live-radio mode.
+const demoCallsign = "KC7XYZ"
+
+// myCallsign returns the call to use for "me" in outbound messages,
+// status bar, etc. Live mode: real name from the radio's NodeDB.
+// Demo mode: the demoCallsign placeholder.
+func (m model) myCallsign() string {
+	if m.isDemo() {
+		return demoCallsign
+	}
+	if m.myNodeNum == 0 {
+		return "—" // MyNodeInfo hasn't arrived yet
+	}
+	if idx, ok := m.nodesByNum[m.myNodeNum]; ok && idx < len(m.nodes) {
+		return m.nodes[idx].callsign
+	}
+	return fmt.Sprintf("node 0x%x", m.myNodeNum)
+}
+
+// myNode returns a pointer to our own node record in live-radio
+// mode, or nil if demo mode or before MyNodeInfo has arrived. Used
+// by the status bar to surface hardware model, firmware, etc.
+func (m model) myNode() *nodeItem {
+	if m.isDemo() || m.myNodeNum == 0 {
+		return nil
+	}
+	if idx, ok := m.nodesByNum[m.myNodeNum]; ok && idx < len(m.nodes) {
+		return &m.nodes[idx]
+	}
+	return nil
+}
+
+// upsertNode inserts a NodeInfo arrival or updates the existing row
+// by node num. Uses nodesByNum for O(1) lookup. Falls back to
+// short/long name for display text, and chooses state from lastHeard.
+func (m *model) upsertNode(msg radioNodeInfoMsg) {
+	callsign := msg.longName
+	if callsign == "" {
+		callsign = msg.shortName
+	}
+	if callsign == "" {
+		callsign = fmt.Sprintf("node 0x%x", msg.nodeNum)
+	}
+
+	// Derive state from lastHeard age.
+	state := "offline"
+	if !msg.lastHeardAt.IsZero() {
+		age := time.Since(msg.lastHeardAt)
+		switch {
+		case age < 15*time.Minute:
+			state = "online"
+		case age < 2*time.Hour:
+			state = "offline"
+		default:
+			state = "offline"
+		}
+	}
+	lastHeard := "never"
+	if !msg.lastHeardAt.IsZero() {
+		lastHeard = humanDuration(time.Since(msg.lastHeardAt))
+	}
+
+	item := nodeItem{
+		callsign:  callsign,
+		state:     state,
+		lastHeard: lastHeard,
+		heardRank: int(time.Since(msg.lastHeardAt).Seconds()),
+		lastSNR:   msg.snr,
+		lastRSSI:  msg.rssi,
+		lastHops:  msg.hops,
+		hwModel:   msg.hwModel,
+	}
+
+	if idx, ok := m.nodesByNum[msg.nodeNum]; ok {
+		// Preserve fav flag across updates.
+		item.fav = m.nodes[idx].fav
+		m.nodes[idx] = item
+		return
+	}
+	m.nodesByNum[msg.nodeNum] = len(m.nodes)
+	m.nodes = append(m.nodes, item)
+}
+
+// applyChannel sets or replaces a channel slot. Skips DISABLED
+// channels so they don't clutter the tab strip.
+func (m *model) applyChannel(msg radioChannelMsg) {
+	if msg.role == "DISABLED" {
+		return
+	}
+	name := msg.name
+	if name == "" {
+		// Empty-name PRIMARY is the default "LongFast" channel — give
+		// it a readable label in the UI.
+		name = "#default"
+	} else if msg.hasPSK {
+		name = "*" + msg.name + "*"
+	} else {
+		name = "#" + msg.name
+	}
+	c := channelItem{name: name, private: msg.hasPSK}
+	// Upsert by index; grow the slice if needed.
+	for len(m.channels) <= msg.index {
+		m.channels = append(m.channels, channelItem{})
+	}
+	// Preserve unread count across re-apply.
+	c.unread = m.channels[msg.index].unread
+	m.channels[msg.index] = c
+	if m.currentChannel == "" {
+		m.currentChannel = name
+	}
+}
+
+// applyTextMessage appends a received text packet to the message log.
+// Resolves fromNum to a callsign via the NodeDB; unread count bumps
+// on the destination channel when it's not the active one.
+func (m *model) applyTextMessage(msg radioTextMsg) {
+	from := fmt.Sprintf("node 0x%x", msg.fromNum)
+	if idx, ok := m.nodesByNum[msg.fromNum]; ok {
+		from = m.nodes[idx].callsign
+	}
+	mine := msg.fromNum == m.myNodeNum
+
+	item := messageItem{
+		time:   msg.at.Format("15:04"),
+		from:   from,
+		mine:   mine,
+		text:   msg.text,
+		status: "ack",
+		hops:   msg.hops,
+		snr:    msg.snr,
+	}
+	m.messages = append(m.messages, item)
+
+	// Bump unread count on non-active channels.
+	if msg.channel < len(m.channels) && m.channels[msg.channel].name != m.currentChannel && !mine {
+		m.channels[msg.channel].unread++
+	}
+}
+
+// humanDuration formats a time.Duration as a compact label like "2m",
+// "1h", "3d" — the style used in the nodes grid's last-heard column.
+func humanDuration(d time.Duration) string {
+	s := int(d.Seconds())
+	switch {
+	case s < 60:
+		return fmt.Sprintf("%ds", s)
+	case s < 3600:
+		return fmt.Sprintf("%dm", s/60)
+	case s < 86400:
+		return fmt.Sprintf("%dh", s/3600)
+	default:
+		return fmt.Sprintf("%dd", s/86400)
+	}
 }
 
 // switchChannelByIndex jumps the active channel to the given index;
@@ -713,22 +1263,37 @@ func (m *model) activate() {
 		sorted := m.sortedNodes()
 		if m.selectedNd < len(sorted) {
 			n := sorted[m.selectedNd]
+			hw := n.hwModel
+			if hw == "" {
+				hw = "?"
+			}
+			fw := n.firmware
+			if fw == "" {
+				fw = "?"
+			}
 			m.flash = fmt.Sprintf(
-				"%s  ·  T-Beam v1.1  ·  fw 2.3.4  ·  last heard %s  ·  %s",
-				n.callsign,
-				n.lastHeard,
-				n.state,
+				"%s  ·  %s  ·  fw %s  ·  last heard %s  ·  %s",
+				n.callsign, hw, fw, n.lastHeard, n.state,
 			)
 		}
 	case paneMessages:
 		if m.selectedMsg < len(m.messages) {
 			msg := m.messages[m.selectedMsg]
-			if msg.status == "system" {
+			switch {
+			case msg.status == "system":
 				m.flash = "system message — no metadata"
-			} else if msg.mine {
-				m.flash = fmt.Sprintf("to #primary  ·  hop 0  ·  ACK %s  ·  id 0x3f2a1b", ackWord(msg.status))
-			} else {
-				m.flash = fmt.Sprintf("from %s  ·  hop 2  ·  SNR -8.5  ·  RSSI -92  ·  id 0x3f2a1b", msg.from)
+			case msg.mine:
+				m.flash = fmt.Sprintf("to %s  ·  hop %d  ·  ACK %s",
+					m.currentChannel, msg.hops, ackWord(msg.status))
+			default:
+				parts := []string{"from " + msg.from}
+				if msg.hops > 0 {
+					parts = append(parts, fmt.Sprintf("hop %d", msg.hops))
+				}
+				if msg.snr != "" {
+					parts = append(parts, "SNR "+msg.snr+" dB")
+				}
+				m.flash = strings.Join(parts, "  ·  ")
 			}
 		}
 	}
@@ -754,10 +1319,53 @@ func (m *model) moveSelection(delta int) {
 			m.selectedMsg = m.nextFilteredMsgIndex(delta)
 			return
 		}
-		m.selectedMsg = clamp(m.selectedMsg+delta, 0, len(m.messages)-1)
+		m.selectedMsg = m.nextMsgIndexSkipGroups(delta)
 	case paneNodes:
 		m.selectedNd = clamp(m.selectedNd+delta, 0, len(m.nodes)-1)
 	}
+}
+
+// nextMsgIndexSkipGroups moves the selection cursor by `delta` rows
+// but treats a multi-line group (e.g. /whois output) as ONE unit.
+// j lands on the first row of the next message or group; k lands on
+// the first row of the previous one. Continuation rows are skipped.
+func (m model) nextMsgIndexSkipGroups(delta int) int {
+	if len(m.messages) == 0 {
+		return 0
+	}
+	cur := m.selectedMsg
+	step := 1
+	if delta < 0 {
+		step = -1
+	}
+	for k := 0; k < abs(delta); k++ {
+		next := cur + step
+		// Skip continuation rows of groups — land only on first rows.
+		for next >= 0 && next < len(m.messages) {
+			g := m.messages[next].group
+			if g == 0 {
+				break // not grouped — always a valid landing row
+			}
+			// Grouped — landing valid only if it's the group's first row.
+			if next-step < 0 || next-step >= len(m.messages) ||
+				m.messages[next-step].group != g {
+				break
+			}
+			next += step
+		}
+		if next < 0 || next >= len(m.messages) {
+			break
+		}
+		cur = next
+	}
+	return clamp(cur, 0, len(m.messages)-1)
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // moveSelectionGrid does 2D-aware navigation. On the users grid
@@ -856,17 +1464,67 @@ func (m *model) jumpSelection(to int) {
 	}
 }
 
+// nodeNumOf returns the Meshtastic node ID for a given callsign, or 0
+// if the callsign isn't in our NodeDB. Used by /whois /qth /env to
+// cross-reference peerPositions / peerEnv keyed by node ID. Uses the
+// same exact → prefix → substring match order as lookupNode so
+// emoji-suffixed callsigns resolve from partial input.
+func (m *model) nodeNumOf(callsign string) uint32 {
+	target := strings.ToLower(strings.TrimSpace(callsign))
+	// Exact.
+	for num, idx := range m.nodesByNum {
+		if idx < len(m.nodes) && strings.ToLower(m.nodes[idx].callsign) == target {
+			return num
+		}
+	}
+	// Prefix.
+	for num, idx := range m.nodesByNum {
+		if idx < len(m.nodes) && strings.HasPrefix(strings.ToLower(m.nodes[idx].callsign), target) {
+			return num
+		}
+	}
+	// Substring.
+	for num, idx := range m.nodesByNum {
+		if idx < len(m.nodes) && strings.Contains(strings.ToLower(m.nodes[idx].callsign), target) {
+			return num
+		}
+	}
+	return 0
+}
+
 // lookupNode returns a pointer to the nodeItem matching callsign (exact
 // case-insensitive match). nil if no such node is known. Every
 // argumented ham command routes through this so we build reports from
 // actual telemetry, never from placeholder text.
+// lookupNode resolves a user-supplied callsign to a nodeItem. Tries
+// three matches in order:
+//
+//  1. Exact case-insensitive — fast path
+//  2. Prefix — "/whois KC7XYZ" matches "KC7XYZ 🦀"
+//  3. Substring — "/whois rural" matches "Rural Signal 📡"
+//
+// Callsigns in Meshtastic often carry trailing emoji / badges / qth
+// suffixes, so the flexibility is important for ergonomics.
 func (m *model) lookupNode(callsign string) *nodeItem {
 	if callsign == "" {
 		return nil
 	}
-	target := strings.ToLower(callsign)
+	target := strings.ToLower(strings.TrimSpace(callsign))
+	// Pass 1: exact.
 	for i := range m.nodes {
 		if strings.ToLower(m.nodes[i].callsign) == target {
+			return &m.nodes[i]
+		}
+	}
+	// Pass 2: prefix.
+	for i := range m.nodes {
+		if strings.HasPrefix(strings.ToLower(m.nodes[i].callsign), target) {
+			return &m.nodes[i]
+		}
+	}
+	// Pass 3: substring — case-insensitive.
+	for i := range m.nodes {
+		if strings.Contains(strings.ToLower(m.nodes[i].callsign), target) {
 			return &m.nodes[i]
 		}
 	}
@@ -919,11 +1577,12 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 	// Meshtastic client sees it as plain chat.
 
 	case "cq":
-		body := "CQ CQ CQ de KC7XYZ testing signals, please ack"
+		call := m.myCallsign()
+		body := fmt.Sprintf("CQ CQ CQ de %s testing signals, please ack", call)
 		if rest != "" {
-			body = "CQ de KC7XYZ " + rest
+			body = fmt.Sprintf("CQ de %s %s", call, rest)
 		}
-		m.sendBang("!cq", body)
+		m.sendBang("/cq", body)
 		m.flash = "!cq broadcast — awaiting acks…"
 	case "cqr":
 		target := rest
@@ -939,7 +1598,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = fmt.Sprintf("no telemetry for %s — node unknown", target)
 			return nil
 		}
-		m.sendBang("!cqr "+target, signalReport(n))
+		m.sendBang("/cqr "+target, signalReport(n))
 		m.flash = fmt.Sprintf("!cqr %s — copy report sent (%s)", target, signalReport(n))
 	case "rs":
 		target := rest
@@ -955,7 +1614,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = fmt.Sprintf("no telemetry for %s — node unknown", target)
 			return nil
 		}
-		m.sendBang("!rs "+target, signalReport(n))
+		m.sendBang("/rs "+target, signalReport(n))
 		m.flash = fmt.Sprintf("!rs %s — %s", target, signalReport(n))
 	case "73":
 		target := rest
@@ -963,34 +1622,90 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		if target != "" {
 			body = "73 " + target
 		}
-		m.sendBang("!73", body)
+		m.sendBang("/73", body)
 		m.flash = "!73 sent"
 	case "88":
-		m.sendBang("!88", "88")
+		m.sendBang("/88", "88")
 		m.flash = "!88 sent"
 	case "qsl":
-		m.sendBang("!qsl", "QSL")
+		m.sendBang("/qsl", "QSL")
 		m.flash = "!qsl — acknowledged"
 	case "qth":
-		grid := rest
-		if grid == "" {
-			grid = "CN85 Portland"
+		// PRIVACY — /qth only transmits when the user runs it
+		// explicitly, and only the coarse Maidenhead grid (~20 km
+		// precision). Never exact lat/long.
+		//
+		// Two forms:
+		//   /qth                → broadcast your own grid (from radio GPS)
+		//   /qth <text>         → broadcast a custom QTH string
+		//
+		// To look up a PEER's QTH, use /whois <call> — keeps send vs.
+		// query unambiguous.
+		arg := strings.TrimSpace(rest)
+		if arg == "" {
+			grid := m.myGrid
+			if grid == "" && m.isDemo() {
+				grid = "CN85"
+			}
+			if grid == "" {
+				m.flash = "no GPS fix — /qth <text> to send a custom QTH, or configure position on the radio"
+				return nil
+			}
+			m.sendBang("/qth", "QTH: "+grid)
+			m.flash = "QTH: " + grid
+			return nil
 		}
-		m.sendBang("!qth", grid)
-		m.flash = "!qth " + grid
+		m.sendBang("/qth", "QTH: "+arg)
+		m.flash = "QTH: " + arg
+	case "env":
+		target := rest
+		if target == "" {
+			target = m.selectedSender()
+		}
+		if target == "" {
+			m.flash = "usage: /env <callsign>"
+			return nil
+		}
+		nodeNum := m.nodeNumOf(target)
+		if nodeNum == 0 {
+			m.systemLine(fmt.Sprintf("env: no record of %s", target))
+			return nil
+		}
+		n := m.lookupNode(target)
+		env, ok := m.peerEnv[nodeNum]
+		if !ok {
+			m.systemLine(fmt.Sprintf("env: %s has no environmental telemetry on file", n.callsign))
+			m.systemLine("     (only peers with temp/humidity/pressure sensors broadcast this)")
+			return nil
+		}
+		var lines []string
+		if env.temperature != 0 {
+			lines = append(lines, fmt.Sprintf("temp:     %.1f °C", env.temperature))
+		}
+		if env.humidity != 0 {
+			lines = append(lines, fmt.Sprintf("humidity: %.0f %%", env.humidity))
+		}
+		if env.pressure != 0 {
+			lines = append(lines, fmt.Sprintf("pressure: %.0f hPa", env.pressure))
+		}
+		if env.gas != 0 {
+			lines = append(lines, fmt.Sprintf("gas:      %.0f Ω", env.gas))
+		}
+		lines = append(lines, fmt.Sprintf("age:      %s ago", humanDuration(time.Since(env.at))))
+		m.systemBlock(fmt.Sprintf("env %s", n.callsign), lines...)
 	case "sked":
 		target := rest
 		if target == "" {
 			m.flash = "usage: /sked <callsign>"
 			return nil
 		}
-		m.sendBang("!sked "+target, "proposing scheduled contact, 24h from now")
+		m.sendBang("/sked "+target, "proposing scheduled contact, 24h from now")
 		m.flash = fmt.Sprintf("!sked %s — proposal sent", target)
 
 	// ── Extra ham/Meshtastic slang ────────────────────────────────
 	case "qrz":
 		// "Who is calling me?" — broadcast a prompt for identification.
-		m.sendBang("!qrz", "QRZ? who's calling?")
+		m.sendBang("/qrz", "QRZ? who's calling?")
 		m.flash = "!qrz — asking for ID"
 	case "qrm":
 		// "You have man-made interference." Report to a station.
@@ -1002,7 +1717,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "usage: /qrm <callsign>"
 			return nil
 		}
-		m.sendBang("!qrm "+target, "QRM — interference on your signal")
+		m.sendBang("/qrm "+target, "QRM — interference on your signal")
 		m.flash = fmt.Sprintf("!qrm %s — interference reported", target)
 	case "qsb":
 		// "Your signal is fading."
@@ -1014,11 +1729,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "usage: /qsb <callsign>"
 			return nil
 		}
-		m.sendBang("!qsb "+target, "QSB — signal fading, copy weak")
+		m.sendBang("/qsb "+target, "QSB — signal fading, copy weak")
 		m.flash = fmt.Sprintf("!qsb %s — fade reported", target)
 	case "sk":
 		// Final sign-off — stronger than /73. "Signing off clear."
-		m.sendBang("!sk", "SK — clear and out 73")
+		m.sendBang("/sk", "SK — clear and out 73")
 		m.flash = "!sk — clear"
 	case "wx":
 		// Weather at my QTH. Optional argument supplies the conditions;
@@ -1027,17 +1742,24 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		if wx == "" {
 			wx = "clear 55°F light wind"
 		}
-		m.sendBang("!wx", wx)
-		m.flash = "!wx — weather broadcast"
+		m.sendBang("/wx", "wx: "+wx)
+		m.flash = "wx: " + wx + " — broadcast"
 	case "grid":
 		// Just the Maidenhead locator — shorter / more data-friendly
 		// than /qth which also names the city.
 		grid := rest
 		if grid == "" {
+			grid = m.myGrid
+		}
+		if grid == "" && m.isDemo() {
 			grid = "CN85"
 		}
-		m.sendBang("!grid", grid)
-		m.flash = "!grid " + grid
+		if grid == "" {
+			m.flash = "no GPS fix — /grid <locator> to send a custom grid"
+			return nil
+		}
+		m.sendBang("/grid", "grid: "+grid)
+		m.flash = "grid: " + grid + " — broadcast"
 	case "mesh":
 		// Meshtastic-specific — summarize what the mesh looks like
 		// from our vantage: number of nodes we can hear, by state.
@@ -1053,7 +1775,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			}
 		}
 		body := fmt.Sprintf("mesh view: %d online, %d muted, %d stale", online, muted, offline)
-		m.sendBang("!mesh", body)
+		m.sendBang("/mesh", body)
 		m.flash = body
 	case "k":
 		// "Over — go ahead." Ragchew turn-taking.
@@ -1065,7 +1787,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "usage: /k <callsign>"
 			return nil
 		}
-		m.sendBang("!k "+target, "K — over, go ahead")
+		m.sendBang("/k "+target, "K — over, go ahead")
 		m.flash = fmt.Sprintf("!k %s — over to you", target)
 
 	// ── IRC-style operational commands ────────────────────────────
@@ -1075,15 +1797,20 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			target = m.selectedSender()
 		}
 		if target == "" {
-			m.flash = "usage: /tr <callsign>  (or highlight a message in nav mode)"
+			m.flash = "usage: /tr <callsign>"
 			return nil
 		}
 		n := m.lookupNode(target)
 		if n == nil {
-			m.flash = fmt.Sprintf("no route data for %s — node unknown", target)
+			m.systemLine(fmt.Sprintf("tr: no route data for %s", target))
 			return nil
 		}
-		m.flash = fmt.Sprintf("trace %s — %d hops · %s", target, n.lastHops, signalReport(n))
+		m.systemBlock(
+			fmt.Sprintf("traceroute %s", n.callsign),
+			fmt.Sprintf("hops:   %d", n.lastHops),
+			fmt.Sprintf("signal: %s", signalReport(n)),
+			"note:   live path not yet queried — showing last-known telemetry",
+		)
 	case "ping":
 		target := rest
 		if target == "" {
@@ -1095,10 +1822,14 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		n := m.lookupNode(target)
 		if n == nil {
-			m.flash = fmt.Sprintf("can't ping %s — node unknown", target)
+			m.systemLine(fmt.Sprintf("ping: node %s unknown", target))
 			return nil
 		}
-		m.flash = fmt.Sprintf("ping %s — last heard %s · %s", target, n.lastHeard, signalReport(n))
+		m.systemBlock(
+			fmt.Sprintf("ping %s", n.callsign),
+			fmt.Sprintf("last heard: %s ago", n.lastHeard),
+			fmt.Sprintf("signal:     %s", signalReport(n)),
+		)
 	case "w", "whois":
 		target := rest
 		if target == "" {
@@ -1110,7 +1841,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		n := m.lookupNode(target)
 		if n == nil {
-			m.flash = fmt.Sprintf("no record of %s", target)
+			m.systemLine(fmt.Sprintf("whois: no record of %s", target))
 			return nil
 		}
 		hw := n.hwModel
@@ -1121,8 +1852,26 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		if fw == "" {
 			fw = "?"
 		}
-		m.flash = fmt.Sprintf("%s · %s · fw %s · heard %s · %s · %s",
-			n.callsign, hw, fw, n.lastHeard, n.state, signalReport(n))
+
+		// Multi-line "server reply" block, irssi-style.
+		lines := []string{
+			fmt.Sprintf("hw:     %s", hw),
+			fmt.Sprintf("fw:     %s", fw),
+			fmt.Sprintf("heard:  %s ago", n.lastHeard),
+			fmt.Sprintf("state:  %s", n.state),
+			fmt.Sprintf("signal: %s", signalReport(n)),
+		}
+		if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
+			if pos, ok := m.peerPositions[nodeNum]; ok {
+				lines = append(lines,
+					fmt.Sprintf("grid:   %s", pos.grid),
+					fmt.Sprintf("coord:  %.5f, %.5f  alt %d m", pos.latitude, pos.longitude, pos.altitude),
+					fmt.Sprintf("pos:    %s ago", humanDuration(time.Since(pos.at))),
+				)
+			}
+		}
+		lines = append(lines, "end of /whois")
+		m.systemBlock(fmt.Sprintf("whois %s", n.callsign), lines...)
 	case "r", "reply":
 		if rest == "" {
 			target := m.selectedSender()
@@ -1193,7 +1942,47 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		m.flash = "usage: /channel list  |  /channel add <meshtastic://url>"
 	case "config":
-		m.flash = "radio — KC7XYZ on T-Beam v1.1, fw 2.3.4, LongFast ch0, 3.94V 87%"
+		if m.isDemo() {
+			m.systemBlock("config [DEMO]",
+				"callsign: KC7XYZ",
+				"hw:       T-Beam v1.1",
+				"fw:       2.3.4",
+				"channel:  LongFast ch0",
+				"battery:  3.94 V  87%",
+			)
+			return nil
+		}
+		n := m.myNode()
+		lines := []string{fmt.Sprintf("callsign: %s", m.myCallsign())}
+		if n != nil && n.hwModel != "" {
+			lines = append(lines, fmt.Sprintf("hw:       %s", n.hwModel))
+		}
+		if m.radioFirmware != "" {
+			lines = append(lines, fmt.Sprintf("fw:       %s", m.radioFirmware))
+		}
+		if m.currentChannel != "" {
+			lines = append(lines, fmt.Sprintf("channel:  %s  %s", m.currentChannel, m.radioModemPreset))
+		}
+		if m.radioRole != "" {
+			lines = append(lines, fmt.Sprintf("role:     %s", m.radioRole))
+		}
+		if m.radioRegion != "" {
+			lines = append(lines, fmt.Sprintf("region:   %s", m.radioRegion))
+		}
+		if m.radioTxPower != 0 {
+			lines = append(lines, fmt.Sprintf("tx power: %d dBm", m.radioTxPower))
+		}
+		if m.myGrid != "" {
+			lines = append(lines, fmt.Sprintf("grid:     %s", m.myGrid))
+		}
+		if m.hasTelemetry {
+			lines = append(lines,
+				fmt.Sprintf("battery:  %.2f V  %d%%", m.batteryVoltage, m.batteryLevel),
+				fmt.Sprintf("chan use: %.1f%%", m.channelUtil),
+			)
+		}
+		lines = append(lines, fmt.Sprintf("peers:    %d known", len(m.nodes)))
+		m.systemBlock("config", lines...)
 	case "help":
 		m.mode = modeHelp
 	case "search", "find":
@@ -1220,19 +2009,82 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 	return nil
 }
 
-// sendBang appends a new "me" message carrying a !bang protocol prefix
-// and a body. Used by the `:cq` / `:73` / `:qth` etc. command family.
-func (m *model) sendBang(bang, body string) {
+// systemLine appends a single-line system/meta entry to the message
+// log. Prefixed with `-!-` irssi-style. Never transmits over LoRa —
+// display-only. Used for short one-shot notices.
+func (m *model) systemLine(text string) {
 	m.messages = append(m.messages, messageItem{
-		time:   "14:13",
+		time:   timeNowHHMM(),
+		text:   "-!- " + text,
+		status: "system",
+	})
+	m.selectedMsg = len(m.messages) - 1
+}
+
+// systemBlock emits a multi-line "server reply" block. Each line
+// becomes its own messageItem, but all carry the same `group` ID —
+// the renderer uses this to (a) give every row in the block the
+// same zebra stripe color, (b) hide the timestamp on continuation
+// rows so only the header carries it, and (c) let j/k navigation
+// keep cursor movement smooth across blocks.
+func (m *model) systemBlock(header string, lines ...string) {
+	gid := nextGroupID()
+	t := timeNowHHMM()
+	m.messages = append(m.messages, messageItem{
+		time:   t,
+		text:   "-!- " + header,
+		status: "system",
+		group:  gid,
+	})
+	for _, l := range lines {
+		m.messages = append(m.messages, messageItem{
+			time:   t,
+			text:   "-!-    " + l,
+			status: "system",
+			group:  gid,
+		})
+	}
+	m.selectedMsg = len(m.messages) - 1
+}
+
+// groupCounter is a monotonically-increasing counter used to tag
+// members of a systemBlock with a shared ID so the renderer can
+// bind them visually.
+var groupCounter uint64
+
+func nextGroupID() uint64 {
+	groupCounter++
+	return groupCounter
+}
+
+// sendBang appends an outgoing command-originated message to the
+// local log AND (in live-radio mode) transmits it over LoRa via the
+// pump. The `bang` field is kept purely for local UI styling — the
+// on-wire text is just `body`, clean enough that any other
+// Meshtastic client reads it as plain chat.
+//
+// Used by /cq, /73, /qsl, /qth, /grid, /rs, /cqr, /sk, /qrz, /qrm,
+// /qsb, /wx, /k, /mesh. Commands that don't transmit (/whois, /ping,
+// /tr, /env, /config) use systemLine() instead.
+func (m *model) sendBang(bang, body string) {
+	status := "ack"
+	if !m.isDemo() {
+		status = "pending" // flipped to "ack" when the radio echoes our packet back
+	}
+	m.messages = append(m.messages, messageItem{
+		time:   timeNowHHMM(),
 		from:   "me",
 		mine:   true,
 		bang:   bang,
 		text:   body,
-		status: "ack",
+		status: status,
 	})
 	m.selectedMsg = len(m.messages) - 1
 	m.focused = paneMessages
+
+	if m.pump != nil {
+		m.pump.Enqueue(newTextToRadio(body, m.currentChannelIndex()))
+	}
 }
 
 // updateHelp handles keys while the help overlay is visible. Vim-style
@@ -1361,7 +2213,15 @@ func (m model) View() string {
 
 	// Splash takes over the whole screen — no chrome, no bars.
 	if m.mode == modeSplash {
-		return renderSplash(m.w, m.h, m.splash)
+		status := ""
+		if m.connectDest != "" {
+			if m.connected {
+				status = fmt.Sprintf("✓ connected to %s", m.connectDest)
+			} else {
+				status = fmt.Sprintf("connecting to %s …", m.connectDest)
+			}
+		}
+		return renderSplash(m.w, m.h, m.splash, status)
 	}
 
 	status := m.renderStatusBar()
@@ -1679,33 +2539,169 @@ func (m model) renderHelpView(height int) string {
 		Render(strings.Join(viewLines, "\n"))
 }
 
+// statusSegment wraps a styled value in the `░▒▓ value ▓▒░` tmux /
+// powerline gradient chrome. `content` is already styled (fg color +
+// bold etc.); `chromeColor` tints the ░▒▓ bars themselves. Consecutive
+// segments butt directly against each other for the classic
+// stacked-gradient look: `░▒▓ call ▓▒░░▒▓ hw ▓▒░`.
+func statusSegment(content, chromeColor string) string {
+	chrome := lipgloss.NewStyle().Foreground(lipgloss.Color(chromeColor))
+	return chrome.Render("░▒▓ ") + content + chrome.Render(" ▓▒░")
+}
+
 func (m model) renderStatusBar() string {
-	mesh := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
 	call := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
 	label := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	val := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
-	warn := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow))
+	val := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan)).Bold(true)
+	warn := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
 	ok := lipgloss.NewStyle().Foreground(lipgloss.Color(mhGreen)).Bold(true)
-	sep := label.Render(" · ")
+	pink := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
+	demoTag := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
 
-	left := mesh.Render(`//\`) + "  " + call.Render("KC7XYZ") + "  " + label.Render("Retr0h Base")
+	// Chrome (the ░▒▓ gradient bars) is always dim drained — the
+	// segment's content carries the semantic color.
+	chrome := mhDrained
 
-	mid := strings.Join([]string{
-		val.Render("T-Beam v1.1") + " " + label.Render("fw 2.3.4"),
-		val.Render("LongFast ch0"),
-		warn.Render("14dBm"),
-		val.Render("3.94V") + " " + label.Render("87%"),
-		label.Render("noise ") + val.Render("-92dB"),
-	}, sep)
+	// Build the segment list. Live mode pulls from model state;
+	// demo mode keeps the canned values so screenshots stay juicy.
+	var segs []string
 
-	right := ok.Render("online") + label.Render("  [DEMO]")
+	// Segment 1: brand mark + callsign, both in mesh-green.
+	brand := call.Render(`//\`) + "  " + call.Render(m.myCallsign())
+	segs = append(segs, statusSegment(brand, chrome))
 
-	content := left + sep + mid + sep + right
-	if lipgloss.Width(content) > m.w-2 {
-		content = left + sep + right
+	if m.isDemo() {
+		// Canned demo chrome — looks full for screenshots, none real.
+		segs = append(segs,
+			statusSegment(val.Render("T-Beam v1.1")+" "+label.Render("fw 2.3.4"), chrome),
+			statusSegment(val.Render("LongFast ch0"), chrome),
+			statusSegment(warn.Render("14dBm"), chrome),
+			statusSegment(val.Render("3.94V")+" "+label.Render("87%"), chrome),
+			statusSegment(label.Render("noise ")+val.Render("-92dB"), chrome),
+		)
+	} else {
+		// Live radio mode — every segment pulls from model state.
+		// Fields get "—" when the radio hasn't yet sent them (e.g.
+		// DeviceMetrics telemetry is periodic — default every 30 min,
+		// so battery / utilization are blank on first launch).
+		n := m.myNode()
+
+		// Slim unicode icons used throughout the bar. Light-weight
+		// powerline-style glyphs rather than emoji — render at the
+		// same cell width as text, keep color theming clean.
+		//
+		//   ⌂  home / hardware
+		//   ⚙  firmware (cog)
+		//   ⌬  channel (radio ring)
+		//   ⟐  tx power (diamond with dot)
+		//   ⚡  battery
+		//   ≈  channel utilization (airwaves)
+		//   ⌖  role (crosshair)
+		//   ⌘  region (command-like — regulatory code)
+		//   ☖  grid square (shogi piece traditionally used for QTH)
+		//   ⚭  peers (linked-rings)
+		//   ●  online / connecting dot
+
+		// Hardware + firmware.
+		hw := "—"
+		if n != nil && n.hwModel != "" {
+			hw = n.hwModel
+		}
+		fw := shortFirmware(m.radioFirmware)
+		segs = append(segs, statusSegment(
+			label.Render("⌂ ")+val.Render(hw)+"  "+label.Render("⚙ ")+val.Render(fw),
+			chrome,
+		))
+
+		// Channel + modem preset (e.g. "⌬ #default LongFast").
+		chParts := []string{label.Render("⌬ ")}
+		if m.currentChannel != "" {
+			chParts = append(chParts, val.Render(m.currentChannel))
+		} else {
+			chParts = append(chParts, val.Render("—"))
+		}
+		if m.radioModemPreset != "" {
+			chParts = append(chParts, " "+label.Render(m.radioModemPreset))
+		}
+		segs = append(segs, statusSegment(strings.Join(chParts, ""), chrome))
+
+		// TX power in dBm.
+		tx := "—"
+		if m.radioTxPower != 0 {
+			tx = fmt.Sprintf("%d dBm", m.radioTxPower)
+		}
+		segs = append(segs, statusSegment(label.Render("⟐ ")+warn.Render(tx), chrome))
+
+		// Battery + voltage.
+		batt := "—"
+		if m.hasTelemetry {
+			pct := "—"
+			if m.batteryLevel > 0 {
+				if m.batteryLevel > 100 {
+					pct = "pwr"
+				} else {
+					pct = fmt.Sprintf("%d%%", m.batteryLevel)
+				}
+			}
+			if m.batteryVoltage > 0 {
+				batt = fmt.Sprintf("%.2fV %s", m.batteryVoltage, pct)
+			} else {
+				batt = pct
+			}
+		}
+		segs = append(segs, statusSegment(label.Render("⚡ ")+val.Render(batt), chrome))
+
+		// Channel utilization.
+		util := "—"
+		if m.hasTelemetry {
+			util = fmt.Sprintf("%.1f%%", m.channelUtil)
+		}
+		segs = append(segs, statusSegment(label.Render("≈ ")+val.Render(util), chrome))
+
+		// Role (CLIENT / ROUTER / REPEATER / TRACKER …).
+		if m.radioRole != "" {
+			segs = append(segs, statusSegment(label.Render("⌖ ")+val.Render(m.radioRole), chrome))
+		}
+
+		// Region (regulatory domain).
+		if m.radioRegion != "" {
+			segs = append(segs, statusSegment(label.Render("⌘ ")+val.Render(m.radioRegion), chrome))
+		}
+
+		// Grid square (Maidenhead).
+		if m.myGrid != "" {
+			segs = append(segs, statusSegment(label.Render("☖ ")+val.Render(m.myGrid), chrome))
+		}
+
+		// Peer count.
+		segs = append(segs, statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.nodes))), chrome))
 	}
-	if lipgloss.Width(content) > m.w-2 {
-		content = left
+
+	// Right-most segment: connection state.
+	var state string
+	switch {
+	case m.isDemo():
+		state = ok.Render("online") + "  " + demoTag.Render("[DEMO]")
+	case m.connected:
+		state = ok.Render("● online")
+	default:
+		state = pink.Render("● connecting")
+	}
+	segs = append(segs, statusSegment(state, chrome))
+
+	content := strings.Join(segs, "")
+
+	// Graceful narrow-terminal fallback: when the bar is too wide,
+	// drop segments one at a time from the center outward until it
+	// fits. Brand (first) and state (last) are preserved so the
+	// user always knows who they are + whether they're connected.
+	for lipgloss.Width(content) > m.w-2 && len(segs) > 2 {
+		mid := len(segs) / 2
+		if mid == 0 || mid == len(segs)-1 {
+			break
+		}
+		segs = append(segs[:mid], segs[mid+1:]...)
+		content = strings.Join(segs, "")
 	}
 
 	pad := m.w - lipgloss.Width(content) - 2
@@ -2008,11 +3004,40 @@ func (m model) renderMessagesPane(width, height int) string {
 				Render(fmt.Sprintf("   … %d earlier", startIdx)))
 	}
 	selected := m.focused == paneMessages && m.mode == modeNav
+	var lastGroup uint64
+	var groupBg string
 	for i := startIdx; i < len(m.messages); i++ {
 		msg := m.messages[i]
 		faded := m.nodeFilter != "" && !m.msgMatchesFilter(msg)
-		bg := zebraBg(i)
-		line := m.renderMessageRow(msg, i == m.selectedMsg && selected, width-4, bg)
+
+		// Group rows share one zebra stripe — every line in a /whois
+		// or /config block gets the same bg so the block reads as one
+		// card instead of alternating stripes.
+		var bg string
+		switch {
+		case msg.group != 0 && msg.group == lastGroup:
+			bg = groupBg
+		case msg.group != 0:
+			bg = zebraBg(i)
+			lastGroup = msg.group
+			groupBg = bg
+		default:
+			bg = zebraBg(i)
+			lastGroup = 0
+			groupBg = ""
+		}
+
+		// Highlight the whole group when any row in it is selected —
+		// j/k lands the cursor on the header row, but visually the
+		// entire block shows as the current selection.
+		isSelected := i == m.selectedMsg && selected
+		if !isSelected && msg.group != 0 && selected {
+			if sel := m.messages[m.selectedMsg]; sel.group == msg.group {
+				isSelected = true
+			}
+		}
+
+		line := m.renderMessageRow(msg, isSelected, width-4, bg)
 		if faded {
 			line = dimRow(line)
 		}
@@ -2028,9 +3053,11 @@ func (m model) renderMessagesPane(width, height int) string {
 func tailStartList(msgs []messageItem, rowsBudget int) int {
 	rows := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
-		cost := 1
+		// System multi-line blocks carry embedded newlines; each
+		// newline = one more visual row.
+		cost := 1 + strings.Count(msgs[i].text, "\n")
 		if msgs[i].acks != "" {
-			cost = 2
+			cost++
 		}
 		if rows+cost > rowsBudget {
 			return i + 1
@@ -2133,9 +3160,22 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 		Bold(true).
 		Render("▎") + lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
 
-	// System messages render as a single italic line — still on tinted bg.
+	// System messages — single-line. Multi-line blocks are emitted
+	// as multiple messageItems sharing a `group` ID; the pane loop
+	// binds them visually by reusing the same zebra bg.
 	if msg.status == "system" {
-		line := accent + tstamp.Render("   "+msg.time+"  ") + sys.Render(msg.text)
+		timeCol := "   " + msg.time + "  "
+		// Continuation lines in a block hide the timestamp so only the
+		// header row carries it — makes the block read as one card.
+		if msg.group != 0 && !strings.HasPrefix(msg.text, "-!- whois") &&
+			!strings.HasPrefix(msg.text, "-!- config") &&
+			!strings.HasPrefix(msg.text, "-!- env") &&
+			!strings.HasPrefix(msg.text, "-!- ping") &&
+			!strings.HasPrefix(msg.text, "-!- traceroute") {
+			// Not the header row — blank out time, keep accent.
+			timeCol = "         "
+		}
+		line := accent + tstamp.Render(timeCol) + sys.Render(msg.text)
 		return wrapSelection(line, selected, m.isMsgSearchHit(msg), inner, rowBg)
 	}
 
@@ -2210,21 +3250,14 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 		textW = 10
 	}
 
-	txtRaw := msg.text
-	if msg.bang != "" {
-		txtRaw = msg.bang + " " + msg.text
-	}
-	txtClamped := padOrTruncate(txtRaw, textW)
-
-	// Style the text: if it starts with a bang command, colorize just
-	// the bang prefix in yellow; otherwise plain white.
-	var styledTxt string
-	if msg.bang != "" && strings.HasPrefix(txtClamped, msg.bang) {
-		rest := strings.TrimPrefix(txtClamped, msg.bang)
-		styledTxt = bang.Render(msg.bang) + text.Render(rest)
-	} else {
-		styledTxt = text.Render(txtClamped)
-	}
+	// The on-wire content is msg.text only — msg.bang is purely a
+	// local marker identifying which /command emitted the message.
+	// We render the text as-is, so what you see matches what went
+	// out (a clean ham-style payload like "73" or "QTH: CN85", not
+	// meshx-internal "!grid CN85" chrome).
+	txtClamped := padOrTruncate(msg.text, textW)
+	styledTxt := text.Render(txtClamped)
+	_ = bang // kept in scope for any future command-styling use
 
 	// Build the right-hand segment with a 2-space gap — both on the
 	// tinted bg so the row reads as a single uninterrupted rectangle.

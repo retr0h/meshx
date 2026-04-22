@@ -1205,7 +1205,21 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	if idx, ok := m.nodesByNum[msg.nodeNum]; ok {
 		// Preserve fav flag across updates.
 		item.fav = m.nodes[idx].fav
+		prev := m.nodes[idx].callsign
 		m.nodes[idx] = item
+		// Ghost upgrade notification — when a peer that was
+		// previously showing as the "node 0x<hex>" placeholder
+		// (because NodeInfo hadn't arrived yet) just got
+		// resolved to a real callsign, drop a grey inline
+		// system line in the log so the user sees the name
+		// flip happen. Skipped when the callsign didn't
+		// actually change (re-applied same NodeInfo) or when
+		// we're still stuck on the placeholder (NodeInfo
+		// lacked both long and short names).
+		placeholder := fmt.Sprintf("node 0x%x", msg.nodeNum)
+		if prev == placeholder && item.callsign != placeholder && prev != item.callsign {
+			m.systemLine(fmt.Sprintf("identified %s (was %s)", item.callsign, placeholder))
+		}
 		return
 	}
 	m.nodesByNum[msg.nodeNum] = len(m.nodes)

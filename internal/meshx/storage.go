@@ -24,8 +24,11 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/pressly/goose/v3"
 
@@ -84,14 +87,95 @@ func openStorage(path string) (*sql.DB, error) {
 // dialect / base-FS / Up flow as freebies — no bespoke migration
 // logic here, we let goose track applied versions in its
 // goose_db_version table.
+//
+// Wires goose's logger to a stderr prefix so every startup prints
+// which versions applied (or "no pending migrations") — the tea
+// UI renders over stderr can't swallow, so even in alt-screen mode
+// these lines show up if the user exits or pipes stderr to a file
+// (`meshx 2>meshx.log`).
 func runMigrations(db *sql.DB) error {
 	goose.SetBaseFS(embedMigrations)
+	goose.SetLogger(log.New(os.Stderr, "meshx/storage: ", log.LstdFlags))
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return fmt.Errorf("goose dialect: %w", err)
 	}
 	if err := goose.Up(db, "migrations"); err != nil {
 		return fmt.Errorf("goose up: %w", err)
 	}
+	// One-off retroactive fix — rows written before saveMessage
+	// learned about from_num still have it set to 0. Parse the
+	// "node 0x<hex>" sender placeholder and back-fill the real
+	// node num so ghost-peer replay resolves those senders to a
+	// lookup-able nodeItem on next launch. Idempotent: only
+	// touches rows where from_num == 0 AND sender matches the
+	// placeholder shape.
+	if err := backfillFromNum(db); err != nil {
+		return fmt.Errorf("backfill from_num: %w", err)
+	}
+	return nil
+}
+
+// backfillFromNum parses the historical "node 0x<hex>" sender
+// placeholder out of pre-from_num rows and writes the decoded
+// number into from_num. Rows that already have a non-zero
+// from_num are skipped. Anything that doesn't match the
+// placeholder shape (real callsigns from peers we did resolve)
+// is skipped too — we'd have no id to recover for them.
+func backfillFromNum(db *sql.DB) error {
+	rows, err := db.Query(
+		`SELECT id, sender FROM messages WHERE from_num = 0 AND sender LIKE 'node 0x%'`,
+	)
+	if err != nil {
+		return fmt.Errorf("query placeholder rows: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type update struct {
+		id      int64
+		fromNum uint64
+	}
+	var updates []update
+	for rows.Next() {
+		var (
+			id     int64
+			sender string
+		)
+		if err := rows.Scan(&id, &sender); err != nil {
+			return fmt.Errorf("scan placeholder row: %w", err)
+		}
+		hex := strings.TrimPrefix(sender, "node 0x")
+		n, err := strconv.ParseUint(hex, 16, 32)
+		if err != nil {
+			continue // sender looked close but didn't actually parse — skip
+		}
+		updates = append(updates, update{id: id, fromNum: n})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iter placeholder rows: %w", err)
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin backfill tx: %w", err)
+	}
+	stmt, err := tx.Prepare(`UPDATE messages SET from_num = ? WHERE id = ?`)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("prepare backfill update: %w", err)
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, u := range updates {
+		if _, err := stmt.Exec(u.fromNum, u.id); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("exec backfill update id=%d: %w", u.id, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit backfill tx: %w", err)
+	}
+	log.Printf("meshx/storage: back-filled from_num on %d historical rows", len(updates))
 	return nil
 }
 

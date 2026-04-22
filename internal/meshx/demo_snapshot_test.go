@@ -10,7 +10,7 @@ import (
 // TestSnapshotView prints the full View() string to test output so we
 // can eyeball the actual render without spawning a TTY.
 func TestSnapshotView(_ *testing.T) {
-	m := initialModel()
+	m := newModel(DefaultDemo(), "")
 	m.mode = modeInput
 	m.input.Focus()
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 160, Height: 40})
@@ -24,7 +24,7 @@ func TestSnapshotView(_ *testing.T) {
 // successful radio handshake, so the live-mode top bar is fully
 // populated — every segment shows a real value.
 func TestSnapshotLive(_ *testing.T) {
-	m := initialRadioModel("/dev/cu.usbmodem2101")
+	m := newModel(nil, "/dev/cu.usbmodem2101")
 	m.mode = modeInput
 	m.input.Focus()
 	m.connected = true

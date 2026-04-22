@@ -172,6 +172,13 @@ type model struct {
 	historyCursor int
 	historyDraft  string // the line the user was typing before Up-arrowing — restored on Down past end
 
+	// Demo fixture — non-nil means "running off canned data, no radio
+	// transport". When set, its values pre-populate the same model
+	// fields the live radio would fill (myNodeNum, radioFirmware,
+	// batteryLevel, etc.), so every renderer has one code path: read
+	// model state. isDemo() is `m.demo != nil`.
+	demo *Demo
+
 	// Live-radio state. Zero-value is "demo mode — no transport".
 	pump         *pump          // non-nil when connected to a real radio
 	connectDest  string         // "" = demo, else "/dev/cu.usbmodem2101" / tcp host
@@ -268,11 +275,11 @@ func (m *model) handleTab(dir int) {
 	}
 }
 
-// RunDemo launches the Bubble Tea model with canned demo data and no
-// radio transport. Used for UI iteration, screenshots, and smoke
-// testing the interface without a LoRa device handy.
+// RunDemo launches the Bubble Tea model with the canonical Demo
+// fixture and no radio transport. Used for UI iteration, screenshots,
+// and smoke testing the interface without a LoRa device handy.
 func RunDemo() error {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	p := tea.NewProgram(newModel(DefaultDemo(), ""), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }
@@ -290,7 +297,7 @@ func RunDemo() error {
 // returns a startPumpMsg, which is when we actually open the
 // transport — by then the main loop is pumping messages.
 func RunRadio(dest string) error {
-	m := initialRadioModel(dest)
+	m := newModel(nil, dest)
 	program := tea.NewProgram(m, tea.WithAltScreen())
 
 	// We need a reference to the program inside the pump so it can
@@ -360,26 +367,18 @@ func mod(x, y float64) float64 {
 	return r
 }
 
-// initialRadioModel is initialModel's live-radio sibling: drops the
-// canned channels / nodes / messages, seeds empty maps, marks
-// modeSplash with a connecting banner.
-func initialRadioModel(dest string) model {
-	m := initialModel()
-	m.channels = nil
-	m.nodes = nil
-	m.messages = nil
-	m.selectedMsg = 0
-	m.selectedCh = 0
-	m.selectedNd = 0
-	m.currentChannel = ""
-	m.connectDest = dest
-	m.nodesByNum = make(map[uint32]int)
-	m.peerPositions = make(map[uint32]peerPosition)
-	m.peerEnv = make(map[uint32]peerEnvMetrics)
-	return m
-}
-
-func initialModel() model {
+// newModel builds the bubble-tea model for either demo mode
+// (demo != nil) or live-radio mode (demo == nil, dest != "").
+//
+// Demo mode plugs the Demo fixture's values into the SAME model
+// fields a live radio would populate (myNodeNum, nodes, channels,
+// radioFirmware, batteryLevel, …) so every renderer runs one code
+// path that reads model state — no parallel demo-vs-live branches.
+//
+// Live-radio mode leaves everything at zero/empty; the transport
+// pump fills state as FromRadio packets arrive and the UI shows
+// "—" placeholders until they do.
+func newModel(demo *Demo, dest string) model {
 	// Always-on input bar at the bottom — composes messages, or runs
 	// /commands when the line begins with "/". irssi-style.
 	in := textinput.New()
@@ -390,86 +389,66 @@ func initialModel() model {
 	in.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen))
 	in.Focus()
 
-	return model{
-		mode:           modeSplash,
-		focused:        paneMessages,
-		selectedMsg:    2,
-		currentChannel: "#primary",
-		splash:         pickSplash(),
-		channels: []channelItem{
-			{name: "#primary", unread: 3},
-			{name: "#admin", unread: 0},
-			{name: "#emcomm", unread: 0},
-			{name: "*secret*", private: true, unread: 1},
-		},
-		nodes: []nodeItem{
-			{
-				callsign: "KC7XYZ 🦀", state: "online", fav: true, lastHeard: "2m", heardRank: 2,
-				lastSNR: "-8.5", lastRSSI: "-92", lastHops: 2, hwModel: "T-Beam v1.1", firmware: "2.3.4",
-			},
-			{
-				callsign: "N0CALL", state: "online", lastHeard: "14s", heardRank: 0,
-				lastSNR: "-5.0", lastRSSI: "-87", lastHops: 1, hwModel: "Heltec v3", firmware: "2.3.4",
-			},
-			{
-				callsign: "W1ABC ⚡", state: "online", lastHeard: "1m", heardRank: 1,
-				lastSNR: "-5.0", lastRSSI: "-89", lastHops: 1, hwModel: "RAK4631", firmware: "2.3.4",
-			},
-			{
-				callsign: "KE0ABC", state: "failed", lastHeard: "8m", heardRank: 5,
-				lastSNR: "-14.2", lastRSSI: "-108", lastHops: 4, hwModel: "T-Beam v1.1", firmware: "2.2.1",
-			},
-			{
-				callsign: "Rural Signal 📡", state: "muted", lastHeard: "4m", heardRank: 3,
-				lastSNR: "-11.2", lastRSSI: "-103", lastHops: 3, hwModel: "Station-G2", firmware: "2.3.4",
-			},
-			{
-				callsign: "W9XYZ 🏔", state: "offline", lastHeard: "2h", heardRank: 99,
-				lastSNR: "-16.0", lastRSSI: "-115", lastHops: 5, hwModel: "T-Deck", firmware: "2.1.0",
-			},
-		},
-		messages: []messageItem{
-			{time: "14:02", from: "KC7XYZ 🦀", text: "hello world", hops: 2, snr: "-8.5"},
-			{time: "14:03", from: "me", mine: true, text: "hi", status: "ack", hops: 0},
-			{
-				time: "14:05",
-				from: "Rural Signal 📡",
-				bang: "!cq",
-				text: "who's out there?",
-				acks: "↳ 3 acks — KC7XYZ -8dB  W1ABC -11dB  N0CALL -14dB",
-				hops: 3,
-				snr:  "-11.2",
-			},
-			{
-				time:   "14:06",
-				from:   "me",
-				mine:   true,
-				bang:   "!cqr",
-				text:   "copy 9/9, SNR -8.5, hop 1",
-				status: "ack",
-			},
-			{time: "14:07", from: "W1ABC ⚡", text: "thanks for the test", hops: 1, snr: "-5.0"},
-			{time: "14:08", from: "me", mine: true, text: "73 👋", status: "fail"},
-			{
-				time: "14:09",
-				from: "KC7XYZ 🦀",
-				bang: "!qth",
-				text: "CN87 Seattle",
-				hops: 2,
-				snr:  "-9.1",
-			},
-			{
-				time:   "14:10",
-				from:   "me",
-				mine:   true,
-				text:   "roger, CN85 Portland here 🌲",
-				status: "ack",
-			},
-			{time: "14:12", from: "", text: "N7DEF went offline", status: "system"},
-		},
-		input:       in,
-		searchInput: func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
+	m := model{
+		mode:          modeSplash,
+		focused:       paneMessages,
+		splash:        pickSplash(),
+		connectDest:   dest,
+		demo:          demo,
+		nodesByNum:    make(map[uint32]int),
+		peerPositions: make(map[uint32]peerPosition),
+		peerEnv:       make(map[uint32]peerEnvMetrics),
+		input:         in,
+		searchInput:   func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
 	}
+
+	if demo == nil {
+		return m
+	}
+
+	// Demo mode — pour the fixture into the same model slots that the
+	// radio would populate. Anything derived from these (status bar,
+	// /config, /grid, /qth, node list) then renders from model state
+	// without any isDemo() branch in the render code.
+	m.channels = append([]channelItem(nil), demo.Channels...)
+	m.nodes = append([]nodeItem(nil), demo.Nodes...)
+	m.messages = append([]messageItem(nil), demo.Messages...)
+	if len(demo.Channels) > 0 {
+		m.currentChannel = demo.Channels[0].name
+	}
+	m.selectedMsg = len(m.messages) - 1
+	if m.selectedMsg < 0 {
+		m.selectedMsg = 0
+	}
+
+	// "Me" node is the first entry in demo.Nodes by convention — bind
+	// myNodeNum + nodesByNum so myNode() and myCallsign() resolve the
+	// same way they do on a live radio.
+	m.myNodeNum = demo.NodeNum
+	if len(demo.Nodes) > 0 {
+		m.nodesByNum[demo.NodeNum] = 0
+	}
+
+	// Telemetry + config snapshot — same fields live mode sets from
+	// DeviceMetrics / LoraConfig / DeviceConfig / Position packets.
+	m.radioFirmware = demo.Firmware
+	m.radioHasWifi = demo.HasWifi
+	m.radioHasBT = demo.HasBT
+	m.radioRegion = demo.Region
+	m.radioModemPreset = demo.ModemPreset
+	m.radioTxPower = demo.TxPowerDBm
+	m.radioRole = demo.Role
+	m.batteryLevel = demo.BatteryLevel
+	m.batteryVoltage = demo.Voltage
+	m.channelUtil = demo.ChannelUtil
+	m.airUtilTx = demo.AirUtilTx
+	m.hasTelemetry = true
+	m.myLatitude = demo.Latitude
+	m.myLongitude = demo.Longitude
+	m.myGrid = demo.Grid
+	m.connected = true
+
+	return m
 }
 
 func (m model) Init() tea.Cmd {
@@ -1028,25 +1007,19 @@ func timeNowHHMM() string {
 	return time.Now().Format("15:04")
 }
 
-// isDemo reports whether we're in demo mode (no radio transport).
-// Branching on this is cleaner than `m.connectDest == ""` sprinkled
-// across renderers and commands.
+// isDemo reports whether we're running off the canned Demo fixture
+// rather than a real radio transport.
 func (m model) isDemo() bool {
-	return m.connectDest == ""
+	return m.demo != nil
 }
 
-// demoCallsign is the placeholder callsign used ONLY in demo mode
-// fixtures — the help overlay, canned ham-command message bodies
-// ("CQ de KC7XYZ testing"), and sample message seed data. Never used
-// in live-radio mode.
-const demoCallsign = "KC7XYZ"
-
 // myCallsign returns the call to use for "me" in outbound messages,
-// status bar, etc. Live mode: real name from the radio's NodeDB.
-// Demo mode: the demoCallsign placeholder.
+// the status bar, etc. Demo mode: whatever the Demo fixture's
+// Callsign says. Live mode: look up our own node by myNodeNum in
+// the NodeDB.
 func (m model) myCallsign() string {
-	if m.isDemo() {
-		return demoCallsign
+	if m.demo != nil {
+		return m.demo.Callsign
 	}
 	if m.myNodeNum == 0 {
 		return "—" // MyNodeInfo hasn't arrived yet
@@ -1057,11 +1030,13 @@ func (m model) myCallsign() string {
 	return fmt.Sprintf("node 0x%x", m.myNodeNum)
 }
 
-// myNode returns a pointer to our own node record in live-radio
-// mode, or nil if demo mode or before MyNodeInfo has arrived. Used
-// by the status bar to surface hardware model, firmware, etc.
+// myNode returns a pointer to our own node record — works in both
+// demo and live mode since demo-mode initialisation seeds m.nodes
+// and m.nodesByNum the same way a real radio's MyInfo + NodeInfo
+// stream would. Returns nil only when MyNodeInfo hasn't arrived yet
+// on a live radio.
 func (m model) myNode() *nodeItem {
-	if m.isDemo() || m.myNodeNum == 0 {
+	if m.myNodeNum == 0 {
 		return nil
 	}
 	if idx, ok := m.nodesByNum[m.myNodeNum]; ok && idx < len(m.nodes) {
@@ -1643,16 +1618,12 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// query unambiguous.
 		arg := strings.TrimSpace(rest)
 		if arg == "" {
-			grid := m.myGrid
-			if grid == "" && m.isDemo() {
-				grid = "CN85"
-			}
-			if grid == "" {
+			if m.myGrid == "" {
 				m.flash = "no GPS fix — /qth <text> to send a custom QTH, or configure position on the radio"
 				return nil
 			}
-			m.sendBang("/qth", "QTH: "+grid)
-			m.flash = "QTH: " + grid
+			m.sendBang("/qth", "QTH: "+m.myGrid)
+			m.flash = "QTH: " + m.myGrid
 			return nil
 		}
 		m.sendBang("/qth", "QTH: "+arg)
@@ -1750,9 +1721,6 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		grid := rest
 		if grid == "" {
 			grid = m.myGrid
-		}
-		if grid == "" && m.isDemo() {
-			grid = "CN85"
 		}
 		if grid == "" {
 			m.flash = "no GPS fix — /grid <locator> to send a custom grid"
@@ -1942,16 +1910,9 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		m.flash = "usage: /channel list  |  /channel add <meshtastic://url>"
 	case "config":
-		if m.isDemo() {
-			m.systemBlock("config [DEMO]",
-				"callsign: KC7XYZ",
-				"hw:       T-Beam v1.1",
-				"fw:       2.3.4",
-				"channel:  LongFast ch0",
-				"battery:  3.94 V  87%",
-			)
-			return nil
-		}
+		// Single render path — demo and live both read from model
+		// state since demo mode pre-populates these fields. The only
+		// difference is a [DEMO] tag on the block header.
 		n := m.myNode()
 		lines := []string{fmt.Sprintf("callsign: %s", m.myCallsign())}
 		if n != nil && n.hwModel != "" {
@@ -1982,7 +1943,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			)
 		}
 		lines = append(lines, fmt.Sprintf("peers:    %d known", len(m.nodes)))
-		m.systemBlock("config", lines...)
+		header := "config"
+		if m.isDemo() {
+			header = "config [DEMO]"
+		}
+		m.systemBlock(header, lines...)
 	case "help":
 		m.mode = modeHelp
 	case "search", "find":
@@ -2285,7 +2250,7 @@ func (m model) renderChannelStatus() string {
 	unread := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
 	alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
 
-	left := label.Render("KC7XYZ")
+	left := label.Render(m.myCallsign())
 
 	var tabs []string
 	for i, c := range m.channels {
@@ -2570,20 +2535,12 @@ func (m model) renderStatusBar() string {
 	brand := call.Render(`//\`) + "  " + call.Render(m.myCallsign())
 	segs = append(segs, statusSegment(brand, chrome))
 
-	if m.isDemo() {
-		// Canned demo chrome — looks full for screenshots, none real.
-		segs = append(segs,
-			statusSegment(val.Render("T-Beam v1.1")+" "+label.Render("fw 2.3.4"), chrome),
-			statusSegment(val.Render("LongFast ch0"), chrome),
-			statusSegment(warn.Render("14dBm"), chrome),
-			statusSegment(val.Render("3.94V")+" "+label.Render("87%"), chrome),
-			statusSegment(label.Render("noise ")+val.Render("-92dB"), chrome),
-		)
-	} else {
-		// Live radio mode — every segment pulls from model state.
-		// Fields get "—" when the radio hasn't yet sent them (e.g.
-		// DeviceMetrics telemetry is periodic — default every 30 min,
-		// so battery / utilization are blank on first launch).
+	{
+		// One render path for both demo and live mode — demo mode
+		// pre-populates the same model fields below, so every
+		// segment just reads model state. Fields show "—" when the
+		// radio hasn't yet sent them (DeviceMetrics telemetry is
+		// periodic — default every 30 min on a fresh radio).
 		n := m.myNode()
 
 		// Slim unicode icons used throughout the bar. Light-weight

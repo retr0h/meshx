@@ -2994,17 +2994,29 @@ func paneAccentColor(paneIdx int) string {
 
 // nickColorPalette is the accent-color ring used to hash peer
 // callsigns into distinct hues — irssi/weechat convention. Avoids
-// mesh-green (already the brand) and magenta (reserved for "me"),
-// so no peer color collides with our own identity cues.
+// mesh-green (brand), magenta (reserved for "me"), and any
+// drained / lavender-adjacent tones that would blend with the
+// quiet labels elsewhere. Bright-saturated hues only so the glitch
+// Max Headroom read is loud and nicks pop off the log.
 var nickColorPalette = []string{
-	mhCyan, mhLavender, mhYellow, mhOrange, mhPink, mhGreen,
+	mhCyan,        // #00d4ff  neon cyan
+	mhYellow,      // #e5c07b  warm amber
+	mhOrange,      // #ffb86c  sunset
+	mhPink,        // #ff6ec7  hot pink
+	"#a78bfa",     // electric violet
+	"#7dd3fc",     // sky blue
+	"#facc15",     // acid yellow
+	"#f472b6",     // bubblegum
 }
 
 // nickColor deterministically maps a callsign to one of the peer
-// accent colors via FNV-ish hash. Same callsign → same color every
-// time so the eye picks each peer out of the log by hue. "me" /
-// system / empty-callsign rows fall back to a neutral drained
-// color since they have their own styling layers.
+// accent colors via FNV-1a plus a murmur3-style avalanche mix so
+// the low bits carry enough entropy for a good modulo distribution.
+// Raw FNV-1a on short near-duplicate strings ("node 0x…") clustered
+// several peers into the same bucket; the avalanche step spreads
+// them out. Same callsign → same color every time so the eye picks
+// each peer out of the log by hue. Empty / system rows fall back
+// to drained.
 func nickColor(callsign string) string {
 	if callsign == "" {
 		return mhDrained
@@ -3014,6 +3026,9 @@ func nickColor(callsign string) string {
 		sum ^= uint32(r)
 		sum *= 16777619
 	}
+	sum ^= sum >> 16
+	sum *= 0x85ebca6b
+	sum ^= sum >> 13
 	return nickColorPalette[int(sum)%len(nickColorPalette)]
 }
 

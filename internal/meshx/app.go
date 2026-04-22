@@ -477,7 +477,7 @@ func newModel(demo *Demo, dest string) model {
 							continue
 						}
 						m.nodes = append(m.nodes, nodeItem{
-							callsign:  normalizeCallsign(msg.from),
+							callsign:  msg.from,
 							state:     "offline",
 							lastHeard: msg.time,
 							lastSNR:   msg.snr,
@@ -1224,10 +1224,6 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	if callsign == "" {
 		callsign = fmt.Sprintf("node 0x%x", msg.nodeNum)
 	}
-	// Normalize at ingest — collapse whitespace to `_` so Tab
-	// completion has one canonical token per peer. Display uses
-	// this same string so what you see is what you type.
-	callsign = normalizeCallsign(callsign)
 
 	// Derive state from lastHeard age.
 	state := "offline"
@@ -1272,10 +1268,7 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 		// actually change (re-applied same NodeInfo) or when
 		// we're still stuck on the placeholder (NodeInfo
 		// lacked both long and short names).
-		// Placeholder is normalized too — "node 0xdeadbeef" becomes
-		// "node_0xdeadbeef" at ingest, so the comparison and the
-		// user-visible flash both use that canonical shape.
-		placeholder := normalizeCallsign(fmt.Sprintf("node 0x%x", msg.nodeNum))
+		placeholder := fmt.Sprintf("node 0x%x", msg.nodeNum)
 		if prev == placeholder && item.callsign != placeholder && prev != item.callsign {
 			m.systemLine(fmt.Sprintf("identified %s (was %s)", item.callsign, placeholder))
 		}
@@ -1318,7 +1311,7 @@ func (m *model) applyChannel(msg radioChannelMsg) {
 // Resolves fromNum to a callsign via the NodeDB; unread count bumps
 // on the destination channel when it's not the active one.
 func (m *model) applyTextMessage(msg radioTextMsg) {
-	from := normalizeCallsign(fmt.Sprintf("node 0x%x", msg.fromNum))
+	from := fmt.Sprintf("node 0x%x", msg.fromNum)
 	if idx, ok := m.nodesByNum[msg.fromNum]; ok {
 		from = m.nodes[idx].callsign
 	} else if msg.fromNum != 0 {

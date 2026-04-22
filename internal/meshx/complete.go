@@ -24,38 +24,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"unicode"
 )
-
-// normalizeCallsign converts a raw Meshtastic longname into the
-// tab-friendly form meshx stores and displays. Collapses every run
-// of whitespace into a single underscore so multi-word callsigns
-// read as a single token ("0aac Base" → "0aac_Base", "Rural Signal
-// 📡" → "Rural_Signal_📡"). Case is preserved exactly — the
-// completer then matches strictly, no folding. Emoji and
-// punctuation are kept verbatim since they're often the only thing
-// distinguishing otherwise-identical ham callsigns.
-func normalizeCallsign(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	inSpace := false
-	seenNonSpace := false
-	for _, r := range s {
-		if unicode.IsSpace(r) {
-			if seenNonSpace {
-				inSpace = true
-			}
-			continue
-		}
-		if inSpace {
-			b.WriteByte('_')
-			inSpace = false
-		}
-		b.WriteRune(r)
-		seenNonSpace = true
-	}
-	return b.String()
-}
 
 // looksLikeHexStem reports whether the user's partial word reads as
 // the beginning of a Meshtastic node-num hex id — "0x" prefix, or

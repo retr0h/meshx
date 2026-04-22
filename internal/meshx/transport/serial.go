@@ -108,8 +108,8 @@ func AutoDetectSerialPort() (string, error) {
 		// device connected. Pick the first and suggest explicit --port
 		// if that's wrong.
 		return "", fmt.Errorf(
-			"multiple USB-serial devices found, specify --port <path>:\n  - %s\n\n"+
-				"The first is usually correct; try that one. If not, pick the one that matches your radio.",
+			"multiple USB-serial devices found, specify --port <path>:\n  - %s\n  "+
+				"the first is usually correct; try that one, or pick the one matching your radio",
 			strings.Join(ports, "\n  - "),
 		)
 	}
@@ -124,6 +124,10 @@ func (c *serialClient) Close() error {
 	return c.port.Close()
 }
 
-func (c *serialClient) Run(ctx context.Context, out chan<- *pb.FromRadio, in <-chan *pb.ToRadio) error {
+func (c *serialClient) Run(
+	ctx context.Context,
+	out chan<- *pb.FromRadio,
+	in <-chan *pb.ToRadio,
+) error {
 	return runStream(ctx, c.port, out, in)
 }

@@ -164,7 +164,12 @@ func probeDeepDump(dest string) error {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Fprintf(os.Stderr, "probe: timeout after %s, %d packets received\n", probeTimeout, n)
+			fmt.Fprintf(
+				os.Stderr,
+				"probe: timeout after %s, %d packets received\n",
+				probeTimeout,
+				n,
+			)
 			return nil
 		case err := <-runErr:
 			if err != nil {
@@ -178,7 +183,11 @@ func probeDeepDump(dest string) error {
 			}
 			if cc := msg.GetConfigCompleteId(); cc == nonce {
 				if !probeDump {
-					fmt.Fprintf(os.Stderr, "probe: handshake complete (%d packets). Re-run with --dump to see each packet.\n", n)
+					fmt.Fprintf(
+						os.Stderr,
+						"probe: handshake complete (%d packets). Re-run with --dump to see each packet.\n",
+						n,
+					)
 				} else {
 					fmt.Fprintf(os.Stderr, "probe: handshake complete (%d packets)\n", n)
 				}

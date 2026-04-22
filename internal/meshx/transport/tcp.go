@@ -56,6 +56,10 @@ func (c *tcpClient) Close() error {
 	return c.conn.Close()
 }
 
-func (c *tcpClient) Run(ctx context.Context, out chan<- *pb.FromRadio, in <-chan *pb.ToRadio) error {
+func (c *tcpClient) Run(
+	ctx context.Context,
+	out chan<- *pb.FromRadio,
+	in <-chan *pb.ToRadio,
+) error {
 	return runStream(ctx, c.conn, out, in)
 }

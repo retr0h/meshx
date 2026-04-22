@@ -90,10 +90,6 @@ import (
 // running program via p.Send(). The model's Update handler has a
 // case for each.
 type (
-	// radioConnectingMsg fires as soon as Dial succeeds — before any
-	// protocol traffic. Carries the destination string for UI display.
-	radioConnectingMsg struct{ dest string }
-
 	// radioMyInfoMsg delivers MyNodeInfo — our own node number,
 	// firmware / hardware details used to populate the top status bar.
 	radioMyInfoMsg struct {
@@ -116,10 +112,10 @@ type (
 	// radioChannelMsg delivers one channel slot — index, name, role,
 	// and PSK presence. Empty name + PRIMARY role is "default LongFast."
 	radioChannelMsg struct {
-		index   int
-		name    string
-		role    string
-		hasPSK  bool
+		index  int
+		name   string
+		role   string
+		hasPSK bool
 	}
 
 	// radioTextMsg arrives whenever a text packet lands on any
@@ -161,11 +157,11 @@ type (
 	// packet — battery, voltage, channel utilization, TX airtime.
 	// Arrives periodically (default every 30 min) from the radio.
 	radioDeviceMetricsMsg struct {
-		fromNodeNum   uint32
-		batteryLevel  uint32  // 0-100; >100 = powered
-		voltage       float32 // volts
-		channelUtil   float32 // percent
-		airUtilTx     float32 // percent
+		fromNodeNum  uint32
+		batteryLevel uint32  // 0-100; >100 = powered
+		voltage      float32 // volts
+		channelUtil  float32 // percent
+		airUtilTx    float32 // percent
 	}
 
 	// radioEnvMetricsMsg delivers a peer's environmental telemetry —
@@ -473,4 +469,3 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 	// ModuleConfig and other variants — ignore.
 	return nil
 }
-

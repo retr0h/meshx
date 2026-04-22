@@ -113,30 +113,64 @@ func DefaultDemo() *Demo {
 		},
 
 		Nodes: []nodeItem{
-			{callsign: "KC7XYZ 🦀", state: "online", fav: true, lastHeard: "2m", heardRank: 2,
-				lastSNR: "-8.5", lastRSSI: "-92", lastHops: 2, hwModel: "T-Beam v1.1", firmware: "2.3.4"},
-			{callsign: "N0CALL", state: "online", lastHeard: "14s", heardRank: 0,
-				lastSNR: "-5.0", lastRSSI: "-87", lastHops: 1, hwModel: "Heltec v3", firmware: "2.3.4"},
-			{callsign: "W1ABC ⚡", state: "online", lastHeard: "1m", heardRank: 1,
-				lastSNR: "-5.0", lastRSSI: "-89", lastHops: 1, hwModel: "RAK4631", firmware: "2.3.4"},
-			{callsign: "KE0ABC", state: "failed", lastHeard: "8m", heardRank: 5,
-				lastSNR: "-14.2", lastRSSI: "-108", lastHops: 4, hwModel: "T-Beam v1.1", firmware: "2.2.1"},
-			{callsign: "Rural Signal 📡", state: "muted", lastHeard: "4m", heardRank: 3,
-				lastSNR: "-11.2", lastRSSI: "-103", lastHops: 3, hwModel: "Station-G2", firmware: "2.3.4"},
-			{callsign: "W9XYZ 🏔", state: "offline", lastHeard: "2h", heardRank: 99,
-				lastSNR: "-16.0", lastRSSI: "-115", lastHops: 5, hwModel: "T-Deck", firmware: "2.1.0"},
+			{
+				callsign: "KC7XYZ 🦀", state: "online", fav: true, lastHeard: "2m", heardRank: 2,
+				lastSNR: "-8.5", lastRSSI: "-92", lastHops: 2, hwModel: "T-Beam v1.1", firmware: "2.3.4",
+			},
+			{
+				callsign: "N0CALL", state: "online", lastHeard: "14s", heardRank: 0,
+				lastSNR: "-5.0", lastRSSI: "-87", lastHops: 1, hwModel: "Heltec v3", firmware: "2.3.4",
+			},
+			{
+				callsign: "W1ABC ⚡", state: "online", lastHeard: "1m", heardRank: 1,
+				lastSNR: "-5.0", lastRSSI: "-89", lastHops: 1, hwModel: "RAK4631", firmware: "2.3.4",
+			},
+			{
+				callsign: "KE0ABC", state: "failed", lastHeard: "8m", heardRank: 5,
+				lastSNR: "-14.2", lastRSSI: "-108", lastHops: 4, hwModel: "T-Beam v1.1", firmware: "2.2.1",
+			},
+			{
+				callsign: "Rural Signal 📡", state: "muted", lastHeard: "4m", heardRank: 3,
+				lastSNR: "-11.2", lastRSSI: "-103", lastHops: 3, hwModel: "Station-G2", firmware: "2.3.4",
+			},
+			{
+				callsign: "W9XYZ 🏔", state: "offline", lastHeard: "2h", heardRank: 99,
+				lastSNR: "-16.0", lastRSSI: "-115", lastHops: 5, hwModel: "T-Deck", firmware: "2.1.0",
+			},
 		},
 
 		Messages: []messageItem{
 			{time: "14:02", from: "KC7XYZ 🦀", text: "hello world", hops: 2, snr: "-8.5"},
 			{time: "14:03", from: "me", mine: true, text: "hi", status: "ack", hops: 0},
-			{time: "14:05", from: "Rural Signal 📡", bang: "/cq", text: "who's out there?",
-				acks: "↳ 3 acks — KC7XYZ -8dB  W1ABC -11dB  N0CALL -14dB", hops: 3, snr: "-11.2"},
-			{time: "14:06", from: "me", mine: true, bang: "/cqr", text: "copy 9/9, SNR -8.5, hop 1", status: "ack"},
+			{
+				time: "14:05", from: "Rural Signal 📡", bang: "/cq", text: "who's out there?",
+				acks: "↳ 3 acks — KC7XYZ -8dB  W1ABC -11dB  N0CALL -14dB", hops: 3, snr: "-11.2",
+			},
+			{
+				time:   "14:06",
+				from:   "me",
+				mine:   true,
+				bang:   "/cqr",
+				text:   "copy 9/9, SNR -8.5, hop 1",
+				status: "ack",
+			},
 			{time: "14:07", from: "W1ABC ⚡", text: "thanks for the test", hops: 1, snr: "-5.0"},
 			{time: "14:08", from: "me", mine: true, text: "73 👋", status: "fail"},
-			{time: "14:09", from: "KC7XYZ 🦀", bang: "/qth", text: "QTH: CN87 Seattle", hops: 2, snr: "-9.1"},
-			{time: "14:10", from: "me", mine: true, text: "roger, CN85 Portland here 🌲", status: "ack"},
+			{
+				time: "14:09",
+				from: "KC7XYZ 🦀",
+				bang: "/qth",
+				text: "QTH: CN87 Seattle",
+				hops: 2,
+				snr:  "-9.1",
+			},
+			{
+				time:   "14:10",
+				from:   "me",
+				mine:   true,
+				text:   "roger, CN85 Portland here 🌲",
+				status: "ack",
+			},
 			{time: "14:12", from: "", text: "N7DEF went offline", status: "system"},
 		},
 	}

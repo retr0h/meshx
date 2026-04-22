@@ -122,6 +122,14 @@ type messageItem struct {
 	// seeds that pre-date the feature).
 	packetID uint32
 	replyID  uint32
+
+	// fromNum — Meshtastic node num of the sender, captured at
+	// ingest. Persisted so the renderer can backfill the displayed
+	// callsign from m.nodesByNum LIVE (the stored `from` field is
+	// only a snapshot at receive time — if NodeInfo arrives later
+	// we'd otherwise be stuck showing "node 0xabc" forever). Zero
+	// for "me" / system lines / demo seeds.
+	fromNum uint32
 }
 
 type sortMode int
@@ -1209,6 +1217,22 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 	from := fmt.Sprintf("node 0x%x", msg.fromNum)
 	if idx, ok := m.nodesByNum[msg.fromNum]; ok {
 		from = m.nodes[idx].callsign
+	} else if msg.fromNum != 0 {
+		// We've heard a text packet from a peer whose NodeInfo we
+		// haven't received yet — ghost them into m.nodes so
+		// /cqr, /rs, /whois, /ping can find them by id or
+		// substring. The entry gets upgraded by upsertNode the
+		// moment a real NodeInfo arrives (nodesByNum index is
+		// stable so all references stay valid).
+		m.nodes = append(m.nodes, nodeItem{
+			callsign:  from,
+			state:     "online",
+			lastHeard: "now",
+			lastSNR:   msg.snr,
+			lastRSSI:  msg.rssi,
+			lastHops:  msg.hops,
+		})
+		m.nodesByNum[msg.fromNum] = len(m.nodes) - 1
 	}
 	mine := msg.fromNum == m.myNodeNum
 
@@ -1222,6 +1246,7 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		snr:      msg.snr,
 		packetID: msg.packetID,
 		replyID:  msg.replyID,
+		fromNum:  msg.fromNum,
 	}
 	m.messages = append(m.messages, item)
 
@@ -3342,7 +3367,9 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 	}
 
 	// From column — 16 visible cells, truncated w/ ellipsis.
-	fromRaw := msg.from
+	// Resolve via displayFrom so "node 0x…" placeholders flip to
+	// real callsigns as NodeInfo arrives mid-session.
+	fromRaw := m.displayFrom(msg)
 	if msg.mine {
 		fromRaw = "me"
 	}
@@ -3442,18 +3469,30 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 	// Matches how mutt / modern chat clients show reply context.
 	if msg.replyID != 0 {
 		if parent := m.findMessageByPacketID(msg.replyID); parent != nil {
-			quoteIndent := gapStyle.Render(strings.Repeat(" ", 2+2))
-			quoteW := inner - 2 - 2 - gutterWidth
+			// Indent the quote to sit under the reply's from-column
+			// start — 2 (accent) + 2 (flag) + 7 (time) = 11 cells —
+			// so the ┌ hook reads as "context for the row below"
+			// rather than floating out on the left margin.
+			quoteIndent := gapStyle.Render(strings.Repeat(" ", 2+2+7))
+			quoteW := inner - (2 + 2 + 7) - gutterWidth
 			if quoteW < 20 {
 				quoteW = 20
 			}
-			parentFrom := parent.from
+			parentFrom := m.displayFrom(*parent)
 			if parentFrom == "" {
 				parentFrom = "—"
 			}
-			quoteBody := fmt.Sprintf("┌ %s %s  %q",
+			// Hot-pink hook — matches the /active channel bracket
+			// style so "threading" reads as another active-state
+			// signal, distinct from the drained labels elsewhere.
+			hookStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhPink)).
+				Background(lipgloss.Color(rowBg)).
+				Bold(true)
+			quoteBody := fmt.Sprintf("%s %s  %q",
 				parentFrom, parent.time, truncateRunes(parent.text, 60))
-			quoteLine := quoteIndent + tstamp.Render(padOrTruncate(quoteBody, quoteW))
+			quoteLine := quoteIndent + hookStyle.Render("┌ ") +
+				tstamp.Render(padOrTruncate(quoteBody, quoteW-2))
 			row = quoteLine + "\n" + row
 		}
 	}
@@ -3474,6 +3513,25 @@ func (m model) findMessageByPacketID(id uint32) *messageItem {
 		}
 	}
 	return nil
+}
+
+// displayFrom returns the callsign to render for a message, preferring
+// the CURRENT NodeDB entry over the `from` snapshot taken at ingest.
+// This is what backfills "node 0xdeadbeef" → real callsign once the
+// corresponding NodeInfo arrives — without it, the ingest-time
+// fallback is baked into the row forever. Falls back to msg.from
+// when the node isn't in nodesByNum (demo seeds with no fromNum,
+// or peers we never learned about).
+func (m model) displayFrom(msg messageItem) string {
+	if msg.fromNum == 0 {
+		return msg.from
+	}
+	if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx < len(m.nodes) {
+		if cs := m.nodes[idx].callsign; cs != "" {
+			return cs
+		}
+	}
+	return msg.from
 }
 
 // truncateRunes clamps s to at most n display runes, appending …

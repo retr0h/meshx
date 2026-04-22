@@ -21,9 +21,31 @@
 package meshx
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
+
+// looksLikeHexStem reports whether the user's partial word reads as
+// the beginning of a Meshtastic node-num hex id — "0x" prefix, or
+// bare hex digits of length >= 2 (avoids tripping on trivial words
+// like "a" or "ef" that could mean anything). Used by the nick
+// completer to decide when to walk nodesByNum for id matches.
+func looksLikeHexStem(word string) bool {
+	lw := strings.ToLower(word)
+	if strings.HasPrefix(lw, "0x") {
+		return true
+	}
+	if len(lw) < 2 {
+		return false
+	}
+	for _, r := range lw {
+		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
 
 // tabState captures the in-progress cycling completion. First Tab
 // computes matches + inserts match 0; subsequent Tabs cycle through
@@ -82,19 +104,52 @@ func (m model) computeCompletions(text string, cursor int) (matches []string, st
 		}
 		return matches, start, end
 	default:
-		// Nick/callsign completion. Pull candidates from nodes.
+		// Nick/callsign completion. Pull candidates from nodes using
+		// a two-pass match so typing a partial from anywhere in a
+		// callsign lands a completion — peers like "node 0xd64b01be"
+		// can be reached by typing "0x", "d64", or "Rural". Prefix
+		// matches rank ahead of mid-string matches so the irssi
+		// "nick-at-start" idiom still wins when it's what you meant.
+		lw := strings.ToLower(word)
+		var prefixHits, substrHits []string
 		for _, n := range m.nodes {
-			if strings.HasPrefix(strings.ToLower(n.callsign), strings.ToLower(word)) {
-				universe = append(universe, n.callsign)
+			lc := strings.ToLower(n.callsign)
+			switch {
+			case strings.HasPrefix(lc, lw):
+				prefixHits = append(prefixHits, n.callsign)
+			case strings.Contains(lc, lw):
+				substrHits = append(substrHits, n.callsign)
 			}
 		}
+		// Hex-id completion — if the stem looks like a hex prefix
+		// (e.g. "0x", "0xd6", "d64") walk nodesByNum and offer the
+		// real callsign for any node whose num matches. This is how
+		// you address the "node 0x…" placeholder peers by id.
+		if looksLikeHexStem(word) {
+			needle := strings.TrimPrefix(strings.ToLower(word), "0x")
+			for num, idx := range m.nodesByNum {
+				if idx >= len(m.nodes) {
+					continue
+				}
+				hex := fmt.Sprintf("%x", num)
+				if strings.Contains(hex, needle) {
+					substrHits = append(substrHits, m.nodes[idx].callsign)
+				}
+			}
+		}
+		// Sort each tier separately, then concat prefix-first so an
+		// exact/prefix match always ranks ahead of a mid-string match
+		// when the user cycles through Tab hits.
+		sort.Strings(prefixHits)
+		sort.Strings(substrHits)
+		universe = append(universe, prefixHits...)
+		universe = append(universe, substrHits...)
 		// Also allow completing "me" so /reply me works.
-		if strings.HasPrefix("me", strings.ToLower(word)) {
+		if strings.HasPrefix("me", lw) {
 			universe = append(universe, "me")
 		}
 	}
 
-	sort.Strings(universe)
 	return universe, start, end
 }
 

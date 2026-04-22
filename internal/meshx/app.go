@@ -91,6 +91,7 @@ type channelItem struct {
 
 type nodeItem struct {
 	callsign  string
+	shortName string // Meshtastic User.short_name — 4-ish char badge
 	state     string // "online", "offline", "failed", "muted"
 	fav       bool
 	lastHeard string // display string like "2m", "14:02", "3h"; caller-computed
@@ -211,6 +212,14 @@ type model struct {
 	// data has no business in the real log). See storage.go for the
 	// schema and the open / save helpers.
 	db *sql.DB
+
+	// initialFocusCmd captures the tea.Cmd returned by
+	// textinput.Focus() in newModel — the bubbles cursor blink
+	// chain is driven by a cmd-per-tick loop, and the FIRST cmd
+	// comes out of Focus(). Returning it from Init() is what
+	// actually gets the cursor blinking; discarding it (which we
+	// were doing) leaves the cursor stuck "on" with no animation.
+	initialFocusCmd tea.Cmd
 
 	// Live-radio state. Zero-value is "demo mode — no transport".
 	pump        *pump          // non-nil when connected to a real radio
@@ -435,19 +444,20 @@ func newModel(demo *Demo, dest string) model {
 		Background(lipgloss.Color(mhPink)).
 		Foreground(lipgloss.Color("#000000")).
 		Bold(true)
-	in.Focus()
+	focusCmd := in.Focus()
 
 	m := model{
-		mode:          modeSplash,
-		focused:       paneMessages,
-		splash:        pickSplash(),
-		connectDest:   dest,
-		demo:          demo,
-		nodesByNum:    make(map[uint32]int),
-		peerPositions: make(map[uint32]peerPosition),
-		peerEnv:       make(map[uint32]peerEnvMetrics),
-		input:         in,
-		searchInput:   func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
+		mode:            modeSplash,
+		focused:         paneMessages,
+		splash:          pickSplash(),
+		connectDest:     dest,
+		demo:            demo,
+		nodesByNum:      make(map[uint32]int),
+		peerPositions:   make(map[uint32]peerPosition),
+		peerEnv:         make(map[uint32]peerEnvMetrics),
+		input:           in,
+		searchInput:     func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
+		initialFocusCmd: focusCmd,
 	}
 
 	if demo == nil {
@@ -459,6 +469,36 @@ func newModel(demo *Demo, dest string) model {
 		if path, err := defaultStoragePath(); err == nil {
 			if db, err := openStorage(path); err == nil {
 				m.db = db
+				// Load the cached NodeDB FIRST — every peer we've
+				// ever resolved a real User for gets inserted into
+				// m.nodes / m.nodesByNum before anything else runs.
+				// That way ghost-peer replay below skips any node we
+				// already know by name, and message rows for
+				// "node 0xd64b01be" instantly render as "WiobooJones"
+				// if we've seen them in a previous session. This is
+				// the equivalent of the phone app's persistent
+				// NodeDB — the radio itself forgets NodeInfo after
+				// a while, so a client that trusts only the radio's
+				// live dump has amnesia on every reconnect.
+				if cached, err := loadNodes(db); err == nil {
+					for _, n := range cached {
+						name := n.longName
+						if name == "" {
+							name = n.shortName
+						}
+						if name == "" {
+							continue
+						}
+						m.nodes = append(m.nodes, nodeItem{
+							callsign:  name,
+							shortName: n.shortName,
+							state:     "offline",
+							lastHeard: "cached",
+							hwModel:   n.hwModel,
+						})
+						m.nodesByNum[n.nodeNum] = len(m.nodes) - 1
+					}
+				}
 				// Primary channel is what the radio tells us, but at
 				// boot we don't have it yet — replay under the name
 				// we'll default to (empty string key until a channel
@@ -549,13 +589,15 @@ func (m model) Init() tea.Cmd {
 		tea.Tick(3*time.Second, func(time.Time) tea.Msg {
 			return splashTimeoutMsg{}
 		}),
-		// Kick off the cursor blink ticker. textinput.Blink returns a
-		// tea.Cmd that schedules the first cursor.BlinkMsg; each
-		// subsequent Update on the input re-schedules the next tick.
-		// Without this the cursor stays in its "on" (pink) state
-		// forever — no blink — because we'd never feed blink msgs
-		// back into the tea loop.
-		textinput.Blink,
+		// Kick off the cursor blink ticker. m.initialFocusCmd is
+		// the tea.Cmd textinput.Focus() returned back in newModel —
+		// it carries the correct cursor id/tag pair that subsequent
+		// BlinkMsg rounds need to match for the blink chain to
+		// continue. Using plain textinput.Blink here wouldn't work:
+		// that cmd emits a BlinkMsg with zero id/tag, and bubbles
+		// cursor silently drops mismatched BlinkMsgs so the chain
+		// would die on tick #1.
+		m.initialFocusCmd,
 	}
 	// Live-radio mode: kick off the pump from within the running
 	// program. Deferring to Init (rather than RunRadio) guarantees
@@ -1188,6 +1230,21 @@ func (m model) myCallsign() string {
 	return fmt.Sprintf("node 0x%x", m.myNodeNum)
 }
 
+// myShortName returns our own Meshtastic shortname (4-ish char
+// badge) — the tight identifier that fits on a radio OLED and
+// matches what the phone app shows next to the longname. Demo
+// mode pulls from Demo.ShortName; live mode looks up our own
+// nodeItem. Empty when we don't know yet.
+func (m model) myShortName() string {
+	if m.demo != nil {
+		return m.demo.ShortName
+	}
+	if n := m.myNode(); n != nil {
+		return n.shortName
+	}
+	return ""
+}
+
 // myNode returns a pointer to our own node record — works in both
 // demo and live mode since demo-mode initialisation seeds m.nodes
 // and m.nodesByNum the same way a real radio's MyInfo + NodeInfo
@@ -1235,6 +1292,7 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 
 	item := nodeItem{
 		callsign:  callsign,
+		shortName: msg.shortName,
 		state:     state,
 		lastHeard: lastHeard,
 		heardRank: int(time.Since(msg.lastHeardAt).Seconds()),
@@ -1243,6 +1301,13 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 		lastHops:  msg.hops,
 		hwModel:   msg.hwModel,
 	}
+
+	// Persist to the cross-session NodeDB cache so once we've learned
+	// a peer's real User info we remember it on every subsequent
+	// launch — same behavior as the official phone app. Placeholder
+	// "node 0x…" callsigns (both longname and shortname empty) are
+	// skipped inside saveNode itself.
+	_ = saveNode(m.db, msg.nodeNum, msg.longName, msg.shortName, msg.hwModel)
 
 	if idx, ok := m.nodesByNum[msg.nodeNum]; ok {
 		// Preserve fav flag across updates.
@@ -2846,7 +2911,16 @@ func (m model) renderStatusBar() string {
 	var segs []string
 
 	// Segment 1: brand mark + callsign, both in mesh-green.
-	brand := call.Render(`//\`) + "  " + call.Render(m.myCallsign())
+	// Brand segment: `//\ <shortname> <longname>` — shortname first
+	// (Meshtastic's 4-char "badge" that fits on a radio OLED) then
+	// the full callsign. Falls back to just `//\ <longname>` when no
+	// shortname is known (demo, or before MyNodeInfo arrives).
+	brand := call.Render(`//\`) + "  "
+	if sn := m.myShortName(); sn != "" {
+		brand += call.Render(sn) + " " + call.Render(m.myCallsign())
+	} else {
+		brand += call.Render(m.myCallsign())
+	}
 	segs = append(segs, statusSegment(brand, chrome))
 
 	{

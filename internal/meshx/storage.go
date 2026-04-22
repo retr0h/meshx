@@ -207,6 +207,74 @@ func saveMessage(db *sql.DB, channel string, msg messageItem) error {
 	return nil
 }
 
+// saveNode persists a peer's current User info. Called on every
+// upsertNode so once we learn a real longname / shortname for a
+// node num, we remember it across sessions — mirrors what the
+// official Meshtastic phone app does locally. Placeholder
+// "node 0x…" callsigns are skipped; the point is to preserve
+// the RESOLVED name, not the fallback. Failure is logged but
+// non-fatal.
+func saveNode(db *sql.DB, nodeNum uint32, longName, shortName, hwModel string) error {
+	if db == nil {
+		return nil
+	}
+	if longName == "" && shortName == "" {
+		return nil
+	}
+	_, err := db.Exec(`
+        INSERT INTO nodes (node_num, long_name, short_name, hw_model, last_seen)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(node_num) DO UPDATE SET
+            long_name  = excluded.long_name,
+            short_name = excluded.short_name,
+            hw_model   = excluded.hw_model,
+            last_seen  = CURRENT_TIMESTAMP`,
+		nodeNum, longName, shortName, hwModel,
+	)
+	if err != nil {
+		return fmt.Errorf("insert node: %w", err)
+	}
+	return nil
+}
+
+// cachedNode is the slim shape of a persisted node row — just the
+// identity fields our UI needs at replay time, no telemetry (which
+// is per-session by nature).
+type cachedNode struct {
+	nodeNum   uint32
+	longName  string
+	shortName string
+	hwModel   string
+}
+
+// loadNodes reads every persisted node. Used at startup to
+// pre-populate m.nodes / m.nodesByNum with real callsigns before
+// the radio handshake, so ghost-peer replay can skip nodes we
+// already know by name — and messages render "WiobooJones"
+// immediately on relaunch instead of "node 0x…".
+func loadNodes(db *sql.DB) ([]cachedNode, error) {
+	if db == nil {
+		return nil, nil
+	}
+	rows, err := db.Query(`SELECT node_num, long_name, short_name, hw_model FROM nodes`)
+	if err != nil {
+		return nil, fmt.Errorf("query nodes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []cachedNode
+	for rows.Next() {
+		var n cachedNode
+		if err := rows.Scan(&n.nodeNum, &n.longName, &n.shortName, &n.hwModel); err != nil {
+			return nil, fmt.Errorf("scan node: %w", err)
+		}
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iter: %w", err)
+	}
+	return out, nil
+}
+
 // loadMessages reads the most recent `limit` rows, oldest-first (so
 // callers can append directly to m.messages and selectedMsg = len-1
 // lands on the newest). An empty channel string means "every

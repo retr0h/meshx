@@ -23,6 +23,7 @@ package meshx
 import (
 	"database/sql"
 	"fmt"
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -2126,14 +2127,31 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			fw = "?"
 		}
 
+		// Ghost peer — we have their node num from text packets but
+		// have never received their NodeInfo, so longname / shortname
+		// / hw are all unknown. Surface that plainly rather than
+		// pretending a partial whois is a whole one.
+		ghost := strings.HasPrefix(n.callsign, "node 0x")
+
 		// Multi-line "server reply" block, irssi-style.
-		lines := []string{
+		var lines []string
+		if ghost {
+			lines = append(lines,
+				"⚠  no NodeInfo received for this peer",
+				"   we've heard text packets from them but never their",
+				"   User broadcast, so longname / shortname / hw are",
+				"   unknown. Their NodeInfo may arrive in the next",
+				"   ~15 min, or try /sync to force a NodeDB re-dump.",
+				"",
+			)
+		}
+		lines = append(lines,
 			fmt.Sprintf("hw:     %s", hw),
 			fmt.Sprintf("fw:     %s", fw),
 			fmt.Sprintf("heard:  %s ago", n.lastHeard),
 			fmt.Sprintf("state:  %s", n.state),
 			fmt.Sprintf("signal: %s", signalReport(n)),
-		}
+		)
 		if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
 			if pos, ok := m.peerPositions[nodeNum]; ok {
 				lines = append(
@@ -2264,6 +2282,77 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			header = "config [DEMO]"
 		}
 		m.systemBlock(header, lines...)
+	case "info":
+		// /info — dump meshx's current knowledge to the log so you
+		// can diagnose "why don't I have a name for this peer?"
+		// without external tooling. Shows our own identity, a
+		// peer-count breakdown (real names vs. unresolved "node 0x…"
+		// placeholders), session state, and channel summary.
+		lines := []string{
+			fmt.Sprintf("self:     %s (0x%x)  shortname=%s", m.myCallsign(), m.myNodeNum, m.myShortName()),
+		}
+		if n := m.myNode(); n != nil {
+			lines = append(lines, fmt.Sprintf("hw:       %s  fw=%s", n.hwModel, m.radioFirmware))
+		}
+		var resolved, ghosts int
+		for _, n := range m.nodes {
+			if strings.HasPrefix(n.callsign, "node 0x") {
+				ghosts++
+			} else {
+				resolved++
+			}
+		}
+		lines = append(lines,
+			fmt.Sprintf("peers:    %d total  (%d named, %d placeholder)", len(m.nodes), resolved, ghosts),
+			fmt.Sprintf("channels: %d", len(m.channels)),
+			fmt.Sprintf("connected: %t  handshake_complete=%t", m.connected, m.connected),
+		)
+		if m.radioRegion != "" {
+			lines = append(lines, fmt.Sprintf("region:   %s  preset=%s  tx=%d dBm  role=%s",
+				m.radioRegion, m.radioModemPreset, m.radioTxPower, m.radioRole))
+		}
+		if ghosts > 0 {
+			lines = append(lines,
+				fmt.Sprintf("unresolved peers (first 10 of %d):", ghosts),
+			)
+			n := 0
+			for _, node := range m.nodes {
+				if strings.HasPrefix(node.callsign, "node 0x") {
+					lines = append(lines, "  "+node.callsign)
+					n++
+					if n >= 10 {
+						break
+					}
+				}
+			}
+			lines = append(lines, "(try /sync to re-request the radio's NodeDB)")
+		}
+		m.systemBlock("info", lines...)
+	case "sync":
+		// /sync — ask the radio to re-dump its config + NodeDB via a
+		// fresh WantConfigId handshake. Use when you suspect the
+		// cache is stale, or after the radio just resolved a peer
+		// you want surfaced without waiting for the next organic
+		// NODEINFO_APP broadcast.
+		if m.pump == nil {
+			m.flash = "/sync needs a live radio connection (demo mode)"
+			return nil
+		}
+		nonce := rand.Uint32()
+		if nonce == 0 {
+			nonce = 1
+		}
+		ok := m.pump.Enqueue(&pb.ToRadio{
+			PayloadVariant: &pb.ToRadio_WantConfigId{WantConfigId: nonce},
+		})
+		if !ok {
+			m.flash = "/sync dropped — outbound buffer full"
+			return nil
+		}
+		m.systemBlock("sync",
+			fmt.Sprintf("requested NodeDB re-dump (nonce=0x%x)", nonce),
+			"expect a burst of NodeInfo packets; ghost peers may resolve over the next few seconds",
+		)
 	case "help", "h":
 		// /help             → open the full scrollable overlay
 		// /help <verb>      → irssi / BitchX-style per-command usage

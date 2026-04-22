@@ -156,6 +156,14 @@ var helpEntries = map[string]helpEntry{
 		usage:   "/config",
 		summary: "dump the radio + identity configuration as a systemBlock",
 	},
+	"info": {
+		usage:   "/info",
+		summary: "dump meshx's current knowledge — self id, peer-count breakdown, and which peers are still unresolved \"node 0x…\" placeholders",
+	},
+	"sync": {
+		usage:   "/sync",
+		summary: "ask the radio to re-dump its NodeDB via a fresh WantConfigId handshake; use to force-refresh unresolved peers",
+	},
 	"clear": {
 		usage:   "/clear",
 		summary: "clear local scrollback only — does not unsend anything, does not wipe the SQLite store",

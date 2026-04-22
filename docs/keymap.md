@@ -47,16 +47,16 @@ the universal quit.
 
 ## Nav mode (after `Esc`)
 
-| Key                 | Action                                                       |
-| ------------------- | ------------------------------------------------------------ |
-| `j` / `k`           | down / up (1 row in linear list, `cols` cells in users grid) |
-| `h` / `l`           | left / right (column step in users grid; alias in linear)    |
-| `gg` / `G`          | top / bottom                                                 |
+| Key                 | Action                                                          |
+| ------------------- | --------------------------------------------------------------- |
+| `j` / `k`           | down / up (1 row in linear list, `cols` cells in users grid)    |
+| `h` / `l`           | left / right (column step in users grid; alias in linear)       |
+| `gg` / `G`          | top / bottom                                                    |
 | `Ctrl+F` / `Ctrl+U` | half-page down / up (aliases: `Ctrl+D`, `d`/`u`, `PgDn`/`PgUp`) |
-| `/`                 | search within focused surface                                |
-| `n` / `N`           | next / prev search hit                                       |
-| `Enter` or `Space`  | detail view (hop / SNR / RSSI / hex id / whois)              |
-| `Esc` / `i` / `q`   | back to input mode                                           |
+| `/`                 | search within focused surface                                   |
+| `n` / `N`           | next / prev search hit                                          |
+| `Enter` or `Space`  | detail view (hop / SNR / RSSI / hex id / whois)                 |
+| `Esc` / `i` / `q`   | back to input mode                                              |
 
 ### Nav quick-keys (on message / node selection)
 
@@ -141,6 +141,8 @@ mode with no argument.
 | `/channel list`          | same as `/channels`                                   |
 | `/search <pattern>`      | run a search and jump to first hit (aliases: `/find`) |
 | `/config`                | show radio + identity configuration                   |
+| `/info`                  | dump meshx state — own id, peer counts, unresolved placeholders |
+| `/sync`                  | ask the radio to re-dump its NodeDB (WantConfigId)    |
 | `/clear`                 | clear local scrollback (does not unsend)              |
 | `/help`                  | open the help overlay                                 |
 | `/exit` / `/quit` / `/q` | exit the app                                          |

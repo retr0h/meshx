@@ -2054,8 +2054,10 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.flash = "/part — channel leave needs radio transport to wire"
 	case "channels":
 		m.openOverlay(overlayChannels)
-	case "nodes", "users", "names":
-		// nodes == users on a Meshtastic mesh — alias freely.
+	case "nodes":
+		// "Node" is the canonical Meshtastic term — radios on the
+		// mesh are nodes, not users. We dropped the /users and
+		// /names IRC aliases to keep the vocabulary consistent.
 		m.openOverlay(overlayNodes)
 	case "channel":
 		if rest == "list" || rest == "" {
@@ -3007,7 +3009,7 @@ func (m model) renderNodesPane(width, height int) string {
 		}
 	}
 
-	header := paneHeader("USERS", paneNodes, m.focused == paneNodes)
+	header := paneHeader("NODES", paneNodes, m.focused == paneNodes)
 	count := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
 		Render(fmt.Sprintf("  (#mesh: %d/%d · sort: %s)", online, total, m.nodeSort.label()))

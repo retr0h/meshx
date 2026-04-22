@@ -137,7 +137,7 @@ mode with no argument.
 | Command                        | Meaning                                               |
 | ------------------------------ | ----------------------------------------------------- |
 | `/channels`                    | open channels overlay                                 |
-| `/nodes` / `/users` / `/names` | open users overlay (BitchX-style bracketed grid)      |
+| `/nodes`                       | open nodes overlay (BitchX-style bracketed grid)      |
 | `/join <channel>`              | switch to named channel                               |
 | `/channel list`                | same as `/channels`                                   |
 | `/search <pattern>`            | run a search and jump to first hit (aliases: `/find`) |

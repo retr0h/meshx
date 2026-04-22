@@ -63,10 +63,10 @@ type tabState struct {
 // so order matters for predictability.
 var slashCommands = []string{
 	"73", "88", "channel", "channels", "clear", "config", "cq", "cqr",
-	"exit", "grid", "help", "join", "k", "mesh", "msg", "names", "nodes",
+	"exit", "grid", "help", "join", "k", "mesh", "msg", "nodes",
 	"part", "ping", "q", "qrm", "qrz", "qsb", "qsl", "qth", "quit", "r",
 	"reply", "rs", "search", "sk", "sked", "tr", "trace", "traceroute",
-	"users", "w", "whois", "wx",
+	"w", "whois", "wx",
 }
 
 // computeCompletions finds the word under/before the cursor, decides

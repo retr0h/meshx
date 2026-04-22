@@ -24,31 +24,43 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/retr0h/meshx/internal/meshx"
+	"github.com/retr0h/meshx/internal/meshx/transport"
 )
 
-var demoFlag bool
+var (
+	demoFlag bool
+	portFlag string
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "meshx",
 	Short: "Glitched-out terminal Meshtastic messenger",
-	Long: `meshx is a terminal Meshtastic messenger with a vintage BBS aesthetic —
-three-pane mutt-style layout, vim keybindings, ham-radio shortcuts, and
-a ░▒▓█ glitch palette borrowed from tlock and grind.
+	Long: `meshx is an irssi-style terminal Meshtastic messenger — an irssi/BitchX/mutt-
+inspired chat client for your LoRa radio with a vintage BBS aesthetic.
 
-Pass --demo to boot the static layout preview with canned channels,
-messages, and nodes. No radio required. This is the default until the
-Meshtastic transport layer lands.`,
+Default behavior: auto-detect a connected Meshtastic radio on USB and
+launch the live UI. Use "meshx probe" to see what devices are
+available, or --port <path> to pick one explicitly.
+
+Pass --demo to run the UI with canned data — no radio required.`,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		if demoFlag {
 			return meshx.RunDemo()
 		}
-		// Until the Meshtastic transport layer lands, there is no
-		// non-demo mode to run. Point the user at --demo.
-		return fmt.Errorf("no radio transport wired up yet — try: meshx --demo")
+		dest := portFlag
+		if dest == "" {
+			auto, err := transport.AutoDetectMeshtastic(1500 * time.Millisecond)
+			if err != nil {
+				return err
+			}
+			dest = auto
+		}
+		return meshx.RunRadio(dest)
 	},
 }
 
@@ -63,6 +75,10 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().BoolVar(
 		&demoFlag, "demo", false,
-		"Show the static demo layout (canned channels, messages, nodes). No radio required.",
+		"Run the UI with canned data — no radio required.",
+	)
+	rootCmd.PersistentFlags().StringVar(
+		&portFlag, "port", "",
+		"Serial device path (e.g. /dev/cu.usbmodem2101) or TCP host[:port]. Auto-detects when omitted.",
 	)
 }

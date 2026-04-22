@@ -121,6 +121,7 @@ meshx sits at the intersection of three lineages:
 - [ ] 📡 Live telemetry surfacing (battery, SNR, RSSI per peer)
 - [ ] 🔐 PSK import — `/channel add <meshtastic://url>`
 - [ ] 🗺️ QR code share — `/channel share <name>`
+- [ ] 💾 SQLite persistence — scrollback + node cache across runs (`~/.config/meshx/messages.db`)
 - [ ] 📱 BLE transport (stretch)
 
 ## 📚 Docs

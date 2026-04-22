@@ -137,7 +137,11 @@ func pickSplash() splashVariant {
 
 // renderSplash composes the splash screen: colored logo centered in
 // the viewport, tagline + credits underneath, "press any key" prompt.
-func renderSplash(width, height int, v splashVariant) string {
+//
+// The optional connectionStatus string is appended below the prompt
+// when non-empty — used to surface "connecting to /dev/cu.usbmodem…"
+// live-radio status alongside the graffiti banner.
+func renderSplash(width, height int, v splashVariant, connectionStatus string) string {
 	logoLines := make([]string, len(v.rows))
 	for i, row := range v.rows {
 		logoLines[i] = lipgloss.NewStyle().
@@ -165,8 +169,7 @@ func renderSplash(width, height int, v splashVariant) string {
 
 	prompt := dim.Render("press any key to continue  (auto-dismiss in 3s)")
 
-	body := lipgloss.JoinVertical(
-		lipgloss.Center,
+	rows := []string{
 		spark,
 		"",
 		logo,
@@ -178,7 +181,16 @@ func renderSplash(width, height int, v splashVariant) string {
 		"",
 		"",
 		prompt,
-	)
+	}
+	if connectionStatus != "" {
+		connLine := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(meshGreen)).
+			Bold(true).
+			Render(connectionStatus)
+		rows = append(rows, "", connLine)
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Center, rows...)
 
 	return lipgloss.Place(
 		width, height,

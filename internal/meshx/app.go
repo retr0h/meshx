@@ -3766,15 +3766,18 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 		body := msg.text
 		prefixIdx := strings.Index(body, "👻 ")
 		if prefixIdx >= 0 {
-			warn := lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhOrange)).
-				Background(lipgloss.Color(rowBg)).
-				Bold(true)
+			// Muted ghost glyph — drained fg, no bold. The point is
+			// to say "this is a placeholder-warning line", not shout
+			// for attention. Let the prose carry the message and
+			// the glyph just tag it semantically.
+			ghostStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhDrained)).
+				Background(lipgloss.Color(rowBg))
 			pre := body[:prefixIdx]
 			post := body[prefixIdx+len("👻 "):]
 			line := accent + tstamp.Render(timeCol) +
 				sys.Render(pre) +
-				warn.Render("👻") +
+				ghostStyle.Render("👻") +
 				sys.Render(" "+post)
 			return wrapSelection(line, selected, m.isMsgSearchHit(msg), inner, rowBg)
 		}

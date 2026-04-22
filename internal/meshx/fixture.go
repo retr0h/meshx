@@ -160,51 +160,65 @@ func DefaultDemo() *Demo {
 			},
 		},
 
+		// Demo conversation flow chosen to show off as many UI
+		// features as possible in ~12 rows:
+		//   1. Own /cq beacon with the "via meshx" attribution
+		//      — bang-styled yellow flag + github URL on-wire.
+		//   2. Threaded /cqr reply pointing back at the CQ packet
+		//      — pink ┌ quote line + hop/SNR right column + ack ✓.
+		//   3. /whois card as a 7-line systemBlock — group-zebra
+		//      binding, irssi-style indented continuation rows.
+		//   4. Ghost peer message — 👻 prefix, drained callsign.
+		//   5. `-!- identified …` system line — the moment a ghost
+		//      peer upgrades to a real name.
+		//   6. A failed /73 — shows the pink ✗ status variant.
+		// Ten distinct UI features per screenshot.
 		Messages: []messageItem{
 			{
-				time: "14:39", from: "TangoBravo_7", fromNum: 0x5a00aa01,
-				text: "Afternoon test — anyone copying this?",
-				hops: 5, snr: "4.2", packetID: 195849301,
+				time: "14:10", from: "retr0h", mine: true, bang: "/cq",
+				text: "CQ CQ CQ de retr0h via meshx (github.com/retr0h/meshx) — " +
+					"testing signals, please ack",
+				status: "ack", packetID: 7001,
 			},
 			{
-				time: "14:39", from: "MeshLab - plrmsh.io", fromNum: 0x5a00aa02,
-				text: "6 🐰", hops: 2, snr: "5.5", packetID: 1237329592,
-				replyID: 195849301,
+				time: "14:11", from: "TangoBravo_7", fromNum: 0x5a00aa01,
+				bang: "/cqr",
+				text: "copy 9/9 from Cascadia, SNR -5.2 hop 3",
+				hops: 3, snr: "-5.2", packetID: 7002, replyID: 7001,
 			},
-			{
-				time: "14:40", from: "retr0h", mine: true, bang: "/cqr",
-				text: "copy you at hop 5, SNR 4.2 dB — you're getting out",
-				status: "ack",
-			},
-			{
-				time: "14:40", from: "TangoBravo_7", fromNum: 0x5a00aa01,
-				text: "thx — hard to tell without a response",
-				hops: 6, snr: "5.5",
-			},
+			// /whois card — systemBlock emits rows sharing one group
+			// id so the zebra stripe treats them as one visual card.
+			// Here we hand-seed with group=1 and matching timestamps
+			// so the render loop groups them the same way.
+			{time: "14:12", text: "-!- whois TangoBravo_7", status: "system", group: 1},
+			{time: "14:12", text: "-!-    hw:     RAK4631", status: "system", group: 1},
+			{time: "14:12", text: "-!-    fw:     2.6.11", status: "system", group: 1},
+			{time: "14:12", text: "-!-    heard:  2m ago", status: "system", group: 1},
+			{time: "14:12", text: "-!-    state:  online", status: "system", group: 1},
+			{time: "14:12", text: "-!-    signal: hop 3, SNR -5.2 dB, RSSI -92 dBm", status: "system", group: 1},
+			{time: "14:12", text: "-!-    end of /whois", status: "system", group: 1},
 			// Ghost peer — fromNum populated but NOT in m.nodes /
-			// m.nodesByNum, so displayFrom falls back to msg.from
-			// and renderMessageRow adds the 👻 prefix + drained color.
+			// m.nodesByNum, so displayFrom falls back to msg.from and
+			// renderMessageRow adds the 👻 prefix + drained color.
 			{
-				time: "15:01", from: "node 0x6f66d09d", fromNum: 0x6f66d09d,
+				time: "14:14", from: "node 0x6f66d09d", fromNum: 0x6f66d09d,
 				text: "anyone in the east valley?", hops: 4, snr: "-9.1",
 			},
+			// Real meshx event — fires from upsertNode when a
+			// previously "node 0x…" placeholder finally has its
+			// NodeInfo packet arrive and we can resolve the
+			// longname. Lavender-italic drained — "this happened
+			// behind the scenes, FYI."
 			{
-				time: "15:35", from: "SolarRelay_HillNode", fromNum: 0x5a00aa04,
-				text: "2 hops from the ridge — solar healthy", hops: 3, snr: "3.2",
-			},
-			{
-				time: "15:42", from: "retr0h", mine: true, bang: "/73",
-				text: "73 SolarRelay_HillNode", status: "ack",
-			},
-			// Real meshx event — fires from upsertNode when a peer
-			// that was previously a "node 0x…" placeholder gets its
-			// NodeInfo broadcast and we can finally resolve the
-			// longname. One of the features the demo should showcase.
-			{
-				time:   "15:47",
-				from:   "",
+				time: "14:15", from: "",
 				text:   "-!- identified BoarSense 1f4a (was node 0xe7f4aa01)",
 				status: "system",
+			},
+			// Failed send — renders with pink ✗ in the status col,
+			// shows the fail variant of the status column.
+			{
+				time: "14:16", from: "retr0h", mine: true, bang: "/73",
+				text: "73 👋", status: "fail",
 			},
 		},
 	}

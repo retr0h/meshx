@@ -21,6 +21,7 @@
 package meshx
 
 import (
+	"database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -187,18 +188,25 @@ type model struct {
 	// model state. isDemo() is `m.demo != nil`.
 	demo *Demo
 
+	// SQLite handle — non-nil ONLY in live-radio mode. Every incoming
+	// text packet and every outgoing /command message gets persisted
+	// so the log survives a restart. Demo mode never persists (canned
+	// data has no business in the real log). See storage.go for the
+	// schema and the open / save helpers.
+	db *sql.DB
+
 	// Live-radio state. Zero-value is "demo mode — no transport".
-	pump         *pump          // non-nil when connected to a real radio
-	connectDest  string         // "" = demo, else "/dev/cu.usbmodem2101" / tcp host
-	connected    bool           // true once ConfigComplete arrives
-	myNodeNum    uint32         // populated by MyNodeInfo
-	nodesByNum   map[uint32]int // radio node id → m.nodes index, for O(1) upsert
+	pump        *pump          // non-nil when connected to a real radio
+	connectDest string         // "" = demo, else "/dev/cu.usbmodem2101" / tcp host
+	connected   bool           // true once ConfigComplete arrives
+	myNodeNum   uint32         // populated by MyNodeInfo
+	nodesByNum  map[uint32]int // radio node id → m.nodes index, for O(1) upsert
 
 	// Telemetry + config snapshot — populated as FromRadio packets
 	// arrive. Zero-value means "not yet received" so renderers can
 	// show a — placeholder without branching on a separate flag.
-	radioFirmware    string  // FromRadio.Metadata.firmware_version
-	radioDeviceState uint32  // FromRadio.Metadata.device_state_version
+	radioFirmware    string // FromRadio.Metadata.firmware_version
+	radioDeviceState uint32 // FromRadio.Metadata.device_state_version
 	radioHasWifi     bool
 	radioHasBT       bool
 	radioTxPower     int32   // Config.lora.tx_power (dBm)
@@ -306,6 +314,14 @@ func RunDemo() error {
 // transport — by then the main loop is pumping messages.
 func RunRadio(dest string) error {
 	m := newModel(nil, dest)
+	// Close the persistence handle when the tea loop exits. Nil-safe:
+	// if openStorage failed inside newModel, m.db is nil and the
+	// close is a no-op.
+	defer func() {
+		if m.db != nil {
+			_ = m.db.Close()
+		}
+	}()
 	program := tea.NewProgram(m, tea.WithAltScreen())
 
 	// We need a reference to the program inside the pump so it can
@@ -411,6 +427,28 @@ func newModel(demo *Demo, dest string) model {
 	}
 
 	if demo == nil {
+		// Live-radio mode — open the persistence store and replay the
+		// last chunk of history so the log survives restarts. We fail
+		// open: any storage error (missing $HOME, bad perms, corrupt
+		// db) just leaves m.db nil, and the session runs in-memory
+		// for that boot. Losing history is preferable to crashing.
+		if path, err := defaultStoragePath(); err == nil {
+			if db, err := openStorage(path); err == nil {
+				m.db = db
+				// Primary channel is what the radio tells us, but at
+				// boot we don't have it yet — replay under the name
+				// we'll default to (empty string key until a channel
+				// arrives). Load is by `currentChannel` so messages
+				// migrate as the handshake resolves the channel name.
+				if past, err := loadMessages(db, "", 500); err == nil {
+					m.messages = append(m.messages, past...)
+					m.selectedMsg = len(m.messages) - 1
+					if m.selectedMsg < 0 {
+						m.selectedMsg = 0
+					}
+				}
+			}
+		}
 		return m
 	}
 
@@ -985,13 +1023,17 @@ func (m *model) prefillInput(text string) {
 
 // sendPlainMessage appends text as an outgoing message from "me" on
 // the current channel. In live-radio mode it also enqueues a ToRadio
-// text packet; in demo mode it just updates local state.
+// text packet and persists the row so it survives a restart; in demo
+// mode it just updates local state.
 func (m *model) sendPlainMessage(text string) {
-	m.messages = append(m.messages, messageItem{
+	item := messageItem{
 		time: timeNowHHMM(), from: "me", mine: true, text: text, status: "pending",
-	})
+	}
+	m.messages = append(m.messages, item)
 	m.selectedMsg = len(m.messages) - 1
 	m.flash = fmt.Sprintf("sent in %s", m.currentChannel)
+
+	_ = saveMessage(m.db, m.currentChannel, item)
 
 	if m.pump != nil {
 		m.pump.Enqueue(newTextToRadio(text, m.currentChannelIndex(), 0))
@@ -1177,6 +1219,16 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		replyID:  msg.replyID,
 	}
 	m.messages = append(m.messages, item)
+
+	// Persist the incoming message so it survives a restart. Channel
+	// name is resolved from the packet's channel index against the
+	// NodeDB we've built up; falls back to the active channel if the
+	// index is out of range (shouldn't happen on a real radio).
+	channelName := m.currentChannel
+	if msg.channel < len(m.channels) {
+		channelName = m.channels[msg.channel].name
+	}
+	_ = saveMessage(m.db, channelName, item)
 
 	// Bump unread count on non-active channels.
 	if msg.channel < len(m.channels) && m.channels[msg.channel].name != m.currentChannel && !mine {
@@ -1738,7 +1790,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "usage: /qrm <callsign>"
 			return nil
 		}
-		m.sendBangReply("/qrm "+target, "QRM — interference on your signal", m.replyTargetFor(target))
+		m.sendBangReply(
+			"/qrm "+target,
+			"QRM — interference on your signal",
+			m.replyTargetFor(target),
+		)
 		m.flash = fmt.Sprintf("!qrm %s — interference reported", target)
 	case "qsb":
 		// "Your signal is fading."
@@ -1893,9 +1949,15 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
 			if pos, ok := m.peerPositions[nodeNum]; ok {
-				lines = append(lines,
+				lines = append(
+					lines,
 					fmt.Sprintf("grid:   %s", pos.grid),
-					fmt.Sprintf("coord:  %.5f, %.5f  alt %d m", pos.latitude, pos.longitude, pos.altitude),
+					fmt.Sprintf(
+						"coord:  %.5f, %.5f  alt %d m",
+						pos.latitude,
+						pos.longitude,
+						pos.altitude,
+					),
 					fmt.Sprintf("pos:    %s ago", humanDuration(time.Since(pos.at))),
 				)
 			}
@@ -1984,7 +2046,10 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			lines = append(lines, fmt.Sprintf("fw:       %s", m.radioFirmware))
 		}
 		if m.currentChannel != "" {
-			lines = append(lines, fmt.Sprintf("channel:  %s  %s", m.currentChannel, m.radioModemPreset))
+			lines = append(
+				lines,
+				fmt.Sprintf("channel:  %s  %s", m.currentChannel, m.radioModemPreset),
+			)
 		}
 		if m.radioRole != "" {
 			lines = append(lines, fmt.Sprintf("role:     %s", m.radioRole))
@@ -2107,7 +2172,7 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	if !m.isDemo() {
 		status = "pending" // flipped to "ack" when the radio echoes our packet back
 	}
-	m.messages = append(m.messages, messageItem{
+	item := messageItem{
 		time:    timeNowHHMM(),
 		from:    "me",
 		mine:    true,
@@ -2115,9 +2180,14 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 		text:    body,
 		status:  status,
 		replyID: replyToID,
-	})
+	}
+	m.messages = append(m.messages, item)
 	m.selectedMsg = len(m.messages) - 1
 	m.focused = paneMessages
+
+	// Persist the outgoing so the log survives restart. Skipped in
+	// demo mode (m.db is always nil there).
+	_ = saveMessage(m.db, m.currentChannel, item)
 
 	if m.pump != nil {
 		m.pump.Enqueue(newTextToRadio(body, m.currentChannelIndex(), replyToID))
@@ -2725,7 +2795,10 @@ func (m model) renderStatusBar() string {
 		}
 
 		// Peer count.
-		segs = append(segs, statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.nodes))), chrome))
+		segs = append(
+			segs,
+			statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.nodes))), chrome),
+		)
 	}
 
 	// Right-most segment: connection state.

@@ -3805,10 +3805,14 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 	// real callsigns as NodeInfo arrives mid-session. Ghost peers
 	// (no NodeInfo ever received) get a 👻 prefix as a quick visual
 	// marker alongside the drained color — doubly obvious which
-	// senders are placeholders vs resolved.
+	// senders are placeholders vs resolved. Own messages use our
+	// actual callsign (not the irssi "me" placeholder) so the
+	// brand in the top bar and the sender column tell the same
+	// story about identity — the magenta peer style still flags
+	// "this one's yours" at a glance.
 	fromRaw := m.displayFrom(msg)
 	if msg.mine {
-		fromRaw = "me"
+		fromRaw = m.myCallsign()
 	} else if strings.HasPrefix(fromRaw, "node 0x") {
 		fromRaw = "👻 " + fromRaw
 	}

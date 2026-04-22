@@ -78,27 +78,29 @@ type Demo struct {
 	Messages []messageItem
 }
 
-// DefaultDemo returns the canonical "KC7XYZ Retr0h Base" persona
-// that ships with meshx. Used for --demo mode. Kept as a function so
-// the caller gets a fresh mutable copy — the model modifies message
-// status etc. and we don't want demo launches to share state.
+// DefaultDemo returns the canonical "💀 retr0h" HELTEC persona that
+// ships with meshx. Modeled on a real-world HELTEC_V3_E so the demo
+// screenshots look like what a user actually sees on-air. Kept as a
+// function so each caller gets a fresh mutable copy — the model
+// modifies message status etc. and we don't want demo launches to
+// share state.
 func DefaultDemo() *Demo {
 	return &Demo{
-		Callsign:       "KC7XYZ",
-		LongName:       "Retr0h Base",
-		ShortName:      "KC7",
-		NodeNum:        0xcafef00d,
-		HWModel:        "T-Beam v1.1",
-		Firmware:       "2.3.4",
+		Callsign:       "retr0h",
+		LongName:       "retr0h",
+		ShortName:      "💀",
+		NodeNum:        0x103d20cd,
+		HWModel:        "HELTEC_V3_E",
+		Firmware:       "2.7.15.567b8ea",
 		HasWifi:        true,
 		HasBT:          true,
-		CurrentChannel: "#primary",
+		CurrentChannel: "#default",
 		ModemPreset:    "LONG_FAST",
 		Region:         "US",
-		TxPowerDBm:     14,
+		TxPowerDBm:     30,
 		Role:           "CLIENT",
 		BatteryLevel:   87,
-		Voltage:        3.94,
+		Voltage:        4.21,
 		ChannelUtil:    4.2,
 		NoiseFloor:     "-92dB",
 		Grid:           "CN85ow",
@@ -106,72 +108,89 @@ func DefaultDemo() *Demo {
 		Longitude:      -122.6765,
 
 		Channels: []channelItem{
-			{name: "#primary", unread: 3},
+			{name: "#default", unread: 3},
 			{name: "#admin", unread: 0},
 			{name: "#emcomm", unread: 0},
 			{name: "*secret*", private: true, unread: 1},
 		},
 
 		Nodes: []nodeItem{
+			// Index 0 is "me" — matches NodeNum above so myNode()
+			// resolves via m.nodesByNum[0x103d20cd] = 0.
 			{
-				callsign: "KC7XYZ 🦀", state: "online", fav: true, lastHeard: "2m", heardRank: 2,
-				lastSNR: "-8.5", lastRSSI: "-92", lastHops: 2, hwModel: "T-Beam v1.1", firmware: "2.3.4",
+				callsign: "retr0h", shortName: "💀", state: "online", fav: true,
+				lastHeard: "now", heardRank: 0, lastSNR: "0.0", lastRSSI: "0",
+				lastHops: 0, hwModel: "HELTEC_V3_E", firmware: "2.7.15.567b8ea",
 			},
 			{
-				callsign: "N0CALL", state: "online", lastHeard: "14s", heardRank: 0,
-				lastSNR: "-5.0", lastRSSI: "-87", lastHops: 1, hwModel: "Heltec v3", firmware: "2.3.4",
+				callsign: "WiobooJones", shortName: "Wiib", state: "online",
+				lastHeard: "2m", heardRank: 2, lastSNR: "4.2", lastRSSI: "-92",
+				lastHops: 5, hwModel: "RAK4631", firmware: "2.6.11",
 			},
 			{
-				callsign: "W1ABC ⚡", state: "online", lastHeard: "1m", heardRank: 1,
-				lastSNR: "-5.0", lastRSSI: "-89", lastHops: 1, hwModel: "RAK4631", firmware: "2.3.4",
+				callsign: "Gleep - socalme.sh", shortName: "GLP1", state: "online",
+				lastHeard: "14s", heardRank: 1, lastSNR: "5.5", lastRSSI: "-89",
+				lastHops: 2, hwModel: "HELTEC_V3", firmware: "2.7.15",
 			},
 			{
-				callsign: "KE0ABC", state: "failed", lastHeard: "8m", heardRank: 5,
-				lastSNR: "-14.2", lastRSSI: "-108", lastHops: 4, hwModel: "T-Beam v1.1", firmware: "2.2.1",
+				callsign: "AmputiLayag_MeshNodeQTHlab", shortName: "AMPL", state: "online",
+				lastHeard: "1m", heardRank: 3, lastSNR: "3.2", lastRSSI: "-103",
+				lastHops: 3, hwModel: "Station-G2", firmware: "2.7.15",
 			},
 			{
-				callsign: "Rural Signal 📡", state: "muted", lastHeard: "4m", heardRank: 3,
-				lastSNR: "-11.2", lastRSSI: "-103", lastHops: 3, hwModel: "Station-G2", firmware: "2.3.4",
+				callsign: "Edoras", shortName: "Bkin", state: "online",
+				lastHeard: "4m", heardRank: 4, lastSNR: "-5.0", lastRSSI: "-98",
+				lastHops: 2, hwModel: "TRACKER_T1000_E", firmware: "2.7.15",
 			},
 			{
-				callsign: "W9XYZ 🏔", state: "offline", lastHeard: "2h", heardRank: 99,
-				lastSNR: "-16.0", lastRSSI: "-115", lastHops: 5, hwModel: "T-Deck", firmware: "2.1.0",
+				callsign: "Hogman e7f4", shortName: "🐗", state: "online",
+				lastHeard: "5m", heardRank: 5, lastSNR: "-8.5", lastRSSI: "-101",
+				lastHops: 3, hwModel: "T-Beam v1.1", firmware: "2.6.11",
+			},
+			{
+				callsign: "N7DEF", shortName: "DEF", state: "offline",
+				lastHeard: "2h", heardRank: 99, lastSNR: "-16.0", lastRSSI: "-115",
+				lastHops: 5, hwModel: "T-Deck", firmware: "2.1.0",
 			},
 		},
 
 		Messages: []messageItem{
-			{time: "14:02", from: "KC7XYZ 🦀", text: "hello world", hops: 2, snr: "-8.5"},
-			{time: "14:03", from: "me", mine: true, text: "hi", status: "ack", hops: 0},
 			{
-				time: "14:05", from: "Rural Signal 📡", bang: "/cq", text: "who's out there?",
-				acks: "↳ 3 acks — KC7XYZ -8dB  W1ABC -11dB  N0CALL -14dB", hops: 3, snr: "-11.2",
+				time: "14:39", from: "WiobooJones", fromNum: 3595239870,
+				text: "Afternoon test if my messages are getting out there?",
+				hops: 5, snr: "4.2", packetID: 195849301,
 			},
 			{
-				time:   "14:06",
-				from:   "me",
-				mine:   true,
-				bang:   "/cqr",
-				text:   "copy 9/9, SNR -8.5, hop 1",
+				time: "14:39", from: "Gleep - socalme.sh", fromNum: 1280985301,
+				text: "6 🐰", hops: 2, snr: "5.5", packetID: 1237329592,
+				replyID: 195849301,
+			},
+			{
+				time: "14:40", from: "retr0h", mine: true, bang: "/cqr",
+				text: "copy you at hop 5, SNR 4.2 dB — you're getting out",
 				status: "ack",
 			},
-			{time: "14:07", from: "W1ABC ⚡", text: "thanks for the test", hops: 1, snr: "-5.0"},
-			{time: "14:08", from: "me", mine: true, text: "73 👋", status: "fail"},
 			{
-				time: "14:09",
-				from: "KC7XYZ 🦀",
-				bang: "/qth",
-				text: "QTH: CN87 Seattle",
-				hops: 2,
-				snr:  "-9.1",
+				time: "14:40", from: "WiobooJones", fromNum: 3595239870,
+				text: "Tyty, I guess people just don't like responding to me lol",
+				hops: 6, snr: "5.5",
+			},
+			// Ghost peer — fromNum populated but not in m.nodes /
+			// m.nodesByNum, so displayFrom falls back to msg.from
+			// and renderMessageRow adds the 👻 prefix + drained color.
+			{
+				time: "15:01", from: "node 0x6f66d09d", fromNum: 0x6f66d09d,
+				text: "anyone near Pasadena?", hops: 4, snr: "-9.1",
 			},
 			{
-				time:   "14:10",
-				from:   "me",
-				mine:   true,
-				text:   "roger, CN85 Portland here 🌲",
-				status: "ack",
+				time: "15:35", from: "AmputiLayag_MeshNodeQTHlab", fromNum: 2058163254,
+				text: "2hops from BALDWIN PARK", hops: 3, snr: "3.2",
 			},
-			{time: "14:12", from: "", text: "N7DEF went offline", status: "system"},
+			{
+				time: "15:42", from: "retr0h", mine: true, bang: "/73",
+				text: "73 AmputiLayag_MeshNodeQTHlab", status: "ack",
+			},
+			{time: "15:47", from: "", text: "N7DEF went offline", status: "system"},
 		},
 	}
 }

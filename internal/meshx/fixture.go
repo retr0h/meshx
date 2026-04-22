@@ -114,6 +114,12 @@ func DefaultDemo() *Demo {
 			{name: "*secret*", private: true, unread: 1},
 		},
 
+		// Peer names + hw / signal values are fictional — similar
+		// shape to a real mesh (mix of BBS-ish handles, punny
+		// shortnames, a range of firmware versions) but
+		// deliberately NOT drawn from any actual on-air operator's
+		// identity. Only retr0h / 💀 (the demo "me") mirrors a
+		// real radio; everyone else is made up.
 		Nodes: []nodeItem{
 			// Index 0 is "me" — matches NodeNum above so myNode()
 			// resolves via m.nodesByNum[0x103d20cd] = 0.
@@ -123,32 +129,32 @@ func DefaultDemo() *Demo {
 				lastHops: 0, hwModel: "HELTEC_V3_E", firmware: "2.7.15.567b8ea",
 			},
 			{
-				callsign: "WiobooJones", shortName: "Wiib", state: "online",
+				callsign: "TangoBravo_7", shortName: "TB7", state: "online",
 				lastHeard: "2m", heardRank: 2, lastSNR: "4.2", lastRSSI: "-92",
 				lastHops: 5, hwModel: "RAK4631", firmware: "2.6.11",
 			},
 			{
-				callsign: "Gleep - socalme.sh", shortName: "GLP1", state: "online",
+				callsign: "MeshLab - plrmsh.io", shortName: "MLAB", state: "online",
 				lastHeard: "14s", heardRank: 1, lastSNR: "5.5", lastRSSI: "-89",
 				lastHops: 2, hwModel: "HELTEC_V3", firmware: "2.7.15",
 			},
 			{
-				callsign: "AmputiLayag_MeshNodeQTHlab", shortName: "AMPL", state: "online",
+				callsign: "SolarRelay_HillNode", shortName: "SOLR", state: "online",
 				lastHeard: "1m", heardRank: 3, lastSNR: "3.2", lastRSSI: "-103",
 				lastHops: 3, hwModel: "Station-G2", firmware: "2.7.15",
 			},
 			{
-				callsign: "Edoras", shortName: "Bkin", state: "online",
+				callsign: "Helmsdeep", shortName: "HDP", state: "online",
 				lastHeard: "4m", heardRank: 4, lastSNR: "-5.0", lastRSSI: "-98",
 				lastHops: 2, hwModel: "TRACKER_T1000_E", firmware: "2.7.15",
 			},
 			{
-				callsign: "Hogman e7f4", shortName: "🐗", state: "online",
+				callsign: "BoarSense 1f4a", shortName: "🐗", state: "online",
 				lastHeard: "5m", heardRank: 5, lastSNR: "-8.5", lastRSSI: "-101",
 				lastHops: 3, hwModel: "T-Beam v1.1", firmware: "2.6.11",
 			},
 			{
-				callsign: "N7DEF", shortName: "DEF", state: "offline",
+				callsign: "KE9NIL", shortName: "NIL", state: "offline",
 				lastHeard: "2h", heardRank: 99, lastSNR: "-16.0", lastRSSI: "-115",
 				lastHops: 5, hwModel: "T-Deck", firmware: "2.1.0",
 			},
@@ -156,12 +162,12 @@ func DefaultDemo() *Demo {
 
 		Messages: []messageItem{
 			{
-				time: "14:39", from: "WiobooJones", fromNum: 3595239870,
-				text: "Afternoon test if my messages are getting out there?",
+				time: "14:39", from: "TangoBravo_7", fromNum: 0x5a00aa01,
+				text: "Afternoon test — anyone copying this?",
 				hops: 5, snr: "4.2", packetID: 195849301,
 			},
 			{
-				time: "14:39", from: "Gleep - socalme.sh", fromNum: 1280985301,
+				time: "14:39", from: "MeshLab - plrmsh.io", fromNum: 0x5a00aa02,
 				text: "6 🐰", hops: 2, snr: "5.5", packetID: 1237329592,
 				replyID: 195849301,
 			},
@@ -171,26 +177,26 @@ func DefaultDemo() *Demo {
 				status: "ack",
 			},
 			{
-				time: "14:40", from: "WiobooJones", fromNum: 3595239870,
-				text: "Tyty, I guess people just don't like responding to me lol",
+				time: "14:40", from: "TangoBravo_7", fromNum: 0x5a00aa01,
+				text: "thx — hard to tell without a response",
 				hops: 6, snr: "5.5",
 			},
-			// Ghost peer — fromNum populated but not in m.nodes /
+			// Ghost peer — fromNum populated but NOT in m.nodes /
 			// m.nodesByNum, so displayFrom falls back to msg.from
 			// and renderMessageRow adds the 👻 prefix + drained color.
 			{
 				time: "15:01", from: "node 0x6f66d09d", fromNum: 0x6f66d09d,
-				text: "anyone near Pasadena?", hops: 4, snr: "-9.1",
+				text: "anyone in the east valley?", hops: 4, snr: "-9.1",
 			},
 			{
-				time: "15:35", from: "AmputiLayag_MeshNodeQTHlab", fromNum: 2058163254,
-				text: "2hops from BALDWIN PARK", hops: 3, snr: "3.2",
+				time: "15:35", from: "SolarRelay_HillNode", fromNum: 0x5a00aa04,
+				text: "2 hops from the ridge — solar healthy", hops: 3, snr: "3.2",
 			},
 			{
 				time: "15:42", from: "retr0h", mine: true, bang: "/73",
-				text: "73 AmputiLayag_MeshNodeQTHlab", status: "ack",
+				text: "73 SolarRelay_HillNode", status: "ack",
 			},
-			{time: "15:47", from: "", text: "N7DEF went offline", status: "system"},
+			{time: "15:47", from: "", text: "KE9NIL went offline", status: "system"},
 		},
 	}
 }

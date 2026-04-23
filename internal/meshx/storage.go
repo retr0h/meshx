@@ -24,7 +24,6 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -61,8 +60,11 @@ func defaultStoragePath() (string, error) {
 }
 
 // openStorage opens (creating if needed) the SQLite file at path and
-// runs the goose migration chain. Caller closes the db.
-func openStorage(path string) (*sql.DB, error) {
+// runs the goose migration chain. Returns the db, any informational
+// notes the caller should surface in the UI (migration versions
+// applied, backfill counts, etc.), and an error. Caller closes the
+// db.
+func openStorage(path string) (*sql.DB, []string, error) {
 	// WAL journal mode survives power loss better than the default
 	// rollback journal and also lets a startup reader not block
 	// writers. _busy_timeout=5000 rides out transient lock
@@ -70,37 +72,35 @@ func openStorage(path string) (*sql.DB, error) {
 	dsn := path + "?_journal_mode=WAL&_busy_timeout=5000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
+		return nil, nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("ping sqlite: %w", err)
+		return nil, nil, fmt.Errorf("ping sqlite: %w", err)
 	}
-	if err := runMigrations(db); err != nil {
+	notes, err := runMigrations(db)
+	if err != nil {
 		_ = db.Close()
-		return nil, err
+		return nil, notes, err
 	}
-	return db, nil
+	return db, notes, nil
 }
 
-// runMigrations applies every embedded migration via goose. Same
-// dialect / base-FS / Up flow as freebies — no bespoke migration
-// logic here, we let goose track applied versions in its
-// goose_db_version table.
-//
-// Wires goose's logger to a stderr prefix so every startup prints
-// which versions applied (or "no pending migrations") — the tea
-// UI renders over stderr can't swallow, so even in alt-screen mode
-// these lines show up if the user exits or pipes stderr to a file
-// (`meshx 2>meshx.log`).
-func runMigrations(db *sql.DB) error {
+// runMigrations applies every embedded migration via goose and runs
+// one-off backfills. Captures all informational output (goose's
+// "applied vN", "no migrations to run", our backfill count) into an
+// in-memory slice the caller routes into systemLine entries inside
+// the messages pane — nothing ever touches stderr, so the TUI owns
+// the whole terminal window.
+func runMigrations(db *sql.DB) ([]string, error) {
+	var notes []string
 	goose.SetBaseFS(embedMigrations)
-	goose.SetLogger(log.New(os.Stderr, "meshx/storage: ", log.LstdFlags))
+	goose.SetLogger(noticesLogger{notes: &notes})
 	if err := goose.SetDialect("sqlite3"); err != nil {
-		return fmt.Errorf("goose dialect: %w", err)
+		return notes, fmt.Errorf("goose dialect: %w", err)
 	}
 	if err := goose.Up(db, "migrations"); err != nil {
-		return fmt.Errorf("goose up: %w", err)
+		return notes, fmt.Errorf("goose up: %w", err)
 	}
 	// One-off retroactive fix — rows written before saveMessage
 	// learned about from_num still have it set to 0. Parse the
@@ -109,10 +109,14 @@ func runMigrations(db *sql.DB) error {
 	// lookup-able nodeItem on next launch. Idempotent: only
 	// touches rows where from_num == 0 AND sender matches the
 	// placeholder shape.
-	if err := backfillFromNum(db); err != nil {
-		return fmt.Errorf("backfill from_num: %w", err)
+	n, err := backfillFromNum(db)
+	if err != nil {
+		return notes, fmt.Errorf("backfill from_num: %w", err)
 	}
-	return nil
+	if n > 0 {
+		notes = append(notes, fmt.Sprintf("back-filled from_num on %d historical rows", n))
+	}
+	return notes, nil
 }
 
 // backfillFromNum parses the historical "node 0x<hex>" sender
@@ -121,12 +125,12 @@ func runMigrations(db *sql.DB) error {
 // from_num are skipped. Anything that doesn't match the
 // placeholder shape (real callsigns from peers we did resolve)
 // is skipped too — we'd have no id to recover for them.
-func backfillFromNum(db *sql.DB) error {
+func backfillFromNum(db *sql.DB) (int, error) {
 	rows, err := db.Query(
 		`SELECT id, sender FROM messages WHERE from_num = 0 AND sender LIKE 'node 0x%'`,
 	)
 	if err != nil {
-		return fmt.Errorf("query placeholder rows: %w", err)
+		return 0, fmt.Errorf("query placeholder rows: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -141,7 +145,7 @@ func backfillFromNum(db *sql.DB) error {
 			sender string
 		)
 		if err := rows.Scan(&id, &sender); err != nil {
-			return fmt.Errorf("scan placeholder row: %w", err)
+			return 0, fmt.Errorf("scan placeholder row: %w", err)
 		}
 		hex := strings.TrimPrefix(sender, "node 0x")
 		n, err := strconv.ParseUint(hex, 16, 32)
@@ -151,32 +155,31 @@ func backfillFromNum(db *sql.DB) error {
 		updates = append(updates, update{id: id, fromNum: n})
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iter placeholder rows: %w", err)
+		return 0, fmt.Errorf("iter placeholder rows: %w", err)
 	}
 	if len(updates) == 0 {
-		return nil
+		return 0, nil
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		return fmt.Errorf("begin backfill tx: %w", err)
+		return 0, fmt.Errorf("begin backfill tx: %w", err)
 	}
 	stmt, err := tx.Prepare(`UPDATE messages SET from_num = ? WHERE id = ?`)
 	if err != nil {
 		_ = tx.Rollback()
-		return fmt.Errorf("prepare backfill update: %w", err)
+		return 0, fmt.Errorf("prepare backfill update: %w", err)
 	}
 	defer func() { _ = stmt.Close() }()
 	for _, u := range updates {
 		if _, err := stmt.Exec(u.fromNum, u.id); err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("exec backfill update id=%d: %w", u.id, err)
+			return 0, fmt.Errorf("exec backfill update id=%d: %w", u.id, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit backfill tx: %w", err)
+		return 0, fmt.Errorf("commit backfill tx: %w", err)
 	}
-	log.Printf("meshx/storage: back-filled from_num on %d historical rows", len(updates))
-	return nil
+	return len(updates), nil
 }
 
 // saveMessage persists one messageItem under a channel. System rows

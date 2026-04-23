@@ -189,17 +189,30 @@ func (m model) nickUniverse(word string) []matchItem {
 		if callsignCount[n.callsign] <= 1 {
 			return matchItem{display: n.callsign, insert: n.callsign}
 		}
-		// Collision: disambiguate with shortname when we have one;
-		// fall back to "!<hex>" when shortname is empty or also
-		// collides. Insert always uses "!<hex>" so /whois lands on
-		// the exact radio regardless of which display form the
-		// user picked out of the cycle.
+		// Collision: build a display string the user can actually
+		// read off — three retr0h radios usually sit on different
+		// hardware (HELTEC / RAK / TRACKER), so leading with
+		// shortname+hwModel gives a meaningful physical label. A
+		// short hex tail is appended as a last-ditch uniqueness
+		// guarantee for the "two HELTECs with the same shortname"
+		// edge case. Insert always uses "!<hex>" so /whois lands
+		// on the exact radio regardless of how the label reads.
 		hex := fmt.Sprintf("!%08x", n.nodeNum)
-		badge := n.shortName
-		if badge == "" {
-			badge = hex
+		var parts []string
+		if n.shortName != "" {
+			parts = append(parts, n.shortName)
 		}
-		display := fmt.Sprintf("%s %s", badge, n.callsign)
+		parts = append(parts, n.callsign)
+		if n.hwModel != "" {
+			parts = append(parts, "· "+n.hwModel)
+		}
+		if n.nodeNum != 0 {
+			// Always include a short hex suffix — tiny visual
+			// noise, but guarantees the three rows never render
+			// identically even when shortname + hwModel collide.
+			parts = append(parts, fmt.Sprintf("#%04x", n.nodeNum&0xFFFF))
+		}
+		display := strings.Join(parts, " ")
 		insert := hex
 		if n.nodeNum == 0 {
 			// No node num known yet — can't produce an unambiguous

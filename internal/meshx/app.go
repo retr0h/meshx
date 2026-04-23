@@ -235,6 +235,14 @@ type model struct {
 	// ConfigComplete that fires after handshake.
 	syncPendingGhosts int
 
+	// storageAlerted — once any saveMessage / saveNode /
+	// saveNodePrefs fails, flip this flag and emit a single
+	// systemLine so the user knows persistence is degraded. Every
+	// subsequent save-error stays silent so a bad db doesn't
+	// machine-gun the messages pane. In-memory operation continues
+	// normally — losing persistence is preferable to crashing.
+	storageAlerted bool
+
 	// Live-radio state. Zero-value is "demo mode — no transport".
 	pump        *pump          // non-nil when connected to a real radio
 	connectDest string         // "" = demo, else "/dev/cu.usbmodem2101" / tcp host
@@ -459,7 +467,7 @@ func newModel(demo *Demo, dest string) model {
 		// db) just leaves m.db nil, and the session runs in-memory
 		// for that boot. Losing history is preferable to crashing.
 		if path, err := defaultStoragePath(); err == nil {
-			if db, err := openStorage(path); err == nil {
+			if db, notes, err := openStorage(path); err == nil {
 				m.db = db
 				// Load the cached NodeDB FIRST — every peer we've
 				// ever resolved a real User for gets inserted into
@@ -536,6 +544,14 @@ func newModel(demo *Demo, dest string) model {
 						})
 						m.nodesByNum[msg.fromNum] = len(m.nodes) - 1
 					}
+				}
+				// Emit storage notes AFTER NodeDB + message replay so
+				// they land at the tail of the log (bottom-pinned in
+				// the pane) where the user naturally looks for the
+				// latest activity — not buried above a wall of
+				// replayed chat.
+				for _, n := range notes {
+					m.systemLine("storage: " + n)
 				}
 			}
 		}
@@ -964,7 +980,7 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	// launch — same behavior as the official phone app. Placeholder
 	// "node 0x…" callsigns (both longname and shortname empty) are
 	// skipped inside saveNode itself.
-	_ = saveNode(m.db, msg.nodeNum, msg.longName, msg.shortName, msg.hwModel)
+	m.storagePersist(saveNode(m.db, msg.nodeNum, msg.longName, msg.shortName, msg.hwModel))
 
 	if idx, ok := m.nodesByNum[msg.nodeNum]; ok {
 		// Preserve fav flag across updates.
@@ -1081,7 +1097,7 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 	if msg.channel < len(m.channels) {
 		channelName = m.channels[msg.channel].name
 	}
-	_ = saveMessage(m.db, channelName, item)
+	m.storagePersist(saveMessage(m.db, channelName, item))
 
 	// Bump unread count on non-active channels.
 	if msg.channel < len(m.channels) && m.channels[msg.channel].name != m.currentChannel && !mine {

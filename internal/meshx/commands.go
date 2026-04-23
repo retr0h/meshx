@@ -52,7 +52,7 @@ func (m *model) sendPlainMessage(text string) {
 	m.selectedMsg = len(m.messages) - 1
 	m.flash = fmt.Sprintf("sent in %s", m.currentChannel)
 
-	_ = saveMessage(m.db, m.currentChannel, item)
+	m.storagePersist(saveMessage(m.db, m.currentChannel, item))
 
 	if m.pump != nil {
 		m.pump.Enqueue(newTextToRadio(text, m.currentChannelIndex(), 0))
@@ -998,54 +998,6 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 	return nil
 }
 
-// systemLine appends a single-line system/meta entry to the message
-// log. Prefixed with `-!-` irssi-style. Never transmits over LoRa —
-// display-only. Used for short one-shot notices.
-func (m *model) systemLine(text string) {
-	m.messages = append(m.messages, messageItem{
-		time:   timeNowHHMM(),
-		text:   "-!- " + text,
-		status: "system",
-	})
-	m.selectedMsg = len(m.messages) - 1
-}
-
-// systemBlock emits a multi-line "server reply" block. Each line
-// becomes its own messageItem, but all carry the same `group` ID —
-// the renderer uses this to (a) give every row in the block the
-// same zebra stripe color, (b) hide the timestamp on continuation
-// rows so only the header carries it, and (c) let j/k navigation
-// keep cursor movement smooth across blocks.
-func (m *model) systemBlock(header string, lines ...string) {
-	gid := nextGroupID()
-	t := timeNowHHMM()
-	m.messages = append(m.messages, messageItem{
-		time:   t,
-		text:   "-!- " + header,
-		status: "system",
-		group:  gid,
-	})
-	for _, l := range lines {
-		m.messages = append(m.messages, messageItem{
-			time:   t,
-			text:   "-!-    " + l,
-			status: "system",
-			group:  gid,
-		})
-	}
-	m.selectedMsg = len(m.messages) - 1
-}
-
-// groupCounter is a monotonically-increasing counter used to tag
-// members of a systemBlock with a shared ID so the renderer can
-// bind them visually.
-var groupCounter uint64
-
-func nextGroupID() uint64 {
-	groupCounter++
-	return groupCounter
-}
-
 // sendBang appends an outgoing command-originated message to the
 // local log AND (in live-radio mode) transmits it over LoRa via the
 // pump. The `bang` field is kept purely for local UI styling — the
@@ -1084,7 +1036,7 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 
 	// Persist the outgoing so the log survives restart. Skipped in
 	// demo mode (m.db is always nil there).
-	_ = saveMessage(m.db, m.currentChannel, item)
+	m.storagePersist(saveMessage(m.db, m.currentChannel, item))
 
 	if m.pump != nil {
 		m.pump.Enqueue(newTextToRadio(body, m.currentChannelIndex(), replyToID))

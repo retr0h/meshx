@@ -20,21 +20,13 @@
 
 package meshx
 
-import "fmt"
-
 // notices.go is the single home for every "tell the user something"
-// surface in the app. Three output channels all flow through here so
-// subsystems (storage, transport, commands, input) don't need to
-// know the rendering shape — they just call a helper:
+// surface in the app. Subsystems (storage, transport, commands,
+// input) don't need to know the rendering shape — they call:
 //
 //   m.systemLine("text")              → one irssi-style `-!-` row
 //   m.systemBlock("header", lines...) → multi-row grouped reply card
-//   m.flashf("format %s", arg)        → transient status-bar blurb
-//
-// Plus two failure-surface helpers:
-//
 //   m.storagePersist(err)             → once-per-session db alert
-//   fatalf("fatal %s", ...)           → terminate the process
 //
 // The rule: any code that wants to show something to the user
 // imports *nothing* from lipgloss / tea for the purpose — it calls
@@ -76,14 +68,6 @@ func (m *model) systemBlock(header string, lines ...string) {
 		})
 	}
 	m.selectedMsg = len(m.messages) - 1
-}
-
-// flashf sets the transient status-bar blurb to the formatted
-// string. Clears on the next keystroke (see updateInput's Tab
-// handling). Use systemLine instead for anything that should stay
-// visible after the user presses a key.
-func (m *model) flashf(format string, args ...any) {
-	m.flash = fmt.Sprintf(format, args...)
 }
 
 // storagePersist wraps a save-to-sqlite call and surfaces the first

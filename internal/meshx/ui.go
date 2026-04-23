@@ -43,19 +43,6 @@ func (m model) View() string {
 		return ""
 	}
 
-	// Splash takes over the whole screen — no chrome, no bars.
-	if m.mode == modeSplash {
-		status := ""
-		if m.connectDest != "" {
-			if m.connected {
-				status = fmt.Sprintf("✓ connected to %s", m.connectDest)
-			} else {
-				status = fmt.Sprintf("connecting to %s …", m.connectDest)
-			}
-		}
-		return renderSplash(m.w, m.h, m.splash, status)
-	}
-
 	status := m.renderStatusBar()
 	divider := m.renderTopDivider()
 	chanRow := m.renderChannelStatus()
@@ -1047,6 +1034,15 @@ func zebraBg(i int) string {
 // alternate shade — no blank separator needed; the color alternation
 // is the visual separator. Continuous grid from top to bottom.
 func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg string) string {
+	// "splash" rows are decorative BitchX-style log banners — already
+	// lipgloss-styled (colored block-art + tagline), rendered with
+	// no `-!-` prefix, no timestamp, no sender column, no selection
+	// highlight. Just the pre-styled text centered in the pane so
+	// the splash sits quietly at the top of the scrollback until
+	// real messages push it off-screen.
+	if msg.status == "splash" {
+		return lipgloss.PlaceHorizontal(inner, lipgloss.Center, msg.text)
+	}
 	tstamp := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
 		Background(lipgloss.Color(rowBg))

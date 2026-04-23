@@ -22,7 +22,6 @@ package meshx
 
 import (
 	"math/rand"
-	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -135,66 +134,50 @@ func pickSplash() splashVariant {
 	return allSplashVariants[rand.Intn(len(allSplashVariants))]
 }
 
-// renderSplash composes the splash screen: colored logo centered in
-// the viewport, tagline + credits underneath, "press any key" prompt.
+
+// splashAsMessages emits the chosen variant as a sequence of
+// messageItems with status="splash". The renderer detects that
+// status and skips the `-!-` prefix, timestamp, sender column, and
+// selection highlight — the text is already fully lipgloss-styled
+// (colored block-art + tagline + credit) so it paints as-is and
+// preserves the rotating per-variant color scheme.
 //
-// The optional connectionStatus string is appended below the prompt
-// when non-empty — used to surface "connecting to /dev/cu.usbmodem…"
-// live-radio status alongside the graffiti banner.
-func renderSplash(width, height int, v splashVariant, connectionStatus string) string {
-	logoLines := make([]string, len(v.rows))
+// This is what makes the splash actually *seen*: instead of a
+// blocking pre-content gate the user dismisses in a keystroke, the
+// banner becomes the first rows of the scrollback log. Fresh chat
+// appends below and pushes the splash upward until it scrolls off
+// — pure BitchX-on-connect feel.
+func splashAsMessages(v splashVariant) []messageItem {
+	// Colored block-art rows using the variant's per-row color fn.
+	logo := make([]string, len(v.rows))
 	for i, row := range v.rows {
-		logoLines[i] = lipgloss.NewStyle().
+		logo[i] = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(v.color(i))).
 			Bold(true).
 			Render(row)
 	}
-	logo := strings.Join(logoLines, "\n")
 
-	// Decorative frame around the logo.
-	spark := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).
-		Render("░▒▓█▓▒░")
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	mesh := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
 	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
 	magenta := lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta))
+	sparkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen))
 
 	tagline := cyan.Render("Meshtastic") + dim.Render(" messenger  ·  ") +
 		magenta.Render("inspired by BitchX + irssi + mutt")
-
 	credit := dim.Render("// by retr0h  ·  ") +
 		mesh.Render(`//\`) +
 		dim.Render("  ·  maxheadroom palette  ·  variant: ") +
 		mesh.Render(v.name)
+	spark := sparkStyle.Render("░▒▓█▓▒░")
 
-	prompt := dim.Render("press any key to continue  (auto-dismiss in 3s)")
+	rows := []string{spark, ""}
+	rows = append(rows, logo...)
+	rows = append(rows, "", spark, "", tagline, credit)
 
-	rows := []string{
-		spark,
-		"",
-		logo,
-		"",
-		spark,
-		"",
-		tagline,
-		credit,
-		"",
-		"",
-		prompt,
+	out := make([]messageItem, len(rows))
+	for i, r := range rows {
+		out[i] = messageItem{status: "splash", text: r}
 	}
-	if connectionStatus != "" {
-		connLine := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(meshGreen)).
-			Bold(true).
-			Render(connectionStatus)
-		rows = append(rows, "", connLine)
-	}
-
-	body := lipgloss.JoinVertical(lipgloss.Center, rows...)
-
-	return lipgloss.Place(
-		width, height,
-		lipgloss.Center, lipgloss.Center,
-		body,
-	)
+	return out
 }

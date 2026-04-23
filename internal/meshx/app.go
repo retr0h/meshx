@@ -60,9 +60,6 @@ const (
 	modeSearch
 	// modeHelp — full-screen scrollable keymap overlay.
 	modeHelp
-	// modeSplash — BitchX-style graffiti art banner shown on launch.
-	// Any key dismisses; auto-dismisses after ~3s.
-	modeSplash
 )
 
 // Pane indices — used for overlay-focus accounting and accent colors.
@@ -446,10 +443,12 @@ func newModel(demo *Demo, dest string) model {
 		Bold(true)
 	focusCmd := in.Focus()
 
+	chosenSplash := pickSplash()
 	m := model{
-		mode:            modeSplash,
+		mode:            modeInput,
 		focused:         paneMessages,
-		splash:          pickSplash(),
+		splash:          chosenSplash,
+		messages:        splashAsMessages(chosenSplash),
 		connectDest:     dest,
 		demo:            demo,
 		nodesByNum:      make(map[uint32]int),
@@ -459,6 +458,7 @@ func newModel(demo *Demo, dest string) model {
 		searchInput:     func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
 		initialFocusCmd: focusCmd,
 	}
+	m.selectedMsg = len(m.messages) - 1
 
 	if demo == nil {
 		// Live-radio mode — open the persistence store and replay the
@@ -632,10 +632,6 @@ func newModel(demo *Demo, dest string) model {
 
 func (m model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		// Auto-dismiss the splash after ~3s if the user hasn't touched a key.
-		tea.Tick(3*time.Second, func(time.Time) tea.Msg {
-			return splashTimeoutMsg{}
-		}),
 		// Kick off the cursor blink ticker. m.initialFocusCmd is
 		// the tea.Cmd textinput.Focus() returned back in newModel —
 		// it carries the correct cursor id/tag pair that subsequent
@@ -659,10 +655,6 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// splashTimeoutMsg fires once ~3s after launch to auto-dismiss the
-// BitchX-style banner even if the user doesn't press a key.
-type splashTimeoutMsg struct{}
-
 // openPumpMsg is the "program is running, go open the radio" signal
 // fired by Init(). Handled in Update which calls startPump and
 // stashes the handle in the model.
@@ -670,20 +662,6 @@ type openPumpMsg struct{ dest string }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case splashTimeoutMsg:
-		// Only auto-dismiss if we're not still waiting for the radio.
-		if m.mode == modeSplash && (m.connectDest == "" || m.connected) {
-			m.mode = modeInput
-			// Capture Focus()'s cmd — it's a fresh BlinkCmd with
-			// an incremented blinkTag. Discarding it orphans the
-			// in-flight blink chain (its pending BlinkMsg still
-			// carries the OLD tag, no longer matches), so the
-			// cursor freezes until something else happens to
-			// restart the chain (like a keypress).
-			return m, m.input.Focus()
-		}
-		return m, nil
-
 	case openPumpMsg:
 		// Program is running; safe to spawn the pump now.
 		if globalProgramRef == nil {
@@ -783,15 +761,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioConfigCompleteMsg:
 		m.connected = true
-		// Capture any focus-returned blink cmd from the splash
-		// dismiss below, so the blink chain stays alive across
-		// the transition (see splashTimeoutMsg for the full
-		// explanation).
-		var focusCmd tea.Cmd
-		if m.mode == modeSplash {
-			m.mode = modeInput
-			focusCmd = m.input.Focus()
-		}
 		// If the user issued /sync and we snapshotted a ghost count,
 		// emit a completion systemLine with the delta so they see
 		// what the re-dump actually changed. syncPendingGhosts > 0
@@ -821,7 +790,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the canonical connection indicator; flashing "radio
 		// connected" at the bottom was duplicate signal in the same
 		// mesh-green.
-		return m, focusCmd
+		return m, nil
 
 	case radioDisconnectedMsg:
 		m.connected = false
@@ -843,15 +812,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch m.mode {
-		case modeSplash:
-			// Any key dismisses the splash and drops into input mode.
-			if msg.String() == "ctrl+x" || msg.String() == "ctrl+c" {
-				return m, tea.Quit
-			}
-			m.mode = modeInput
-			// Return Focus()'s blink cmd — see splashTimeoutMsg
-			// for why discarding it kills the blink chain.
-			return m, m.input.Focus()
 		case modeSearch:
 			return m.updateSearch(msg)
 		case modeHelp:

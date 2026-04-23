@@ -150,6 +150,25 @@ type messageItem struct {
 	// of branching on ad-hoc fields. See notices.go for the shape
 	// and defaults.
 	style *noticeStyle
+
+	// expireAt — non-nil for command-triggered notices (/whois,
+	// /ping, /config, …) stamped by m.notice / m.noticeCard.
+	// The reap tick drops rows whose expireAt has passed (whole
+	// groups atomically); during the last noticeFadeWindow the
+	// renderer lerps fg toward rowBg so the row visibly dims
+	// before it vanishes. Nil = permanent — chat rows, splash
+	// banner, storage/error alerts. See notices.go.
+	expireAt *time.Time
+
+	// pinned — user has paused this row's TTL via `p` in modeNav
+	// or `/pin`. While true, the reap tick skips the row and the
+	// renderer suppresses the fade. `⌜ … ⌟` diagonal corners mark
+	// the group in the pane. pinnedRemaining captures time.Until
+	// (expireAt) at the moment pin was toggled on so a subsequent
+	// unpin can re-stamp expireAt = now + pinnedRemaining and the
+	// row resumes with the same time budget it had.
+	pinned          bool
+	pinnedRemaining time.Duration
 }
 
 type sortMode int
@@ -655,6 +674,11 @@ func (m model) Init() tea.Cmd {
 		// cursor silently drops mismatched BlinkMsgs so the chain
 		// would die on tick #1.
 		m.initialFocusCmd,
+		// Start the notice TTL reaper loop — fires every second for
+		// the life of the program. Cheap enough to always be on; the
+		// handler is a one-pass scan of m.messages guarded so it no-
+		// ops when there's nothing expiring.
+		noticeTickCmd(),
 	}
 	// Live-radio mode: kick off the pump from within the running
 	// program. Deferring to Init (rather than RunRadio) guarantees
@@ -674,8 +698,36 @@ func (m model) Init() tea.Cmd {
 // stashes the handle in the model.
 type openPumpMsg struct{ dest string }
 
+// noticeTickMsg drives the notice reap + fade redraw. Fires every
+// second while the program is running; Update routes it through
+// m.reapExpiredNotices (skipped in modeNav so mid-scroll reads don't
+// vanish) and re-arms the next tick. 1s granularity is fine: the
+// fade-window is 10s so the user sees ~10 discrete dim steps — not
+// "smooth" but visibly aging, and the reap is per-second-accurate.
+type noticeTickMsg struct{}
+
+// noticeTickCmd produces the tea.Cmd that fires the next
+// noticeTickMsg 1 second from now. Called from Init to start the
+// loop and from the Update handler to keep it going.
+func noticeTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+		return noticeTickMsg{}
+	})
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case noticeTickMsg:
+		// Skip the reap while the user is navigating scrollback — a
+		// row vanishing mid-read is the exact UX we're trying to
+		// avoid. Expiry resumes as soon as they ESC back to input
+		// (next tick catches up). The fade renderer also freezes in
+		// modeNav, so while nav'd everything visually holds still.
+		if m.mode != modeNav {
+			m.reapExpiredNotices()
+		}
+		return m, noticeTickCmd()
+
 	case openPumpMsg:
 		// Program is running; safe to spawn the pump now.
 		if globalProgramRef == nil {

@@ -340,6 +340,25 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 	case "q", "quit", "exit":
 		return tea.Quit
 
+	case "pin":
+		// Toggle pin on the most recent ephemeral notice. "Ephemeral"
+		// = has an expireAt stamp (command-triggered notice, not
+		// splash / storage / chat). Typed from input with no explicit
+		// selection, so the heuristic is "the thing the user most
+		// recently ran."
+		idx := m.lastEphemeralNoticeIdx()
+		if idx < 0 {
+			m.flash = "/pin: nothing pinnable in the log"
+			return nil
+		}
+		pinned := !m.messages[idx].pinned
+		m.toggleNoticePin(idx)
+		if pinned {
+			m.flash = "notice pinned — timer paused"
+		} else {
+			m.flash = "notice unpinned — timer resumed"
+		}
+
 	// ── Ham-radio bang shortcuts ──────────────────────────────────
 	// These are quick-command shorthands that compose and send the
 	// underlying !bang message. Geeky, fast, and keeps the protocol

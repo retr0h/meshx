@@ -1059,6 +1059,14 @@ func tailStartList(msgs []messageItem, rowsBudget int) int {
 const (
 	rowBgEven = "#1a1b26" // cool tokyo-night base
 	rowBgOdd  = "#24283b" // one step lighter + barely-purple undertone
+	// selectionRowBg is the background for the currently-selected
+	// row in nav mode. Deeper + more saturated than the zebra
+	// shades so the cursor reads unambiguously across the whole
+	// row width — the ██ gutter alone wasn't enough once the row
+	// got crowded with timestamps, callsigns, and signal columns.
+	// Chosen to be distinct from the searchHit bg (#0e2618) so a
+	// selected-AND-hit row still picks one obvious state.
+	selectionRowBg = "#2a4a5a"
 )
 
 // zebraBg returns the bg tint for the Nth message row in display order.
@@ -1097,6 +1105,18 @@ func (m model) renderNoticeRow(
 	rowBg string,
 	pinFirst, pinLast bool,
 ) string {
+	// When this row is the nav cursor, override the zebra bg with
+	// the selection tint BEFORE any of the inner spans render. The
+	// notice row pipeline bakes rowBg into every styled component
+	// (accent, timestamp, prefix, body), and a later wrapSelection
+	// Background() wouldn't override those nested ANSI codes — so
+	// without this override the cursor wouldn't read on -!- rows
+	// at all, only on plain chat rows where wrapSelection's bg
+	// isn't fighting pre-baked spans.
+	if selected {
+		rowBg = selectionRowBg
+	}
+
 	// Default style — zero-value noticeStyle is the canonical
 	// lavender italic system line. Letting msg.style be nil falls
 	// back to this so callers without a style (legacy entry points
@@ -1247,6 +1267,14 @@ func (m model) renderMessageRow(
 	// the default system-row lavender wrap. See renderNoticeRow.
 	if msg.status == "notice" || msg.status == "system" {
 		return m.renderNoticeRow(msg, selected, inner, rowBg, pinFirst, pinLast)
+	}
+	// Same selection-bg override as renderNoticeRow: every styled
+	// span below bakes rowBg into its ANSI escape, so wrapSelection's
+	// outer Background() can't win against the nested codes. Swap
+	// rowBg for the selection tint at the TOP of the render so every
+	// downstream span picks it up natively.
+	if selected {
+		rowBg = selectionRowBg
 	}
 	tstamp := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
@@ -1571,7 +1599,19 @@ func (m model) findMessageByPacketID(id uint32) *messageItem {
 // fallback is baked into the row forever. Falls back to msg.from
 // when the node isn't in nodesByNum (demo seeds with no fromNum,
 // or peers we never learned about).
+//
+// Own ("mine") rows go through myCallsign() so rows sent BEFORE
+// MyNodeInfo arrived (persisted with from="—" or from="me") also
+// upgrade to the real callsign as soon as we learn it. Without
+// this the first BLE session's outbound history would stay stuck
+// on the placeholder forever.
 func (m model) displayFrom(msg messageItem) string {
+	if msg.mine {
+		if cs := m.myCallsign(); cs != "" && cs != "—" {
+			return cs
+		}
+		return msg.from
+	}
 	if msg.fromNum == 0 {
 		return msg.from
 	}
@@ -1715,7 +1755,13 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 			Foreground(lipgloss.Color(meshGreen)).
 			Bold(true).
 			Render("██") + " "
-		bg = mhDrained
+		// Stronger tint than the old mhDrained. That value was
+		// #3b4261 which read almost identical to zebra-odd (#24283b)
+		// and made the ██ gutter carry all the "I am here" weight
+		// on its own. Bumping to a saturated dark-teal so the whole
+		// row reads as selected from any column, not just the left
+		// gutter. Still dark enough that text stays readable.
+		bg = selectionRowBg
 	} else {
 		gutter = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(meshGreen)).

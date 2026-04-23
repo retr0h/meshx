@@ -552,6 +552,15 @@ func newModel(demo *Demo, dest string) model {
 						m.nodesByNum[n.nodeNum] = len(m.nodes) - 1
 					}
 				}
+				// Stale-pending sweep BEFORE replay — any outbound
+				// row still marked "pending" from a prior session
+				// crashed mid-flight; its ACK window is long closed
+				// and nothing will ever land. Flip those to "fail"
+				// so they render as `✗` and the user can hit `R` to
+				// resend from history. 5 minutes is plenty for any
+				// in-flight ACK the radio might deliver on this
+				// launch; anything older is dead.
+				expired, _ := expireStalePendingMessages(db, 5*time.Minute)
 				// Primary channel is what the radio tells us, but at
 				// boot we don't have it yet — replay under the name
 				// we'll default to (empty string key until a channel
@@ -622,6 +631,12 @@ func newModel(demo *Demo, dest string) model {
 				if backfilled > 0 {
 					m.systemLine(fmt.Sprintf(
 						"nodes: backfilled %d peer recency from message history", backfilled,
+					))
+				}
+				if expired > 0 {
+					m.systemLine(fmt.Sprintf(
+						"messages: %d stale pending row(s) marked as failed — press R to resend",
+						expired,
 					))
 				}
 			}
@@ -1278,25 +1293,40 @@ func (m *model) applyRouting(msg radioRoutingMsg) {
 // resend takes a prior outbound messageItem, re-enqueues it over
 // the pump with a fresh packetID, and flips the original row's
 // status back to "pending" so the user sees the retransmit in
-// flight. Bound to `R` in nav mode when the cursor is on a
-// status=="fail" row.
+// flight. Bound to `R` in nav mode on any mine-row that's either
+// "fail" (the obvious retry case) or "pending" (stuck because the
+// radio never sent a ROUTING reply — treating R as "this is stuck,
+// try again" matches what the user actually wants). "ack" rows are
+// rejected with an explicit flash rather than silently no-oping so
+// the user knows the keypress registered.
 func (m *model) resend(idx int) {
 	if idx < 0 || idx >= len(m.messages) {
 		return
 	}
 	msg := &m.messages[idx]
-	if !msg.mine || msg.status != "fail" {
+	if !msg.mine {
+		m.flash = "R: can only resend your own messages"
+		return
+	}
+	switch msg.status {
+	case "fail", "pending":
+		// Fall through to retransmit.
+	case "ack":
+		m.flash = "R: this message already delivered ✓"
+		return
+	default:
+		m.flash = "R: nothing to resend on this row"
 		return
 	}
 	if m.pump == nil {
-		m.flash = "no radio connected — cannot resend"
+		m.flash = "R: no radio connected — cannot resend"
 		return
 	}
 	envelope, pid := newTextToRadio(msg.text, m.currentChannelIndex(), msg.replyID)
 	msg.packetID = pid
 	msg.status = "pending"
 	m.pump.Enqueue(envelope)
-	m.flash = "retransmit sent — awaiting ack"
+	m.flash = fmt.Sprintf("↻ retransmit sent (pid=0x%08x) — awaiting ack", pid)
 }
 
 // humanDuration formats a time.Duration as a compact label like "2m",

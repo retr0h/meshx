@@ -1,7 +1,36 @@
 # meshX keymap
 
-Quick reference for every binding and `/command`. Inspired by irssi, BitchX,
-mutt, vim, and tmux.
+Quick reference for every binding, `/command`, and CLI subcommand. Inspired by
+irssi, BitchX, mutt, vim, and tmux.
+
+## Launching meshX
+
+meshX's CLI is transport-first — `usb` / `tcp` / `ble` are peer subcommand
+trees, each with their own verbs. Bare `meshx` picks a transport for you.
+
+| Command                          | What it does                                                                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `meshx`                          | Auto-connect: exactly-one USB radio → use it; else single saved BLE device → use it; else favorite BLE. |
+| `meshx demo`                     | Canned-fixture TUI. No radio needed.                                                                    |
+| `meshx usb probe`                | List USB-serial ports and label each as Meshtastic or not.                                              |
+| `meshx usb connect [dev]`        | Open the TUI over serial. Auto-detects when `[dev]` is omitted.                                         |
+| `meshx tcp connect host[:port]`  | Open the TUI over TCP. Port defaults to 4403.                                                           |
+| `meshx ble scan`                 | 10s Bluetooth scan — table of nearby Meshtastic radios with UUID + name + RSSI.                         |
+| `meshx ble pair <uuid>`          | Save a radio to `~/.meshx/meshx.db`. OS pairing dialog fires on first `meshx ble connect`.              |
+| `meshx ble list`                 | Show saved Bluetooth devices (`★` marks the auto-connect favorite).                                     |
+| `meshx ble connect <uuid\|name>` | Open the TUI over Bluetooth against a saved device.                                                     |
+| `meshx ble fav <uuid\|name>`     | Mark a saved device as the bare-`meshx` fallback target.                                                |
+| `meshx ble disconnect`           | Clear the favorite flag (opposite of `fav`).                                                            |
+| `meshx ble forget <uuid\|name>`  | Remove a saved device from persistence.                                                                 |
+| `meshx ble probe <uuid>`         | 15s diagnostic: dump every FromRadio packet the radio sends, summarize by kind.                         |
+
+### Debug logging
+
+`MESHX_DEBUG=1 meshx ble connect <uuid>` writes every pump event (transport
+start, SendWantConfig nonce, each translated FromRadio, errors) to
+`/tmp/meshx-pump.log`. Set `MESHX_DEBUG=/some/other/path` to control the
+destination. Alt-screen TUIs swallow stderr, so this file is the only way to
+inspect live transport flow without leaving the session.
 
 ## Modes
 
@@ -62,19 +91,19 @@ the universal quit.
 
 Single-letter shortcuts that operate on whatever's highlighted:
 
-| Key | Action                                                  |
-| --- | ------------------------------------------------------- |
-| `r` | reply — prefills `/reply <sender> ` into the input bar  |
-| `R` | resend — retransmit a failed (`✗`) outbound row         |
-| `t` | traceroute selected sender                              |
-| `p` | ping selected sender                                    |
-| `w` | whois selected sender                                   |
-| `P` | pin / unpin highlighted notice — pauses TTL (see below) |
-| `*` | pin / unpin selected node                               |
-| `m` | mute / unmute selected node                             |
-| `F` | filter the log to this node's traffic                   |
-| `X` | clear active filter                                     |
-| `s` | cycle node sort (heard → name → state) — nodes overlay  |
+| Key | Action                                                           |
+| --- | ---------------------------------------------------------------- |
+| `r` | reply — prefills `/reply <sender> ` into the input bar           |
+| `R` | resend — retransmit a pending (`…`) or failed (`✗`) outbound row |
+| `t` | traceroute selected sender                                       |
+| `p` | ping selected sender                                             |
+| `w` | whois selected sender                                            |
+| `P` | pin / unpin highlighted notice — pauses TTL (see below)          |
+| `*` | pin / unpin selected node                                        |
+| `m` | mute / unmute selected node                                      |
+| `F` | filter the log to this node's traffic                            |
+| `X` | clear active filter                                              |
+| `s` | cycle node sort (heard → name → state) — nodes overlay           |
 
 ### Delivery status (outbound messages)
 
@@ -206,12 +235,27 @@ restored verbatim when you unpin (running `/pin` again, or pressing `P` again).
 
 ## Notes on persistence
 
-Live-radio mode persists the message log to `~/.meshx/meshx.db` (SQLite, WAL
-journal) so scrollback survives restarts. The last 500 messages across all
-channels are replayed on boot. System/transient rows (`/whois` cards, flash
-messages) are skipped — their content is derived state and would be stale on
-replay. Demo mode never writes to disk by design; canned fixture data has no
-business in the real log.
+Live-radio mode persists to `~/.meshx/meshx.db` (SQLite, WAL journal):
+
+- **Message log** — last 500 rows replayed on boot. System/transient `-!-`
+  notices are skipped (derived state, would be stale on replay).
+- **Node cache** — every peer's longname / shortname / hw model, so the
+  `@retr0h` tiles still render immediately on launch before the radio's NodeInfo
+  dump arrives. Favorites (`*`) and mute (`m`) state persist here too.
+- **Paired Bluetooth devices** — `ble_devices` table. `meshx ble pair` writes
+  here, `meshx ble list` reads, `meshx ble fav` flips the favorite flag in a
+  single transaction so there's never two.
+
+Demo mode never writes to disk.
+
+### Stale-send recovery
+
+On boot, any outbound row still marked `pending` from a prior session's
+crashed-mid-flight ACK gets flipped to `fail` automatically (5-min TTL). The
+user sees the row render with `✗` and can hit `R` to resend — unlike the old
+behavior where it'd zombie as `…` forever with no way to act on it. A
+`-!- messages: N stale pending row(s) marked as failed — press R to resend`
+systemLine fires when the sweep actually touched anything.
 
 To wipe history: `rm ~/.meshx/meshx.db` (or `/clear` clears only the in-memory
 view for this session).

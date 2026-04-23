@@ -245,5 +245,8 @@ func init() {
 		&probeDump, "dump", false,
 		"With --port, dump each FromRadio packet (default: show summary on completion).",
 	)
-	rootCmd.AddCommand(probeCmd)
+	// probe is registered as a child of `usb` (see usb.go) — this
+	// file only defines the command itself. Keeping the flag wiring
+	// here matches every other cobra command's split between
+	// declaration and registration.
 }

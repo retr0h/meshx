@@ -53,6 +53,8 @@ func (m *model) sendPlainMessage(text string) {
 	item := messageItem{
 		time: timeNowHHMM(), from: "me", mine: true, text: text,
 		status: "pending", packetID: pid,
+		fromNum: m.myNodeNum,
+		sentAt:  time.Now(),
 	}
 	m.messages = append(m.messages, item)
 	m.selectedMsg = len(m.messages) - 1
@@ -1079,6 +1081,8 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 		status:   status,
 		replyID:  replyToID,
 		packetID: pid,
+		fromNum:  m.myNodeNum,
+		sentAt:   time.Now(),
 	}
 	m.messages = append(m.messages, item)
 	m.selectedMsg = len(m.messages) - 1

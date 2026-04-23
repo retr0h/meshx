@@ -317,6 +317,7 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		raw := strings.TrimSpace(m.input.Value())
 		if raw == "" {
+			m.flash = "nothing to send"
 			return m, nil
 		}
 		m.input.SetValue("")
@@ -404,12 +405,20 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchInput.Focus()
 		return m, nil
 	case "n":
-		if m.searchQuery != "" {
-			m.jumpToSearchHit(+1)
+		if m.searchQuery == "" {
+			m.flash = "n: no search query — press `/` to start one"
+			break
+		}
+		if ok, _ := m.jumpToSearchHit(+1); !ok {
+			m.flash = fmt.Sprintf("n: no more matches for %q", m.searchQuery)
 		}
 	case "N":
-		if m.searchQuery != "" {
-			m.jumpToSearchHit(-1)
+		if m.searchQuery == "" {
+			m.flash = "N: no search query — press `/` to start one"
+			break
+		}
+		if ok, _ := m.jumpToSearchHit(-1); !ok {
+			m.flash = fmt.Sprintf("N: no more matches for %q", m.searchQuery)
 		}
 	case "r":
 		// Reply to the highlighted message — prefill /reply <sender>.
@@ -431,8 +440,20 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// with the same remaining time budget it had when pinned.
 		// Only fires on notice rows — toggleNoticePin is a no-op on
 		// chat rows and permanent notices (expireAt == nil).
-		if m.focused == paneMessages && m.selectedMsg >= 0 && m.selectedMsg < len(m.messages) {
-			m.toggleNoticePin(m.selectedMsg)
+		if m.focused != paneMessages || m.selectedMsg < 0 || m.selectedMsg >= len(m.messages) {
+			break
+		}
+		target := m.messages[m.selectedMsg]
+		if target.expireAt == nil {
+			m.flash = "P: this row isn't pinnable (chat / permanent notice)"
+			break
+		}
+		willPin := !target.pinned
+		m.toggleNoticePin(m.selectedMsg)
+		if willPin {
+			m.flash = "📌 pinned — timer paused"
+		} else {
+			m.flash = "↻ unpinned — timer resumed"
 		}
 	case "t":
 		target := m.selectedSender()

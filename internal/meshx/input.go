@@ -194,20 +194,43 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cycleChannel(-1)
 		m.tab = nil
 		return m, nil
-	case "ctrl+f", "pgdown":
-		// Scroll messages pane half-page down without leaving input
-		// mode — user composing can catch up on a fresh burst of
-		// traffic without Esc-ing into nav. Matches vim / less's
-		// Ctrl+F convention.
-		m.focused = paneMessages
-		for i := 0; i < 10; i++ {
-			m.moveSelectionGrid(0, +1)
-		}
+	case "ctrl+u":
+		// Readline / bash / vim-insert convention: kill the input
+		// line back to the start. Takes priority over the
+		// messages-pane scroll we used to bind here — that scroll
+		// is still one Esc + Ctrl+U away in nav mode, plus PgUp
+		// still works in input mode for the same effect. Clearing
+		// the line is much more useful while composing.
+		m.input.SetValue("")
+		m.tab = nil
 		return m, nil
-	case "ctrl+u", "pgup":
+	case "ctrl+k":
+		// Readline kill-to-end-of-line — chops everything from
+		// the cursor to the end of the input. Rounds out the
+		// Ctrl+U (kill-to-start) and Ctrl+W (kill word, Windows
+		// precedent) line-editing set.
+		pos := m.input.Position()
+		v := m.input.Value()
+		if pos < len(v) {
+			m.input.SetValue(v[:pos])
+			m.input.SetCursor(pos)
+		}
+		m.tab = nil
+		return m, nil
+	case "pgup":
+		// Messages-pane scroll kept on PgUp/PgDn for input-mode
+		// users who want to glance back without Esc-ing to nav.
+		// Ctrl+F / Ctrl+U freed up for readline-style line
+		// editing now that shell/vim muscle memory wins.
 		m.focused = paneMessages
 		for i := 0; i < 10; i++ {
 			m.moveSelectionGrid(0, -1)
+		}
+		return m, nil
+	case "pgdown":
+		m.focused = paneMessages
+		for i := 0; i < 10; i++ {
+			m.moveSelectionGrid(0, +1)
 		}
 		return m, nil
 	case "tab":

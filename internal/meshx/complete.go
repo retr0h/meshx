@@ -47,15 +47,28 @@ func looksLikeHexStem(word string) bool {
 	return true
 }
 
+// matchItem carries both the human-readable display string shown in
+// the tab flash AND the string that actually gets substituted into
+// the input. They diverge only for ambiguous callsigns: if three
+// radios share the longname "retr0h", their display strings include
+// a shortname prefix ("💀 retr0h", "☠ retr0h", "🦀 retr0h") so the
+// user can tell them apart, while their insert strings are the
+// unambiguous Meshtastic "!<hex>" node-id notation so /whois
+// resolves to the exact radio.
+type matchItem struct {
+	display string
+	insert  string
+}
+
 // tabState captures the in-progress cycling completion. First Tab
 // computes matches + inserts match 0; subsequent Tabs cycle through
 // the same set. Any non-Tab key clears the state.
 type tabState struct {
-	matches []string // candidate completions, sorted, all starting with stem
-	cursor  int      // current index into matches
-	stem    string   // original word fragment before first Tab
-	start   int      // byte offset in input where the word begins
-	end     int      // byte offset in input where the replacement ends now
+	matches []matchItem // candidate completions, sorted, all starting with stem
+	cursor  int         // current index into matches
+	stem    string      // original word fragment before first Tab
+	start   int         // byte offset in input where the word begins
+	end     int         // byte offset in input where the replacement ends now
 }
 
 // slashCommands is the canonical completion universe for /commands.
@@ -98,7 +111,7 @@ var callsignArgCommands = map[string]bool{
 // computeCompletions finds the word under/before the cursor, decides
 // which completion universe applies based on its prefix, and returns
 // the matches + the byte range in `text` that should be replaced.
-func (m model) computeCompletions(text string, cursor int) (matches []string, start, end int) {
+func (m model) computeCompletions(text string, cursor int) (matches []matchItem, start, end int) {
 	if cursor < 0 {
 		cursor = 0
 	}
@@ -133,7 +146,8 @@ func (m model) computeCompletions(text string, cursor int) (matches []string, st
 		stripped := strings.ToLower(strings.TrimPrefix(word, "/"))
 		for _, c := range slashCommands {
 			if strings.HasPrefix(c, stripped) {
-				matches = append(matches, "/"+c)
+				verb := "/" + c
+				matches = append(matches, matchItem{display: verb, insert: verb})
 			}
 		}
 		return matches, start, end
@@ -157,18 +171,53 @@ func (m model) computeCompletions(text string, cursor int) (matches []string, st
 // canonical shape. `o` is `o`; `O` is `O`; no folding.
 // The hex-id path still folds case because hex digits are
 // conventionally case-insensitive (0xD64B01BE == 0xd64b01be).
-func (m model) nickUniverse(word string) []string {
+func (m model) nickUniverse(word string) []matchItem {
 	stem := strings.TrimSpace(word)
 	if stem == "" {
 		return nil
 	}
-	var prefixHits, substrHits []string
+	// Count how many nodes share each callsign — a callsign with >1
+	// owners triggers the shortname / hex-id disambiguator below so
+	// the tab cycle renders "💀 retr0h / ☠ retr0h" instead of three
+	// indistinguishable "retr0h" entries.
+	callsignCount := make(map[string]int, len(m.nodes))
+	for _, n := range m.nodes {
+		callsignCount[n.callsign]++
+	}
+
+	toMatch := func(n nodeItem) matchItem {
+		if callsignCount[n.callsign] <= 1 {
+			return matchItem{display: n.callsign, insert: n.callsign}
+		}
+		// Collision: disambiguate with shortname when we have one;
+		// fall back to "!<hex>" when shortname is empty or also
+		// collides. Insert always uses "!<hex>" so /whois lands on
+		// the exact radio regardless of which display form the
+		// user picked out of the cycle.
+		hex := fmt.Sprintf("!%08x", n.nodeNum)
+		badge := n.shortName
+		if badge == "" {
+			badge = hex
+		}
+		display := fmt.Sprintf("%s %s", badge, n.callsign)
+		insert := hex
+		if n.nodeNum == 0 {
+			// No node num known yet — can't produce an unambiguous
+			// insert, so fall back to the bare callsign. /whois
+			// will still be fuzzy for this one, but at least the
+			// flash shows the user which physical radio is which.
+			insert = n.callsign
+		}
+		return matchItem{display: display, insert: insert}
+	}
+
+	var prefixHits, substrHits []matchItem
 	for _, n := range m.nodes {
 		switch {
 		case strings.HasPrefix(n.callsign, stem):
-			prefixHits = append(prefixHits, n.callsign)
+			prefixHits = append(prefixHits, toMatch(n))
 		case strings.Contains(n.callsign, stem):
-			substrHits = append(substrHits, n.callsign)
+			substrHits = append(substrHits, toMatch(n))
 		}
 	}
 	// Hex-id completion — if the stem looks like a hex prefix
@@ -184,16 +233,26 @@ func (m model) nickUniverse(word string) []string {
 			}
 			hex := fmt.Sprintf("%x", num)
 			if strings.Contains(hex, needle) {
-				substrHits = append(substrHits, m.nodes[idx].callsign)
+				substrHits = append(substrHits, toMatch(m.nodes[idx]))
 			}
 		}
 	}
-	sort.Strings(prefixHits)
-	sort.Strings(substrHits)
-	out := make([]string, 0, len(prefixHits)+len(substrHits)+1)
+	sortMatches(prefixHits)
+	sortMatches(substrHits)
+	out := make([]matchItem, 0, len(prefixHits)+len(substrHits))
 	out = append(out, prefixHits...)
 	out = append(out, substrHits...)
 	return out
+}
+
+// sortMatches orders a match slice alphabetically by display — that
+// ordering is what the user sees cycling through the tab set, and
+// keeping it stable within a prefix/substring group means repeated
+// <Tab> presses always step through radios in the same order.
+func sortMatches(xs []matchItem) {
+	sort.SliceStable(xs, func(i, j int) bool {
+		return xs[i].display < xs[j].display
+	})
 }
 
 // commandArgStart checks whether the input line reads as

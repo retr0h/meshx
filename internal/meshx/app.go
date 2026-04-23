@@ -91,6 +91,12 @@ type channelItem struct {
 type nodeItem struct {
 	callsign  string
 	shortName string // Meshtastic User.short_name — 4-ish char badge
+	// nodeNum is the unique Meshtastic radio identity
+	// (MyNodeInfo.my_node_num). Carried on the nodeItem so tab
+	// completion and /whois can disambiguate multiple radios that
+	// share a longname — three "retr0h" radios all have the same
+	// callsign but different nodeNums.
+	nodeNum   uint32
 	state     string // "online", "offline", "failed", "muted"
 	fav       bool
 	lastHeard string // display string like "2m", "14:02", "3h"; caller-computed
@@ -487,6 +493,7 @@ func newModel(demo *Demo, dest string) model {
 						m.nodes = append(m.nodes, nodeItem{
 							callsign:  name,
 							shortName: n.shortName,
+							nodeNum:   n.nodeNum,
 							state:     state,
 							fav:       n.favorite,
 							lastHeard: "cached",
@@ -521,6 +528,7 @@ func newModel(demo *Demo, dest string) model {
 						}
 						m.nodes = append(m.nodes, nodeItem{
 							callsign:  msg.from,
+							nodeNum:   msg.fromNum,
 							state:     "offline",
 							lastHeard: msg.time,
 							lastSNR:   msg.snr,
@@ -555,6 +563,33 @@ func newModel(demo *Demo, dest string) model {
 	m.myNodeNum = demo.NodeNum
 	if len(demo.Nodes) > 0 {
 		m.nodesByNum[demo.NodeNum] = 0
+		m.nodes[0].nodeNum = demo.NodeNum
+	}
+	// Demo peers don't individually carry node-nums in the fixture,
+	// but the Messages slice does via fromNum. Backfill each
+	// not-yet-mapped peer's node num from the first message that
+	// mentions them so tab-completion disambiguation + nav-w have a
+	// hex to address, same as live mode.
+	for _, msg := range demo.Messages {
+		if msg.fromNum == 0 || msg.mine {
+			continue
+		}
+		if _, ok := m.nodesByNum[msg.fromNum]; ok {
+			continue
+		}
+		for i := range m.nodes {
+			if i == 0 {
+				continue
+			}
+			if m.nodes[i].nodeNum != 0 {
+				continue
+			}
+			if m.nodes[i].callsign == msg.from {
+				m.nodes[i].nodeNum = msg.fromNum
+				m.nodesByNum[msg.fromNum] = i
+				break
+			}
+		}
 	}
 
 	// Telemetry + config snapshot — same fields live mode sets from
@@ -914,6 +949,7 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	item := nodeItem{
 		callsign:  callsign,
 		shortName: msg.shortName,
+		nodeNum:   msg.nodeNum,
 		state:     state,
 		lastHeard: lastHeard,
 		heardRank: int(time.Since(msg.lastHeardAt).Seconds()),
@@ -999,6 +1035,7 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		// stable so all references stay valid).
 		m.nodes = append(m.nodes, nodeItem{
 			callsign:  from,
+			nodeNum:   msg.fromNum,
 			state:     "online",
 			lastHeard: "now",
 			lastSNR:   msg.snr,
@@ -1072,6 +1109,17 @@ func humanDuration(d time.Duration) string {
 // out-of-range is a no-op.
 func (m *model) nodeNumOf(callsign string) uint32 {
 	target := strings.ToLower(strings.TrimSpace(callsign))
+	// Meshtastic node-id notation: "!<hex>" or "0x<hex>" — the
+	// unambiguous way to address a specific radio when multiple
+	// peers share a longname. Parsed first so /whois !103d20cd
+	// always resolves to that exact node num regardless of
+	// NodeDB state.
+	if num, ok := parseNodeHex(target); ok {
+		if _, exists := m.nodesByNum[num]; exists {
+			return num
+		}
+		return num // still return the num even if not in m.nodes so callers can see we parsed it
+	}
 	// Exact.
 	for num, idx := range m.nodesByNum {
 		if idx < len(m.nodes) && strings.ToLower(m.nodes[idx].callsign) == target {
@@ -1093,6 +1141,41 @@ func (m *model) nodeNumOf(callsign string) uint32 {
 	return 0
 }
 
+// parseNodeHex recognises the two Meshtastic node-id spellings:
+// "!<hex>" (canonical ! notation the phone app uses) and "0x<hex>"
+// (our own "node 0x…" fallback). Returns the node num and true on a
+// successful parse.
+func parseNodeHex(s string) (uint32, bool) {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "!") {
+		s = s[1:]
+	} else if strings.HasPrefix(strings.ToLower(s), "0x") {
+		s = s[2:]
+	} else if strings.HasPrefix(strings.ToLower(s), "node 0x") {
+		s = s[len("node 0x"):]
+	} else {
+		return 0, false
+	}
+	if s == "" {
+		return 0, false
+	}
+	var n uint64
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= '0' && r <= '9':
+			n = n<<4 | uint64(r-'0')
+		case r >= 'a' && r <= 'f':
+			n = n<<4 | uint64(r-'a'+10)
+		default:
+			return 0, false
+		}
+		if n > 0xFFFFFFFF {
+			return 0, false
+		}
+	}
+	return uint32(n), true
+}
+
 // lookupNode returns a pointer to the nodeItem matching callsign (exact
 // case-insensitive match). nil if no such node is known. Every
 // argumented ham command routes through this so we build reports from
@@ -1111,6 +1194,17 @@ func (m *model) lookupNode(callsign string) *nodeItem {
 		return nil
 	}
 	target := strings.ToLower(strings.TrimSpace(callsign))
+	// Meshtastic node-id notation lands here straight from tab
+	// completion's collision-disambiguation path — "!<hex>" means
+	// "exactly this radio, don't fuzzy-match". Resolve via
+	// nodesByNum so three radios sharing a longname each address
+	// uniquely.
+	if num, ok := parseNodeHex(target); ok {
+		if idx, mapped := m.nodesByNum[num]; mapped && idx < len(m.nodes) {
+			return &m.nodes[idx]
+		}
+		return nil
+	}
 	// Pass 1: exact.
 	for i := range m.nodes {
 		if strings.ToLower(m.nodes[i].callsign) == target {

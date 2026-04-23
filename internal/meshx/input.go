@@ -68,17 +68,23 @@ func (m *model) handleTab(dir int) {
 	}
 
 	match := m.tab.matches[m.tab.cursor]
-	newText, newCursor := applyCompletion(value, m.tab.start, m.tab.end, match)
+	newText, newCursor := applyCompletion(value, m.tab.start, m.tab.end, match.insert)
 	m.input.SetValue(newText)
 	m.input.SetCursor(newCursor)
 	// Update end to the new replacement end so next cycle replaces
 	// exactly what we just inserted (without the trailing space).
-	m.tab.end = m.tab.start + len(match)
+	m.tab.end = m.tab.start + len(match.insert)
 
 	// Feedback when multiple choices exist — irssi shows the set.
+	// Use each match's display string so callsign collisions render
+	// with their shortname / hex-id disambiguator.
 	if len(m.tab.matches) > 1 {
+		labels := make([]string, len(m.tab.matches))
+		for i, m := range m.tab.matches {
+			labels[i] = m.display
+		}
 		m.flash = fmt.Sprintf("%d/%d  %s", m.tab.cursor+1, len(m.tab.matches),
-			strings.Join(m.tab.matches, "  "))
+			strings.Join(labels, "  "))
 	} else {
 		m.flash = ""
 	}
@@ -453,10 +459,13 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// selectedSender returns the callsign associated with the current
-// selection. In the messages pane, that's the message's sender. In
-// the nodes drawer, the highlighted callsign. Empty if no valid
-// target (e.g. selection is a "me" message or a system notification).
+// selectedSender returns the target identifier associated with the
+// current selection. In the messages pane, that's the message's
+// sender callsign (using !<hex> via fromNum if the callsign is
+// ambiguous across multiple radios). In the nodes drawer, the
+// highlighted node's !<hex> when its callsign collides with another
+// row's, otherwise the plain callsign. Empty if no valid target
+// (e.g. selection is a "me" message or a system notification).
 func (m model) selectedSender() string {
 	switch m.focused {
 	case paneMessages:
@@ -467,14 +476,46 @@ func (m model) selectedSender() string {
 		if msg.mine || msg.from == "" {
 			return ""
 		}
+		// If the sender's callsign collides with another node in
+		// m.nodes, prefer its node num so /whois /tr /ping land
+		// exactly on the peer that sent THIS message, not another
+		// radio that happens to share the longname.
+		if msg.fromNum != 0 && m.isCallsignAmbiguous(msg.from) {
+			return fmt.Sprintf("!%08x", msg.fromNum)
+		}
 		return msg.from
 	case paneNodes:
 		sorted := m.sortedNodes()
-		if m.selectedNd < len(sorted) {
-			return sorted[m.selectedNd].callsign
+		if m.selectedNd >= len(sorted) {
+			return ""
 		}
+		sel := sorted[m.selectedNd]
+		if sel.nodeNum != 0 && m.isCallsignAmbiguous(sel.callsign) {
+			return fmt.Sprintf("!%08x", sel.nodeNum)
+		}
+		return sel.callsign
 	}
 	return ""
+}
+
+// isCallsignAmbiguous reports whether two or more nodes in m.nodes
+// share the given callsign — triggers the !<hex> fallback used by
+// selectedSender so nav-key commands (w, t, p, r) route to the
+// exact selected radio rather than an arbitrary map-iteration pick.
+func (m model) isCallsignAmbiguous(callsign string) bool {
+	if callsign == "" {
+		return false
+	}
+	count := 0
+	for i := range m.nodes {
+		if m.nodes[i].callsign == callsign {
+			count++
+			if count > 1 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // prefillInput returns focus to the input bar with the given text

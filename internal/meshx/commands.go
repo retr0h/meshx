@@ -647,19 +647,6 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		fw := n.firmware
 		nodeNum := m.nodeNumOf(target)
-		// Prefer self when the target matches our own callsign — on
-		// meshes where multiple radios share a longname ("retr0h" on
-		// a HELTEC + RAK + TRACKER), nodeNumOf's map iteration picks
-		// arbitrarily and the self-detect flips run-to-run. Force
-		// myNodeNum when we're clearly asking about ourselves so the
-		// battery / fw / chanutil enrichment always fires for /whois
-		// of self.
-		if m.myNodeNum != 0 {
-			self := strings.ToLower(strings.TrimSpace(m.myCallsign()))
-			if self != "" && strings.EqualFold(strings.TrimSpace(target), self) {
-				nodeNum = m.myNodeNum
-			}
-		}
 		isSelf := nodeNum != 0 && nodeNum == m.myNodeNum
 		// For our own node, fw lives on m.radioFirmware (from
 		// FromRadio.Metadata), not on the nodeItem — MyNodeInfo

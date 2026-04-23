@@ -850,7 +850,18 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 	if nameBudget < 3 {
 		nameBudget = 3
 	}
-	name := padOrTruncate(n.callsign, nameBudget)
+	// When the node has a shortname (Meshtastic 4-char badge),
+	// prefix it before the longname: "💀 retr0h". Disambiguates
+	// rows that share a longname (e.g. two "retr0h" radios with
+	// distinct shortnames) and matches the iPhone app's
+	// "Longname (!hex)" treatment — short identifier first,
+	// full identifier after. Falls back to longname alone when
+	// the peer doesn't broadcast a shortname.
+	display := n.callsign
+	if n.shortName != "" {
+		display = n.shortName + " " + n.callsign
+	}
+	name := padOrTruncate(display, nameBudget)
 
 	cell := bracketStyle.Render("[") +
 		" " + sigilStyle.Render(sigil) + " " +

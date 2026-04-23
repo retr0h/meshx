@@ -643,6 +643,16 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			hw = "unknown hw"
 		}
 		fw := n.firmware
+		nodeNum := m.nodeNumOf(target)
+		isSelf := nodeNum != 0 && nodeNum == m.myNodeNum
+		// For our own node, fw lives on m.radioFirmware (from
+		// FromRadio.Metadata), not on the nodeItem — MyNodeInfo
+		// doesn't carry firmware. Same story for battery /
+		// channel-util telemetry, which arrives via DeviceMetrics
+		// and is stored on the model root for self only.
+		if isSelf && fw == "" {
+			fw = m.radioFirmware
+		}
 		if fw == "" {
 			fw = "?"
 		}
@@ -653,11 +663,6 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// pretending a partial whois is a whole one.
 		ghost := strings.HasPrefix(n.callsign, "node 0x")
 
-		// Multi-line "server reply" block, irssi-style. Lines that
-		// begin with "👻 " are recognised by renderMessageRow's
-		// system branch and rendered with the ghost glyph in
-		// warn-orange while the prose stays in the regular lavender
-		// sys-style — no ANSI leakage, no reset mid-line.
 		var lines []string
 		if ghost {
 			lines = append(lines,
@@ -676,7 +681,25 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			fmt.Sprintf("state:  %s", n.state),
 			fmt.Sprintf("signal: %s", signalReport(n)),
 		)
-		if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
+		// Battery + channel-util are only tracked model-wide for
+		// self today. For peers we'd need a per-peer DeviceMetrics
+		// cache (TODO). Surface what we have.
+		if isSelf && m.hasTelemetry {
+			pct := "—"
+			switch {
+			case m.batteryLevel > 100:
+				pct = "pwr (USB / solar — no cell)"
+			case m.batteryLevel > 0:
+				pct = fmt.Sprintf("%d%%", m.batteryLevel)
+			}
+			if m.batteryVoltage > 0 {
+				lines = append(lines, fmt.Sprintf("battery: %s  %.2f V", pct, m.batteryVoltage))
+			} else {
+				lines = append(lines, fmt.Sprintf("battery: %s", pct))
+			}
+			lines = append(lines, fmt.Sprintf("chanutl: %.1f%%", m.channelUtil))
+		}
+		if nodeNum != 0 {
 			if pos, ok := m.peerPositions[nodeNum]; ok {
 				lines = append(
 					lines,
@@ -689,6 +712,13 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 					),
 					fmt.Sprintf("pos:    %s ago", humanDuration(time.Since(pos.at))),
 				)
+				// Distance from us if we also have a fix — same
+				// great-circle helper /ping uses.
+				if !isSelf && m.myLatitude != 0 && m.myLongitude != 0 {
+					if km := haversineKm(m.myLatitude, m.myLongitude, pos.latitude, pos.longitude); km > 0 {
+						lines = append(lines, fmt.Sprintf("dist:   %.1f km from you", km))
+					}
+				}
 			}
 		}
 		lines = append(lines, "end of /whois")

@@ -158,7 +158,20 @@ var helpEntries = map[string]helpEntry{
 	},
 	"info": {
 		usage:   "/info",
-		summary: "dump meshx's current knowledge — self id, peer-count breakdown, and which peers are still unresolved \"node 0x…\" placeholders",
+		summary: "dump meshX's current knowledge — self id, peer-count breakdown, and which peers are still unresolved \"node 0x…\" placeholders",
+	},
+	"nick": {
+		usage:   "/nick <longname>",
+		summary: "set the radio's User.long_name (up to 36 bytes) via AdminMessage.SetOwner; no reboot required",
+	},
+	"callsign": {usage: "/callsign <name>", summary: "ham-idiomatic alias for /nick"},
+	"tag": {
+		usage:   "/tag <text-or-emoji>",
+		summary: "set the radio's User.short_name (up to 4 bytes; usually one emoji) via AdminMessage.SetOwner",
+	},
+	"emoji": {
+		usage:   "/emoji <x>",
+		summary: "alias for /tag (most people set shortname to an emoji)",
 	},
 	"sync": {
 		usage:   "/sync",

@@ -51,7 +51,7 @@ meshx/
 │   ├── palette.go               # maxheadroom color constants
 │   └── doc.go                   # package doc
 └── docs/
-    ├── keymap.md                # every keybinding and /command
+    ├── commands.md                # every keybinding and /command
     ├── development.md           # setup, testing, conventions
     └── contributing.md          # PR workflow
 ```
@@ -121,7 +121,7 @@ replaces the log until ESC. No persistent side drawers.
 
 ## Commands reference (summary)
 
-Full list in `docs/keymap.md`. The ham set:
+Full list in `docs/commands.md`. The ham set:
 
 `/cq  /cqr  /rs  /73  /88  /qsl  /qth  /grid  /sked  /qrz  /qrm  /qsb  /sk  /wx  /mesh  /k`
 

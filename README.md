@@ -121,7 +121,7 @@ meshX sits at the intersection of three lineages:
 
 ## 📚 Docs
 
-- [docs/keymap.md](docs/keymap.md) — every keybinding and slash-command
+- [docs/commands.md](docs/commands.md) — every keybinding and slash-command, with the Meshtastic API call each command makes
 - [docs/development.md](docs/development.md) — setup, testing, conventions
 - [docs/contributing.md](docs/contributing.md) — PR workflow
 

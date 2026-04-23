@@ -133,19 +133,21 @@ mode with no argument.
 
 ## Overlay and util /commands
 
-| Command                  | Meaning                                               |
-| ------------------------ | ----------------------------------------------------- |
-| `/channels`              | open channels overlay                                 |
-| `/nodes`                 | open nodes overlay (BitchX-style bracketed grid)      |
-| `/join <channel>`        | switch to named channel                               |
-| `/channel list`          | same as `/channels`                                   |
-| `/search <pattern>`      | run a search and jump to first hit (aliases: `/find`) |
-| `/config`                | show radio + identity configuration                   |
+| Command                  | Meaning                                                         |
+| ------------------------ | --------------------------------------------------------------- |
+| `/channels`              | open channels overlay                                           |
+| `/nodes`                 | open nodes overlay (BitchX-style bracketed grid)                |
+| `/join <channel>`        | switch to named channel                                         |
+| `/channel list`          | same as `/channels`                                             |
+| `/search <pattern>`      | run a search and jump to first hit (aliases: `/find`)           |
+| `/config`                | show radio + identity configuration                             |
 | `/info`                  | dump meshX state — own id, peer counts, unresolved placeholders |
-| `/sync`                  | ask the radio to re-dump its NodeDB (WantConfigId)    |
-| `/clear`                 | clear local scrollback (does not unsend)              |
-| `/help`                  | open the help overlay                                 |
-| `/exit` / `/quit` / `/q` | exit the app                                          |
+| `/sync`                  | ask the radio to re-dump its NodeDB (WantConfigId)              |
+| `/nick <longname>`       | set the radio's `User.long_name` (aliases: `/callsign`)         |
+| `/tag <emoji-or-text>`   | set the radio's `User.short_name` (aliases: `/emoji`)           |
+| `/clear`                 | clear local scrollback (does not unsend)                        |
+| `/help`                  | open the help overlay                                           |
+| `/exit` / `/quit` / `/q` | exit the app                                                    |
 
 ## Notes on channels
 
@@ -174,3 +176,28 @@ business in the real log.
 
 To wipe history: `rm ~/.meshx/meshx.db` (or `/clear` clears only the in-memory
 view for this session).
+
+## Meshtastic API mapping
+
+Everything meshX does on the wire is standard Meshtastic protobuf — any other
+client (phone app, Python CLI, web UI) can consume our packets and vice-versa.
+This table is the quick cross-reference for what each slash command sends and
+what protobuf field each display surface reads.
+
+| Command                                            | Wire format                                                                                                     | Meshtastic field / API                                                                        |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| chat / `/73` / `/qsl` / `/cq` / `/wx` / `/grid`    | `MeshPacket` with `Data.portnum = TEXT_MESSAGE_APP`, `Data.payload` = UTF-8 text, `To = 0xFFFFFFFF` (broadcast) | text is just bytes on the wire; receivers look up `from` in their NodeDB                      |
+| threaded reply (`/73 <call>`, `/cqr <call>`, etc.) | adds `Data.reply_id = <parent packet id>` to the same TEXT_MESSAGE_APP packet                                   | firmware doesn't parse it; clients that support threading render as quote                     |
+| `/nick <longname>`                                 | `ToRadio` with `AdminMessage.SetOwner.User.long_name`, port `ADMIN_APP`, addressed to own node num              | updates `User.long_name` on the radio; persisted to flash; next NodeInfo broadcast carries it |
+| `/tag <emoji>`                                     | same as `/nick` but fills `User.short_name`                                                                     | updates `User.short_name`; up to 4 bytes                                                      |
+| `/sync`                                            | `ToRadio.WantConfigId = <nonce>`                                                                                | triggers the radio to re-dump its NodeDB + channels + configs                                 |
+| `/whois <call>`                                    | local only — reads from `m.nodes[idx]` populated by earlier `FromRadio.NodeInfo` and `NODEINFO_APP` packets     | nothing on the wire                                                                           |
+| `/config`, `/info`                                 | local only — reads from the radio's initial handshake state                                                     | nothing on the wire                                                                           |
+| incoming `NODEINFO_APP`                            | `MeshPacket` with `Data.portnum = NODEINFO_APP`, payload is a `User` proto                                      | surfaces peer longname/shortname, upgrades 👻 ghost peers to real names                       |
+| incoming `POSITION_APP`                            | payload is a `Position` proto                                                                                   | feeds `/qth <call>` and status-bar `☖ <grid>`                                                 |
+| incoming `TELEMETRY_APP`                           | payload is a `Telemetry` proto with `DeviceMetrics` or `EnvironmentMetrics` variants                            | feeds status-bar `⚡ battery` and `/env <call>`                                               |
+
+meshX doesn't ship a radio configurator for LoRa region / modem preset / role —
+those require a reboot and the official Meshtastic app / CLI handle them
+robustly. `/nick` and `/tag` are the two User-record writes that are safe to do
+hot, so they're the only SetOwner-flavored verbs we expose.

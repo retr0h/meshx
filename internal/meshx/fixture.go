@@ -209,11 +209,16 @@ func DefaultDemo() *Demo {
 			{time: "14:14", text: "-!-    fw:     2.6.11", status: "system", group: 1},
 			{time: "14:14", text: "-!-    heard:  3m ago", status: "system", group: 1},
 			{time: "14:14", text: "-!-    state:  online", status: "system", group: 1},
-			{time: "14:14", text: "-!-    signal: hop 3, SNR -5.2 dB, RSSI -92 dBm", status: "system", group: 1},
+			{
+				time:   "14:14",
+				text:   "-!-    signal: hop 3, SNR -5.2 dB, RSSI -92 dBm",
+				status: "system",
+				group:  1,
+			},
 			{time: "14:14", text: "-!-    end of /whois", status: "system", group: 1},
 			{
 				time: "14:16", from: "retr0h", mine: true,
-				text: "running the 30w build again, let me know if it's too loud",
+				text:   "running the 30w build again, let me know if it's too loud",
 				status: "ack",
 			},
 			// Ghost peer — fromNum populated but NOT in m.nodes /

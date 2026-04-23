@@ -231,6 +231,11 @@ type model struct {
 	// ConfigComplete that fires after handshake.
 	syncPendingGhosts int
 
+	// startedAt — wall-clock moment the model was constructed, used
+	// by /info to report session uptime. Captured in newModel so
+	// demo and live modes both have a baseline.
+	startedAt time.Time
+
 	// Live-radio state. Zero-value is "demo mode — no transport".
 	pump        *pump          // non-nil when connected to a real radio
 	connectDest string         // "" = demo, else "/dev/cu.usbmodem2101" / tcp host
@@ -637,7 +642,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Only auto-dismiss if we're not still waiting for the radio.
 		if m.mode == modeSplash && (m.connectDest == "" || m.connected) {
 			m.mode = modeInput
-			m.input.Focus()
+			// Capture Focus()'s cmd — it's a fresh BlinkCmd with
+			// an incremented blinkTag. Discarding it orphans the
+			// in-flight blink chain (its pending BlinkMsg still
+			// carries the OLD tag, no longer matches), so the
+			// cursor freezes until something else happens to
+			// restart the chain (like a keypress).
+			return m, m.input.Focus()
 		}
 		return m, nil
 
@@ -740,10 +751,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioConfigCompleteMsg:
 		m.connected = true
-		// If splash already timed out, hand the user into input mode now.
+		// Capture any focus-returned blink cmd from the splash
+		// dismiss below, so the blink chain stays alive across
+		// the transition (see splashTimeoutMsg for the full
+		// explanation).
+		var focusCmd tea.Cmd
 		if m.mode == modeSplash {
 			m.mode = modeInput
-			m.input.Focus()
+			focusCmd = m.input.Focus()
 		}
 		// If the user issued /sync and we snapshotted a ghost count,
 		// emit a completion systemLine with the delta so they see
@@ -774,7 +789,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the canonical connection indicator; flashing "radio
 		// connected" at the bottom was duplicate signal in the same
 		// mesh-green.
-		return m, nil
+		return m, focusCmd
 
 	case radioDisconnectedMsg:
 		m.connected = false
@@ -802,8 +817,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			m.mode = modeInput
-			m.input.Focus()
-			return m, nil
+			// Return Focus()'s blink cmd — see splashTimeoutMsg
+			// for why discarding it kills the blink chain.
+			return m, m.input.Focus()
 		case modeSearch:
 			return m.updateSearch(msg)
 		case modeHelp:
@@ -842,12 +858,15 @@ func (m *model) openOverlay(kind overlayKind) {
 // closeOverlayToInput dismisses any open overlay, returns focus to the
 // log, and moves the cursor back to the input bar. This is the
 // canonical "land on typing" action that ESC always triggers.
-func (m *model) closeOverlayToInput() {
+// Returns the cmd textinput.Focus() emits — callers MUST return it
+// from Update so the cursor blink chain stays alive; see
+// splashTimeoutMsg for why.
+func (m *model) closeOverlayToInput() tea.Cmd {
 	m.overlay = overlayNone
 	m.focused = paneMessages
 	m.mode = modeInput
-	m.input.Focus()
 	m.flash = ""
+	return m.input.Focus()
 }
 
 // revealMessages is the "I just produced a message-pane entry, show
@@ -1022,7 +1041,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ctrlWPend = false
 		switch key {
 		case "j", "down":
-			m.closeOverlayToInput()
+			return m, m.closeOverlayToInput()
 		}
 		return m, nil
 	}
@@ -1037,8 +1056,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "esc", "i", "q":
 		// Close any active overlay and land on the input bar.
-		m.closeOverlayToInput()
-		return m, nil
+		return m, m.closeOverlayToInput()
 	case "j", "down":
 		m.moveSelectionGrid(0, +1)
 	case "k", "up":
@@ -1083,7 +1101,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Reply to the highlighted message — prefill /reply <sender>.
 		target := m.selectedSender()
 		if target != "" {
-			m.prefillInput("/reply " + target + " ")
+			return m, m.prefillInput("/reply " + target + " ")
 		}
 	case "t":
 		target := m.selectedSender()
@@ -1177,12 +1195,14 @@ func (m model) selectedSender() string {
 // prefillInput returns focus to the input bar with the given text
 // pre-populated and the cursor at the end — used by `r` reply to
 // start composing a /reply without forcing the user to type the
-// whole command from scratch.
-func (m *model) prefillInput(text string) {
+// whole command from scratch. Returns the cmd textinput.Focus()
+// emits — callers MUST return it from Update so the cursor blink
+// chain stays alive.
+func (m *model) prefillInput(text string) tea.Cmd {
 	m.mode = modeInput
 	m.input.SetValue(text)
 	m.input.CursorEnd()
-	m.input.Focus()
+	return m.input.Focus()
 }
 
 // sendPlainMessage appends text as an outgoing message from "me" on
@@ -2215,20 +2235,17 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 				m.flash = "usage: /reply <callsign> <text>"
 				return nil
 			}
-			m.prefillInput("/reply " + target + " ")
-			return nil
+			return m.prefillInput("/reply " + target + " ")
 		}
 		// /reply <call> <text>
 		sp := strings.IndexByte(rest, ' ')
 		if sp < 0 {
-			m.prefillInput("/reply " + rest + " ")
-			return nil
+			return m.prefillInput("/reply " + rest + " ")
 		}
 		target := rest[:sp]
 		body := strings.TrimSpace(rest[sp+1:])
 		if body == "" {
-			m.prefillInput("/reply " + target + " ")
-			return nil
+			return m.prefillInput("/reply " + target + " ")
 		}
 		m.messages = append(m.messages, messageItem{
 			time: "14:13", from: "me", mine: true,

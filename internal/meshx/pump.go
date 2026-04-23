@@ -32,7 +32,6 @@ import (
 	"github.com/retr0h/meshx/internal/meshx/transport"
 )
 
-// ─── PII / POSITION HANDLING ─────────────────────────────────────────
 //
 // Honest summary of what this program does and doesn't do with
 // location data. Read this before editing any position-related code.
@@ -84,7 +83,6 @@ import (
 //
 // Changes to these behaviors require review — they're load-bearing
 // for anyone using meshx on a public mesh.
-// ─────────────────────────────────────────────────────────────────────
 
 // Bubble Tea messages pushed from the transport pump into the
 // running program via p.Send(). The model's Update handler has a

@@ -1,0 +1,761 @@
+// Copyright (c) 2026 John Dewey
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to
+// deal in the Software without restriction, including without limitation the
+// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+// sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
+// input.go wires keyboard handling + mode transitions:
+//
+//   - updateInput / updateNav / updateSearch / updateHelp — the
+//     per-mode KeyMsg handlers the top-level Update dispatcher
+//     routes to.
+//   - handleTab — command / channel / nick completion cycling.
+//   - openOverlay / closeOverlayToInput / revealMessages /
+//     prefillInput — the "swap mode and focus the right surface"
+//     helpers shared across mode transitions.
+//   - Selection movement (moveSelection, moveSelectionGrid,
+//     jumpSelection, nextMsgIndexSkipGroups) and search/filter
+//     helpers (jumpToSearchHit, firstFilteredMsgIndex, etc.) that
+//     the nav handlers rely on.
+//
+// Top-level Update dispatcher + radio-message apply handlers stay
+// in app.go. Slash-command handlers stay in commands.go. Pure
+// rendering stays in ui.go.
+
+package meshx
+
+import (
+	"fmt"
+	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+func (m *model) handleTab(dir int) {
+	value := m.input.Value()
+	cursor := m.input.Position()
+
+	// First Tab of the cycle — compute matches for the current word.
+	if m.tab == nil {
+		matches, start, end := m.computeCompletions(value, cursor)
+		if len(matches) == 0 {
+			m.flash = "no completions"
+			return
+		}
+		stem := value[start:end]
+		m.tab = &tabState{matches: matches, cursor: 0, stem: stem, start: start, end: end}
+	} else {
+		// Already cycling — step and replace at last insertion range.
+		n := len(m.tab.matches)
+		if n == 0 {
+			return
+		}
+		m.tab.cursor = (m.tab.cursor + dir + n) % n
+	}
+
+	match := m.tab.matches[m.tab.cursor]
+	newText, newCursor := applyCompletion(value, m.tab.start, m.tab.end, match)
+	m.input.SetValue(newText)
+	m.input.SetCursor(newCursor)
+	// Update end to the new replacement end so next cycle replaces
+	// exactly what we just inserted (without the trailing space).
+	m.tab.end = m.tab.start + len(match)
+
+	// Feedback when multiple choices exist — irssi shows the set.
+	if len(m.tab.matches) > 1 {
+		m.flash = fmt.Sprintf("%d/%d  %s", m.tab.cursor+1, len(m.tab.matches),
+			strings.Join(m.tab.matches, "  "))
+	} else {
+		m.flash = ""
+	}
+}
+
+// RunDemo launches the Bubble Tea model with the canonical Demo
+// fixture and no radio transport. Used for UI iteration, screenshots,
+// and smoke testing the interface without a LoRa device handy.
+
+func (m *model) openOverlay(kind overlayKind) {
+	m.overlay = kind
+	m.mode = modeNav
+	m.input.Blur()
+	switch kind {
+	case overlayChannels:
+		m.focused = paneChannels
+	case overlayNodes:
+		m.focused = paneNodes
+	}
+}
+
+// closeOverlayToInput dismisses any open overlay, returns focus to the
+// log, and moves the cursor back to the input bar. This is the
+// canonical "land on typing" action that ESC always triggers.
+// Returns the cmd textinput.Focus() emits — callers MUST return it
+// from Update so the cursor blink chain stays alive; see
+// splashTimeoutMsg for why.
+func (m *model) closeOverlayToInput() tea.Cmd {
+	m.overlay = overlayNone
+	m.focused = paneMessages
+	m.mode = modeInput
+	m.flash = ""
+	return m.input.Focus()
+}
+
+// revealMessages is the "I just produced a message-pane entry, show
+// it to the user" helper used by nav-mode keys like p/t/w that fire
+// commands whose output lands as a systemBlock. Closes any open
+// overlay, focuses the messages pane, keeps nav mode so the cursor
+// sits on the fresh entry (j/k navigate the new block), and drops a
+// flash so the action feels acknowledged even when the user was
+// already looking at messages.
+func (m *model) revealMessages(flash string) {
+	m.overlay = overlayNone
+	m.focused = paneMessages
+	m.mode = modeNav
+	m.input.Blur()
+	m.flash = flash
+}
+
+// updateInput is the irssi default mode — cursor is in the bottom
+// input bar, typing composes. Special keys switch modes / open
+// overlays / switch channels.
+func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Ctrl+W prefix — vim window-nav across the stacked log / input.
+	if m.ctrlWPend {
+		m.ctrlWPend = false
+		switch key {
+		case "k", "up":
+			m.mode = modeNav
+			m.focused = paneMessages
+			m.input.Blur()
+		}
+		return m, nil
+	}
+
+	// Any key that isn't Tab/Shift+Tab clears completion cycle state.
+	if key != "tab" && key != "shift+tab" {
+		m.tab = nil
+	}
+
+	switch key {
+	case "ctrl+x":
+		return m, tea.Quit
+	case "ctrl+w":
+		m.ctrlWPend = true
+		return m, nil
+	case "ctrl+c":
+		// Ctrl+C on an empty input quits; on a populated input, clears.
+		if m.input.Value() == "" {
+			return m, tea.Quit
+		}
+		m.input.SetValue("")
+		return m, nil
+	case "esc":
+		// ESC from input enters scrollback nav on the log. Another ESC
+		// from nav lands you right back here — always <= 1 keystroke
+		// to the input bar.
+		m.mode = modeNav
+		m.focused = paneMessages
+		m.input.Blur()
+		m.flash = ""
+		return m, nil
+	case "alt+1":
+		m.switchChannelByIndex(0)
+		return m, nil
+	case "alt+2":
+		m.switchChannelByIndex(1)
+		return m, nil
+	case "alt+3":
+		m.switchChannelByIndex(2)
+		return m, nil
+	case "alt+4":
+		m.switchChannelByIndex(3)
+		return m, nil
+	case "ctrl+n":
+		m.cycleChannel(+1)
+		m.tab = nil
+		return m, nil
+	case "ctrl+p":
+		m.cycleChannel(-1)
+		m.tab = nil
+		return m, nil
+	case "ctrl+f", "pgdown":
+		// Scroll messages pane half-page down without leaving input
+		// mode — user composing can catch up on a fresh burst of
+		// traffic without Esc-ing into nav. Matches vim / less's
+		// Ctrl+F convention.
+		m.focused = paneMessages
+		for i := 0; i < 10; i++ {
+			m.moveSelectionGrid(0, +1)
+		}
+		return m, nil
+	case "ctrl+u", "pgup":
+		m.focused = paneMessages
+		for i := 0; i < 10; i++ {
+			m.moveSelectionGrid(0, -1)
+		}
+		return m, nil
+	case "tab":
+		m.handleTab(+1)
+		return m, nil
+	case "shift+tab":
+		m.handleTab(-1)
+		return m, nil
+	case "up":
+		// Recall previous input. On first Up, stash whatever's in the
+		// buffer so the user can Down-arrow back to it.
+		if len(m.inputHistory) == 0 {
+			return m, nil
+		}
+		if m.historyCursor == len(m.inputHistory) {
+			m.historyDraft = m.input.Value()
+		}
+		if m.historyCursor > 0 {
+			m.historyCursor--
+		}
+		m.input.SetValue(m.inputHistory[m.historyCursor])
+		m.input.CursorEnd()
+		return m, nil
+	case "down":
+		// Walk forward through history; past the newest entry restores
+		// the user's in-progress draft.
+		if m.historyCursor >= len(m.inputHistory) {
+			return m, nil
+		}
+		m.historyCursor++
+		if m.historyCursor == len(m.inputHistory) {
+			m.input.SetValue(m.historyDraft)
+		} else {
+			m.input.SetValue(m.inputHistory[m.historyCursor])
+		}
+		m.input.CursorEnd()
+		return m, nil
+	case "enter":
+		raw := strings.TrimSpace(m.input.Value())
+		if raw == "" {
+			return m, nil
+		}
+		m.input.SetValue("")
+		// Push to history — deduplicate consecutive repeats so the
+		// ring isn't full of the same thing.
+		if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != raw {
+			m.inputHistory = append(m.inputHistory, raw)
+			// Cap at 200 entries — plenty for a session.
+			if len(m.inputHistory) > 200 {
+				m.inputHistory = m.inputHistory[len(m.inputHistory)-200:]
+			}
+		}
+		m.historyCursor = len(m.inputHistory)
+		m.historyDraft = ""
+
+		if strings.HasPrefix(raw, "/") {
+			cmd := m.executeCommand(strings.TrimPrefix(raw, "/"))
+			return m, cmd
+		}
+		m.sendPlainMessage(raw)
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
+// updateNav — scrollback / overlay selection mode. j/k walks the
+// focused list, single letters run contextual commands. ESC (or i/q)
+// always lands back at the input bar — canonical "where I type."
+func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Ctrl+W prefix — window-nav. `j` drops to the input bar.
+	if m.ctrlWPend {
+		m.ctrlWPend = false
+		switch key {
+		case "j", "down":
+			return m, m.closeOverlayToInput()
+		}
+		return m, nil
+	}
+
+	switch key {
+	case "ctrl+x":
+		return m, tea.Quit
+	case "ctrl+c":
+		return m, tea.Quit
+	case "ctrl+w":
+		m.ctrlWPend = true
+		return m, nil
+	case "esc", "i", "q":
+		// Close any active overlay and land on the input bar.
+		return m, m.closeOverlayToInput()
+	case "j", "down":
+		m.moveSelectionGrid(0, +1)
+	case "k", "up":
+		m.moveSelectionGrid(0, -1)
+	case "h", "left":
+		m.moveSelectionGrid(-1, 0)
+	case "l", "right":
+		m.moveSelectionGrid(+1, 0)
+	case "g":
+		m.jumpSelection(0)
+	case "G":
+		m.jumpSelection(-1)
+	// Half-page scroll — Ctrl+F / Ctrl+U bindings. Ctrl+D is kept
+	// as an alias for Ctrl+F since both are common "half-page
+	// down" shapes across vim / less / irssi; PgDown / PgUp cover
+	// off-laptop keymaps. `d` / `u` retained as single-key
+	// shortcuts in the grid where no textinput is active.
+	case "ctrl+f", "ctrl+d", "f", "d", "pgdown":
+		for i := 0; i < 10; i++ {
+			m.moveSelectionGrid(0, +1)
+		}
+	case "ctrl+u", "u", "pgup":
+		for i := 0; i < 10; i++ {
+			m.moveSelectionGrid(0, -1)
+		}
+	case "enter", " ":
+		m.activate()
+	case "/":
+		m.mode = modeSearch
+		m.searchInput.SetValue("")
+		m.searchInput.Focus()
+		return m, nil
+	case "n":
+		if m.searchQuery != "" {
+			m.jumpToSearchHit(+1)
+		}
+	case "N":
+		if m.searchQuery != "" {
+			m.jumpToSearchHit(-1)
+		}
+	case "r":
+		// Reply to the highlighted message — prefill /reply <sender>.
+		target := m.selectedSender()
+		if target != "" {
+			return m, m.prefillInput("/reply " + target + " ")
+		}
+	case "t":
+		target := m.selectedSender()
+		if target != "" {
+			m.executeCommand("tr " + target)
+			m.revealMessages(fmt.Sprintf("traced %s — see messages", target))
+		}
+	case "p":
+		target := m.selectedSender()
+		if target != "" {
+			m.executeCommand("ping " + target)
+			m.revealMessages(fmt.Sprintf("pinged %s — see messages", target))
+		}
+	case "w":
+		target := m.selectedSender()
+		if target != "" {
+			// Delegate to the same code path /whois uses so nav-key
+			// output stays in lock-step with the slash command.
+			m.executeCommand("whois " + target)
+			m.revealMessages(fmt.Sprintf("whois %s — see messages", target))
+		}
+	case "*":
+		m.actOnSelectedNode(func(n *nodeItem) {
+			n.fav = !n.fav
+			m.flash = fmt.Sprintf(
+				"%s %s",
+				n.callsign,
+				toggleFlash(n.fav, "favorited", "unfavorited"),
+			)
+		})
+	case "m":
+		m.actOnSelectedNode(func(n *nodeItem) {
+			if n.state == "muted" {
+				n.state = "online"
+				m.flash = fmt.Sprintf("%s unmuted", n.callsign)
+			} else {
+				n.state = "muted"
+				m.flash = fmt.Sprintf("%s muted", n.callsign)
+			}
+		})
+	case "s":
+		if m.focused == paneNodes {
+			m.nodeSort = (m.nodeSort + 1) % 3
+			m.flash = fmt.Sprintf("nodes sorted by %s", m.nodeSort.label())
+		}
+	case "F":
+		if m.focused == paneNodes {
+			sorted := m.sortedNodes()
+			if m.selectedNd < len(sorted) {
+				m.nodeFilter = sorted[m.selectedNd].callsign
+				m.focused = paneMessages
+				m.selectedMsg = m.firstFilteredMsgIndex()
+				m.flash = fmt.Sprintf("filter: %s  (X to clear)", m.nodeFilter)
+			}
+		}
+	case "X":
+		if m.nodeFilter != "" {
+			m.nodeFilter = ""
+			m.flash = "filter cleared"
+		}
+	case "?":
+		m.mode = modeHelp
+	}
+	return m, nil
+}
+
+// selectedSender returns the callsign associated with the current
+// selection. In the messages pane, that's the message's sender. In
+// the nodes drawer, the highlighted callsign. Empty if no valid
+// target (e.g. selection is a "me" message or a system notification).
+func (m model) selectedSender() string {
+	switch m.focused {
+	case paneMessages:
+		if m.selectedMsg < 0 || m.selectedMsg >= len(m.messages) {
+			return ""
+		}
+		msg := m.messages[m.selectedMsg]
+		if msg.mine || msg.from == "" {
+			return ""
+		}
+		return msg.from
+	case paneNodes:
+		sorted := m.sortedNodes()
+		if m.selectedNd < len(sorted) {
+			return sorted[m.selectedNd].callsign
+		}
+	}
+	return ""
+}
+
+// prefillInput returns focus to the input bar with the given text
+// pre-populated and the cursor at the end — used by `r` reply to
+// start composing a /reply without forcing the user to type the
+// whole command from scratch. Returns the cmd textinput.Focus()
+// emits — callers MUST return it from Update so the cursor blink
+// chain stays alive.
+func (m *model) prefillInput(text string) tea.Cmd {
+	m.mode = modeInput
+	m.input.SetValue(text)
+	m.input.CursorEnd()
+	return m.input.Focus()
+}
+
+// sendPlainMessage appends text as an outgoing message from "me" on
+// the current channel. In live-radio mode it also enqueues a ToRadio
+// text packet and persists the row so it survives a restart; in demo
+// mode it just updates local state.
+
+func (m *model) switchChannelByIndex(i int) {
+	if i < 0 || i >= len(m.channels) {
+		return
+	}
+	m.currentChannel = m.channels[i].name
+	m.channels[i].unread = 0
+	m.selectedCh = i
+	m.flash = fmt.Sprintf("switched to %s", m.channels[i].name)
+}
+
+// cycleChannel moves to the previous (-1) or next (+1) channel.
+func (m *model) cycleChannel(dir int) {
+	if len(m.channels) == 0 {
+		return
+	}
+	cur := 0
+	for i, c := range m.channels {
+		if c.name == m.currentChannel {
+			cur = i
+			break
+		}
+	}
+	next := (cur + dir + len(m.channels)) % len(m.channels)
+	m.switchChannelByIndex(next)
+}
+
+// actOnSelectedNode resolves the selection to the CURRENT sorted view
+// (what the user actually sees), finds that node in the underlying
+// storage by callsign, and runs fn on it. Without this shim, every node
+// action would index into the unsorted storage array and hit the wrong
+// row — which is the "I selected KE0ABC but it muted Rural Signal" bug.
+func (m *model) moveSelection(delta int) {
+	switch m.focused {
+	case paneChannels:
+		m.selectedCh = clamp(m.selectedCh+delta, 0, len(m.channels)-1)
+	case paneMessages:
+		if m.nodeFilter != "" {
+			m.selectedMsg = m.nextFilteredMsgIndex(delta)
+			return
+		}
+		m.selectedMsg = m.nextMsgIndexSkipGroups(delta)
+	case paneNodes:
+		m.selectedNd = clamp(m.selectedNd+delta, 0, len(m.nodes)-1)
+	}
+}
+
+// nextMsgIndexSkipGroups moves the selection cursor by `delta` rows
+// but treats a multi-line group (e.g. /whois output) as ONE unit.
+// j lands on the first row of the next message or group; k lands on
+// the first row of the previous one. Continuation rows are skipped.
+func (m model) nextMsgIndexSkipGroups(delta int) int {
+	if len(m.messages) == 0 {
+		return 0
+	}
+	cur := m.selectedMsg
+	step := 1
+	if delta < 0 {
+		step = -1
+	}
+	for k := 0; k < abs(delta); k++ {
+		next := cur + step
+		// Skip continuation rows of groups — land only on first rows.
+		for next >= 0 && next < len(m.messages) {
+			g := m.messages[next].group
+			if g == 0 {
+				break // not grouped — always a valid landing row
+			}
+			// Grouped — landing valid only if it's the group's first row.
+			if next-step < 0 || next-step >= len(m.messages) ||
+				m.messages[next-step].group != g {
+				break
+			}
+			next += step
+		}
+		if next < 0 || next >= len(m.messages) {
+			break
+		}
+		cur = next
+	}
+	return clamp(cur, 0, len(m.messages)-1)
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+// moveSelectionGrid does 2D-aware navigation. On the users grid
+// (paneNodes), j/k step one row (== `cols` cells) and h/l step one
+// column. On linear panes (messages, channels), both axes collapse
+// to a single linear step — j is "down one", k is "up one",
+// and h/l behave the same as k/j so muscle memory still walks.
+func (m *model) moveSelectionGrid(dx, dy int) {
+	if m.focused != paneNodes {
+		// Linear list: combine the two axes into one step.
+		m.moveSelection(dx + dy)
+		return
+	}
+	cols := m.userGridCols()
+	if cols < 1 {
+		cols = 1
+	}
+	delta := dx + dy*cols
+	m.selectedNd = clamp(m.selectedNd+delta, 0, len(m.nodes)-1)
+}
+
+// userGridCols mirrors the layout math in renderNodesPane so
+// navigation arithmetic matches what's actually on screen.
+func (m model) userGridCols() int {
+	inner := m.w - 4
+	if inner < 18 {
+		inner = 18
+	}
+	cellW := 22
+	if inner >= 100 {
+		cellW = 24
+	}
+	if inner < 60 {
+		cellW = 18
+	}
+	cols := (inner + 1) / (cellW + 1)
+	if cols < 1 {
+		cols = 1
+	}
+	return cols
+}
+
+// firstFilteredMsgIndex returns the index of the first message whose
+// sender matches the active node filter; falls back to 0 if none.
+func (m model) firstFilteredMsgIndex() int {
+	for i, msg := range m.messages {
+		if m.msgMatchesFilter(msg) {
+			return i
+		}
+	}
+	return 0
+}
+
+// nextFilteredMsgIndex advances/rewinds selectedMsg to the next (+1)
+// or previous (-1) message that matches the active node filter,
+// skipping messages that don't match — so j/k jumps only through
+// the filtered set.
+func (m model) nextFilteredMsgIndex(delta int) int {
+	if len(m.messages) == 0 {
+		return 0
+	}
+	i := m.selectedMsg
+	step := delta
+	if step == 0 {
+		step = 1
+	}
+	for k := 1; k <= len(m.messages); k++ {
+		j := i + step*k
+		if j < 0 || j >= len(m.messages) {
+			return i
+		}
+		if m.msgMatchesFilter(m.messages[j]) {
+			return j
+		}
+	}
+	return i
+}
+
+// msgMatchesFilter is true when no filter is set or when the message
+// is from the filtered node.
+func (m model) msgMatchesFilter(msg messageItem) bool {
+	if m.nodeFilter == "" {
+		return true
+	}
+	return msg.from == m.nodeFilter
+}
+
+func (m *model) jumpSelection(to int) {
+	switch m.focused {
+	case paneChannels:
+		m.selectedCh = resolveJump(to, len(m.channels))
+	case paneMessages:
+		m.selectedMsg = resolveJump(to, len(m.messages))
+	case paneNodes:
+		m.selectedNd = resolveJump(to, len(m.nodes))
+	}
+}
+
+// nodeNumOf returns the Meshtastic node ID for a given callsign, or 0
+// if the callsign isn't in our NodeDB. Used by /whois /qth /env to
+// cross-reference peerPositions / peerEnv keyed by node ID. Uses the
+// same exact → prefix → substring match order as lookupNode so
+// emoji-suffixed callsigns resolve from partial input.
+
+func (m model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+x", "ctrl+c":
+		return m, tea.Quit
+	case "q", "esc", "?", "enter":
+		m.mode = modeNav
+		m.helpScroll = 0
+		return m, nil
+	case "j", "down":
+		m.helpScroll++
+	case "k", "up":
+		if m.helpScroll > 0 {
+			m.helpScroll--
+		}
+	case "ctrl+f", "ctrl+d", "d", "pgdown":
+		m.helpScroll += 10
+	case "u", "ctrl+u", "pgup":
+		m.helpScroll -= 10
+		if m.helpScroll < 0 {
+			m.helpScroll = 0
+		}
+	case "g", "home":
+		m.helpScroll = 0
+	case "G", "end":
+		m.helpScroll = 10000 // clamped in render
+	}
+	return m, nil
+}
+
+// updateSearch runs the `/` live-filter prompt. Enter commits the
+// query, jumps the selection to the first match in the focused pane,
+// and exits back to normal mode. ESC cancels + clears query.
+func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeNav
+		m.searchInput.Blur()
+		m.searchQuery = ""
+		m.flash = "search cleared"
+		return m, nil
+	case "enter":
+		q := strings.TrimSpace(m.searchInput.Value())
+		m.searchQuery = strings.ToLower(q)
+		m.mode = modeNav
+		m.searchInput.Blur()
+		if q == "" {
+			m.flash = ""
+			return m, nil
+		}
+		if ok, count := m.jumpToSearchHit(+1); ok {
+			m.flash = fmt.Sprintf("search: %d matches for %q", count, q)
+		} else {
+			m.flash = fmt.Sprintf("no match for %q", q)
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
+	return m, cmd
+}
+
+// jumpToSearchHit scans the focused pane's list from the current
+// selection and moves the selection to the next (+1) or previous (-1)
+// row whose content contains searchQuery. Returns (found, totalMatches).
+func (m *model) jumpToSearchHit(dir int) (bool, int) {
+	q := m.searchQuery
+	if q == "" {
+		return false, 0
+	}
+	match := func(s string) bool { return strings.Contains(strings.ToLower(s), q) }
+
+	var items []string
+	var cur *int
+	switch m.focused {
+	case paneChannels:
+		for _, c := range m.channels {
+			items = append(items, c.name)
+		}
+		cur = &m.selectedCh
+	case paneNodes:
+		for _, n := range m.sortedNodes() {
+			items = append(items, n.callsign)
+		}
+		cur = &m.selectedNd
+	default:
+		for _, msg := range m.messages {
+			items = append(items, msg.from+" "+msg.text)
+		}
+		cur = &m.selectedMsg
+	}
+	total := 0
+	for _, s := range items {
+		if match(s) {
+			total++
+		}
+	}
+	if total == 0 {
+		return false, 0
+	}
+	n := len(items)
+	start := *cur + dir
+	if dir == 0 {
+		start = 0
+	}
+	for k := 0; k < n; k++ {
+		i := (start + k*dir + n) % n
+		if match(items[i]) {
+			*cur = i
+			return true, total
+		}
+	}
+	return false, total
+}

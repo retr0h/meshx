@@ -26,22 +26,14 @@
 
 <p align="center">📡 Glitched-out terminal Meshtastic messenger.</p>
 
+<p align="center">
+  <a href="asset/ui.png"><img src="asset/ui.png" width="85%" alt="meshX in demo mode — BitchX-style log, glitched status bar, per-sender nick colors, threaded replies"></a>
+</p>
+
 An irssi-style chat client for your LoRa radio with a vintage BBS
 aesthetic — maxheadroom palette, `░▒▓█` glitch borders, BitchX-style
 rotating splash, mutt-grade keyboard, and ham-radio slash-commands
 baked in.
-
-```
-╔══════════════════════════════════════════════════════════════════════╗
-║ #PRIMARY  (9 msgs)                                                   ║
-║    ▎   14:02  KC7XYZ 🦀         hello world           ↝2h  -8.5dB    ║
-║ ██ ▎ * 14:05  Rural Signal 📡   !cq who's out there?  ↝3h  -11.2dB   ║
-║    ▎ * 14:06  me                !cqr copy hop 2, SNR -8.5 dB    ✓    ║
-║    ▎   14:07  W1ABC ⚡          thanks for the test   ↝1h  -5.0dB    ║
-╚══════════════════════════════════════════════════════════════════════╝
- KC7XYZ   [1:#primary (3)]  2:#admin  3:#emcomm  4:*secret* (1!)  [INPUT]
- [#primary] › /cq anyone out there_
-```
 
 ## ✨ Features
 
@@ -59,16 +51,19 @@ baked in.
 
 ## 📦 Install
 
-```sh
-go install github.com/retr0h/meshx@latest
+```bash
+curl -fsSL https://github.com/retr0h/meshx/raw/main/install.sh | sh
 ```
 
-Or build from source:
+Installs to `~/.local/bin` (or `/usr/local/bin` as root) — SHA256 checksums verified. Override with `MESHX_INSTALL_DIR=/some/path` or pin a version with `MESHX_VERSION=1.1.1`.
 
-```sh
+### 🔨 Build from source
+
+```bash
 git clone https://github.com/retr0h/meshx.git
 cd meshx
-go build -o meshx ./
+go build -o meshx .
+install -m 755 meshx ~/.local/bin/meshx
 ```
 
 ## 🚀 Usage
@@ -80,7 +75,7 @@ meshx            # (future) auto-detect and connect to your Meshtastic device
 
 ## ⚙️ How It Works
 
-meshx is a **Meshtastic client**. It connects to a radio you already
+meshX is a **Meshtastic client**. It connects to a radio you already
 own (T-Beam, Heltec, RAK, Station G2, etc.) over one of three
 transports and reads the mesh:
 
@@ -89,7 +84,7 @@ transports and reads the mesh:
 3. 📱 **BLE** — future
 
 All three speak [Meshtastic's protobuf protocol](https://github.com/meshtastic/protobufs).
-meshx subscribes to `FromRadio` packets and emits `ToRadio` for sends,
+meshX subscribes to `FromRadio` packets and emits `ToRadio` for sends,
 surfacing everything in a scrollable terminal chat UI with vim/irssi
 ergonomics.
 
@@ -100,14 +95,14 @@ protobuf fields, so the transport drops in without any UI changes.
 
 ## 💡 Inspiration
 
-meshx sits at the intersection of three lineages:
+meshX sits at the intersection of three lineages:
 
 - **[irssi](https://irssi.org/)** — the input-first modal UI, the `/command` dispatcher, and the stable bottom status line with channel tabs come straight from irssi. `Alt+n` channel hop too.
 - **[BitchX](http://bitchx.sourceforge.net/)** — the rotating graffiti ASCII splash (different logo every launch), the bracketed `[ @nick ]` users grid, and the unapologetic neon palette are pure BitchX. (RIP caf.)
 - **[mutt](http://www.mutt.org/)** — the dense one-row-per-message log, `j/k` scrollback nav, `r` reply on selection, and the modal input ↔ nav distinction come from mutt.
 - **[vim](https://www.vim.org/)** — every window scrolls with `j/k/h/l/gg/G/Ctrl+D/Ctrl+U`, `Ctrl+W` for window nav, `/` + `n/N` for search.
 - **[tmux](https://github.com/tmux/tmux)** — `Ctrl+N / Ctrl+P` channel cycle and the giant flash-digit pane picker.
-- **[grind](https://github.com/retr0h/grind), [tlock](https://github.com/retr0h/tlock)** — sibling retr0h projects; meshx reuses their maxheadroom palette, `░▒▓█` block-border language, and block-art primitives.
+- **[grind](https://github.com/retr0h/grind), [tlock](https://github.com/retr0h/tlock)** — sibling retr0h projects; meshX reuses their maxheadroom palette, `░▒▓█` block-border language, and block-art primitives.
 
 ## 🗺️ Roadmap
 

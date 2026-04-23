@@ -5,7 +5,7 @@ working with code in this repository.
 
 ## Project Overview
 
-**meshx** is a glitched-out terminal Meshtastic messenger — an
+**meshX** is a glitched-out terminal Meshtastic messenger — an
 irssi-style chat client for LoRa radios with a vintage BBS aesthetic.
 It connects to a Meshtastic-compatible device (USB serial / TCP /
 future BLE), subscribes to the mesh, and surfaces everything in a

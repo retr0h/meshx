@@ -1,4 +1,4 @@
-# meshx keymap
+# meshX keymap
 
 Quick reference for every binding and `/command`. Inspired by irssi, BitchX,
 mutt, vim, and tmux.
@@ -107,7 +107,7 @@ on the mesh (ham etiquette). What's different is the outgoing packet carries
 `Data.reply_id` pointing at `<call>`'s most recent message we've seen, so any
 receiving client with threading support can display it as a reply.
 
-meshx renders incoming replies as a dim one-line quoted reference above the row:
+meshX renders incoming replies as a dim one-line quoted reference above the row:
 
 ```
   ┌ KC7XYZ 🦀 13:52  "Test, plz confirm"
@@ -141,7 +141,7 @@ mode with no argument.
 | `/channel list`          | same as `/channels`                                   |
 | `/search <pattern>`      | run a search and jump to first hit (aliases: `/find`) |
 | `/config`                | show radio + identity configuration                   |
-| `/info`                  | dump meshx state — own id, peer counts, unresolved placeholders |
+| `/info`                  | dump meshX state — own id, peer counts, unresolved placeholders |
 | `/sync`                  | ask the radio to re-dump its NodeDB (WantConfigId)    |
 | `/clear`                 | clear local scrollback (does not unsend)              |
 | `/help`                  | open the help overlay                                 |
@@ -149,8 +149,8 @@ mode with no argument.
 
 ## Notes on channels
 
-Channels are configured on the **radio** (name + PSK pair), not in meshx. Create
-channels via the official Meshtastic app / CLI; meshx imports them once the
+Channels are configured on the **radio** (name + PSK pair), not in meshX. Create
+channels via the official Meshtastic app / CLI; meshX imports them once the
 radio is configured. Planned:
 
 - `/channel add <meshtastic://url>` — import a channel shared by URL

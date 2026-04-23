@@ -87,16 +87,16 @@ renderers, transport pump) are unexported.
 
 ## Dependencies
 
-| Package                            | Purpose                                          |
-| ---------------------------------- | ------------------------------------------------ |
-| `charmbracelet/bubbletea`          | Elm-style TUI framework                          |
-| `charmbracelet/bubbles`            | textinput widget for input + search prompts     |
-| `charmbracelet/lipgloss`           | colors, borders, layout primitives               |
-| `spf13/cobra`                      | CLI command tree                                 |
-| `lmatte7/gomesh/...gomeshproto`    | Meshtastic protobuf definitions                  |
-| `go.bug.st/serial`                 | cross-platform USB-serial                        |
-| `google.golang.org/protobuf`       | proto marshal / unmarshal                        |
-| `mattn/go-sqlite3`                 | SQLite driver (CGo) for scrollback persistence   |
+| Package                         | Purpose                                        |
+| ------------------------------- | ---------------------------------------------- |
+| `charmbracelet/bubbletea`       | Elm-style TUI framework                        |
+| `charmbracelet/bubbles`         | textinput widget for input + search prompts    |
+| `charmbracelet/lipgloss`        | colors, borders, layout primitives             |
+| `spf13/cobra`                   | CLI command tree                               |
+| `lmatte7/gomesh/...gomeshproto` | Meshtastic protobuf definitions                |
+| `go.bug.st/serial`              | cross-platform USB-serial                      |
+| `google.golang.org/protobuf`    | proto marshal / unmarshal                      |
+| `mattn/go-sqlite3`              | SQLite driver (CGo) for scrollback persistence |
 
 ## Modal UI — where the code lives
 
@@ -157,19 +157,19 @@ report := signalReport(n)          // "hop 2, SNR -8.5 dB, RSSI -92 dBm"
 Every field on `nodeItem` (`lastSNR`, `lastRSSI`, `lastHops`, `hwModel`,
 `firmware`) is populated from Meshtastic protobuf in live-radio mode —
 `MeshPacket.rx_snr`, `rx_rssi`, `hop_start - hop_limit`,
-`MyNodeInfo.HardwareModel`, `firmware_version`. In demo mode the same fields
-are seeded from `DefaultDemo()` so the render code has one path.
+`MyNodeInfo.HardwareModel`, `firmware_version`. In demo mode the same fields are
+seeded from `DefaultDemo()` so the render code has one path.
 
 ## Demo fixture — one model, two producers
 
-There is no "demo renderer" or "live renderer" — the tea model has a single
-set of fields (`myNodeNum`, `nodes`, `channels`, `messages`, `radioFirmware`,
+There is no "demo renderer" or "live renderer" — the tea model has a single set
+of fields (`myNodeNum`, `nodes`, `channels`, `messages`, `radioFirmware`,
 `radioRegion`, `radioTxPower`, `batteryLevel`, `myGrid`, …) that every view
 function reads from. Two producers populate those fields:
 
 1. **Live radio** — the transport pump (`pump.go`) decodes each `FromRadio`
-   envelope into a `radio<Name>Msg` and sends it to the tea program; `Update`
-   in `demo.go` writes into the model fields.
+   envelope into a `radio<Name>Msg` and sends it to the tea program; `Update` in
+   `demo.go` writes into the model fields.
 2. **Demo fixture** — `newModel(DefaultDemo(), "")` copies the Demo struct's
    values into those same fields at construction time, sets `connected = true`
    and `hasTelemetry = true`, and hands control straight to the UI.
@@ -193,8 +193,8 @@ identical across serial and TCP: `0x94 0xc3 <hi> <lo> <protobuf>` — see
 `framing.go`.
 
 `AutoDetectMeshtastic(timeout)` walks `/dev/cu.*` ports, handshakes each, and
-returns the first that talks Meshtastic. Used by `cmd.Execute` when no
-`--port` is given.
+returns the first that talks Meshtastic. Used by `cmd.Execute` when no `--port`
+is given.
 
 `pump.go` runs as a goroutine kicked off from the model's `Init()` via
 `openPumpMsg` — deferring the spawn until after `tea.Program.Run()` avoids a
@@ -206,23 +206,23 @@ returns the first that talks Meshtastic. Used by `cmd.Execute` when no
 Live-radio mode opens `~/.meshx/meshx.db` (WAL journal, `_busy_timeout=5000`)
 via `openStorage(path)` and replays the last 500 messages on boot. `storage.go`
 is the whole surface: `defaultStoragePath`, `openStorage`, `saveMessage`,
-`loadMessages`. The schema is one flat `messages` table mirroring
-`messageItem` plus a `channel` column.
+`loadMessages`. The schema is one flat `messages` table mirroring `messageItem`
+plus a `channel` column.
 
-Demo mode never touches the DB (`m.db == nil`). System / flash rows are
-skipped on save — stale by the time you read them back. Write errors are
+Demo mode never touches the DB (`m.db == nil`). System / flash rows are skipped
+on save — stale by the time you read them back. Write errors are
 logged-then-swallowed; losing history beats crashing the UI.
 
 ## Threading
 
 Directed ham verbs (`/73 <call>`, `/qsl <call>`, `/sk <call>`, `/rs <call>`,
-`/cqr <call>`, `/k <call>`, `/qrm <call>`, `/qsb <call>`) set
-`Data.reply_id` on the outgoing packet pointing at the target's most recent
-message's `MeshPacket.id`. The lookup runs via `replyTargetFor(call)` in
-`demo.go`; `newTextToRadio(text, channel, replyID)` threads it onto the wire.
+`/cqr <call>`, `/k <call>`, `/qrm <call>`, `/qsb <call>`) set `Data.reply_id` on
+the outgoing packet pointing at the target's most recent message's
+`MeshPacket.id`. The lookup runs via `replyTargetFor(call)` in `demo.go`;
+`newTextToRadio(text, channel, replyID)` threads it onto the wire.
 
-Receive side: `radioTextMsg` captures both `packetID` (the incoming packet's
-id) and `replyID`, and `applyTextMessage` records them on `messageItem`. The
+Receive side: `radioTextMsg` captures both `packetID` (the incoming packet's id)
+and `replyID`, and `applyTextMessage` records them on `messageItem`. The
 renderer checks `msg.replyID != 0` and, when the parent is findable in
 `m.messages`, prepends a dim quoted-parent line above the reply row:
 
@@ -231,8 +231,8 @@ renderer checks `msg.replyID != 0` and, when the parent is findable in
 › me  13:53  /73 KC7XYZ — 73 KC7XYZ                                  ✓
 ```
 
-`findMessageByPacketID` resolves parent lookups; `truncateRunes` caps the
-quoted body so long parents don't blow the width budget.
+`findMessageByPacketID` resolves parent lookups; `truncateRunes` caps the quoted
+body so long parents don't blow the width budget.
 
 ## Testing
 

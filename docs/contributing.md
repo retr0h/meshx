@@ -1,6 +1,6 @@
-# Contributing to meshx
+# Contributing to meshX
 
-Thanks for taking the time to contribute! meshx is an irssi-style terminal
+Thanks for taking the time to contribute! meshX is an irssi-style terminal
 Meshtastic messenger — we care about vim-grade ergonomics, a coherent
 vintage-BBS aesthetic, and honest data (no fake telemetry).
 
@@ -82,10 +82,10 @@ go build -o meshx .
 
 ## Scope reminders
 
-- meshx is a **client**, not a radio configurator. PSK/channel creation lives on
-  the radio side (official Meshtastic app). meshx imports channels; it does not
+- meshX is a **client**, not a radio configurator. PSK/channel creation lives on
+  the radio side (official Meshtastic app). meshX imports channels; it does not
   create them from scratch.
-- meshx is **text + telemetry**. No maps, no audio, no voice.
-- meshx is **terminal-first**. Every feature should work cleanly in a 80×24
+- meshX is **text + telemetry**. No maps, no audio, no voice.
+- meshX is **terminal-first**. Every feature should work cleanly in a 80×24
   vt100 at minimum. If you add something that needs more pixels, make it degrade
   gracefully.

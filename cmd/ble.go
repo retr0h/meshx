@@ -106,13 +106,13 @@ what bare ` + "`meshx`" + ` falls through to when no USB radio is plugged in.`,
 			return nil
 		}
 		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "   UUID\tLONGNAME\tSHORTNAME\tHW")
+		_, _ = fmt.Fprintln(tw, "   UUID\tLONGNAME\tSHORTNAME\tHW")
 		for _, d := range devs {
 			star := "  "
 			if d.Favorite {
 				star = " ★"
 			}
-			fmt.Fprintf(tw, "%s %s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(tw, "%s %s\t%s\t%s\t%s\n",
 				star, d.UUID, orDash(d.LongName), orDash(d.ShortName), orDash(d.HWModel),
 			)
 		}

@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -180,6 +181,33 @@ func backfillFromNum(db *sql.DB) (int, error) {
 		return 0, fmt.Errorf("commit backfill tx: %w", err)
 	}
 	return len(updates), nil
+}
+
+// expireStalePendingMessages finds every row whose status is still
+// "pending" after a prior session crashed or exited mid-flight, and
+// flips it to "fail" when its created_at is older than ttl. Called
+// from newModel before loadMessages replays, so the user sees the
+// stale rows as `✗` (and can hit `R` to resend them) rather than `…`
+// ghosts that nothing will ever ack. Returns the count updated so
+// the caller can surface it as a systemLine. Safe on nil db.
+func expireStalePendingMessages(db *sql.DB, ttl time.Duration) (int, error) {
+	if db == nil {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-ttl)
+	res, err := db.Exec(
+		`UPDATE messages SET status = 'fail'
+         WHERE status = 'pending' AND created_at < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("expire stale pending: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("expire stale pending rows affected: %w", err)
+	}
+	return int(n), nil
 }
 
 // saveMessage persists one messageItem under a channel. System rows

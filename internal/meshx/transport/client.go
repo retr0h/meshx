@@ -42,15 +42,18 @@ type Client interface {
 }
 
 // Dial opens a transport to the given destination. Dest is:
+//   - "ble:<uuid-or-mac>" — Bluetooth LE peripheral
 //   - A serial device path, e.g. "/dev/cu.usbserial-0200674E"
 //   - A TCP host:port, e.g. "192.168.1.42" (port defaults to 4403)
 //     or "meshtasticd.local:4403"
 //
-// The heuristic: if dest starts with "/dev/" or "COM" (Windows), use
-// serial; otherwise TCP. Callers can force the transport with the
-// typed constructors (DialSerial, DialTCP).
+// The heuristic: "ble:" prefix → BLE, "/dev/" or "COM" prefix →
+// serial, everything else → TCP. Callers can force the transport
+// with the typed constructors (DialSerial, DialTCP, DialBLE).
 func Dial(dest string) (Client, error) {
 	switch {
+	case strings.HasPrefix(dest, "ble:"):
+		return DialBLE(strings.TrimPrefix(dest, "ble:"))
 	case strings.HasPrefix(dest, "/dev/"), strings.HasPrefix(dest, "COM"):
 		return DialSerial(dest)
 	default:

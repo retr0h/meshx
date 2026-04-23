@@ -24,7 +24,8 @@ baked in.
 
 ## ✨ Features
 
-- 📡 **Connects to your Meshtastic radio** over USB serial or TCP (no radio needed for `--demo`)
+- 📡 **Connects to your Meshtastic radio** over USB serial, TCP, or Bluetooth LE (no radio needed for `meshx demo`)
+- 📱 **Bluetooth LE workflow** — `meshx ble scan` / `pair` / `list` / `connect` / `fav` to save multiple radios by uuid or friendly name and switch between them without re-pairing
 - ⌨️ **irssi-style modal UI** — input always live, `Esc` drops to scrollback nav
 - 💬 **mutt-grade message log** — dense one-row-per-message, zebra-striped, `j/k` walks
 - 🎯 **Ham-radio slash-commands** — `/cq`, `/73`, `/qth`, `/rs`, `/qrz`, `/sk`, `/mesh`, + 9 more
@@ -35,6 +36,9 @@ baked in.
 - 📑 **Tab completion** — commands, `#channels`, nicks; irssi nick-addressing quirk included
 - 🖥️ **Stable tmux-pane channel tabs** + `Alt+1..4` quick-hop
 - ❓ **Scrollable `?` help overlay** — every keybinding and command, vim-scrollable
+- 💾 **SQLite-backed history** — message log, node cache, and paired BLE devices survive restarts (`~/.meshx/meshx.db`)
+- 📌 **Ephemeral notices** — `/whois` / `/ping` / `/config` cards auto-expire after 60s with a fade; `/pin` or `P` holds them with `⌜ ⌟` corners
+- 🛠️ **Stale-send recovery** — `R` resends pending or failed messages; boot sweep flips zombie rows to `✗` so they're actionable
 
 ## 📦 Install
 
@@ -53,12 +57,15 @@ go build -o meshx .
 install -m 755 meshx ~/.local/bin/meshx
 ```
 
-## 🚀 Usage
+## 🚀 Quick start
 
 ```sh
-meshx --demo     # no radio required — canned conversation to try the UI
-meshx            # (future) auto-detect and connect to your Meshtastic device
+meshx demo      # try the UI with no radio
+meshx           # auto-connect to a plugged-in radio (USB → saved BLE)
+meshx --help    # usb, tcp, ble subcommand trees
 ```
+
+Full command + keybinding reference in [`docs/commands.md`](docs/commands.md).
 
 ## ⚙️ How It Works
 
@@ -68,17 +75,18 @@ transports and reads the mesh:
 
 1. 🔌 **USB serial** (default) — plug the radio in; auto-detect port
 2. 🌐 **TCP** — radios with WiFi expose port 4403, or connect to `meshtasticd`
-3. 📱 **BLE** — future
+3. 📱 **Bluetooth LE** — `meshx ble pair <uuid>` saves a device, then `meshx ble connect <name>` opens the TUI over Bluetooth
 
-All three speak [Meshtastic's protobuf protocol](https://github.com/meshtastic/protobufs).
-meshX subscribes to `FromRadio` packets and emits `ToRadio` for sends,
-surfacing everything in a scrollable terminal chat UI with vim/irssi
-ergonomics.
+All three speak [Meshtastic's protobuf protocol](https://github.com/meshtastic/protobufs)
+and funnel through one `Client` interface, so the UI is oblivious to
+which transport's carrying the packets. meshX subscribes to
+`FromRadio`, emits `ToRadio` for sends, and surfaces everything in a
+scrollable terminal chat UI with vim/irssi ergonomics.
 
-Demo mode (`--demo`) ships canned messages + fake telemetry so you can
-try the UI without a radio. Every report (`/rs`, `/ping`, `/tr`,
+`meshx demo` ships canned messages + fake telemetry so you can try
+the UI without a radio. Every report (`/rs`, `/ping`, `/tr`,
 `/whois`) pulls from node state that maps 1:1 to real Meshtastic
-protobuf fields, so the transport drops in without any UI changes.
+protobuf fields.
 
 ## 💡 Inspiration
 
@@ -93,19 +101,9 @@ meshX sits at the intersection of three lineages:
 
 ## 🗺️ Roadmap
 
-- [x] 🎨 Full irssi-style UI in demo mode
-- [x] 🧑‍🎨 BitchX rotating splash
-- [x] 📋 Ham-radio `/command` set (16 shortcuts)
-- [x] 👥 Bracketed users grid
-- [x] 🔎 Tab completion + `/` search + `n/N` cycling
-- [ ] 🔌 USB-serial Meshtastic transport
-- [ ] 🌐 TCP transport (`meshtasticd` / WiFi radio)
-- [ ] 📡 Live telemetry surfacing (battery, SNR, RSSI per peer)
-- [ ] 🔐 PSK import — `/channel add <meshtastic://url>`
-- [ ] 🗺️ QR code share — `/channel share <name>`
-- [x] 💾 SQLite scrollback persistence — message log survives restarts (`~/.meshx/meshx.db`); node cache still in-memory
-- [ ] 📱 BLE transport (stretch)
-- [ ] 🎨 Low-color / no-truecolor fallback palette — detect `$COLORTERM` / `$TERM` and swap the neon maxheadroom hex values for a 16-color ANSI ladder when the terminal doesn't support 24-bit color; same plan for the `░▒▓█` block chrome (ASCII fallback `===` / `---` for terminals without unicode block support)
+- [ ] 🔐 **PSK import** — `/channel add <meshtastic://url>` to paste a shared-channel link and join without manually typing the PSK
+- [ ] 🗺️ **QR code share** — `/channel share <name>` emits the meshtastic:// URL as ASCII QR for phone-side scanning
+- [ ] 🎨 **Low-color / no-truecolor fallback palette** — detect `$COLORTERM` / `$TERM` and swap the neon maxheadroom hex values for a 16-color ANSI ladder when the terminal doesn't support 24-bit color; ASCII fallback (`===` / `---`) for the `░▒▓█` chrome on terminals without unicode block support
 
 ## 📚 Docs
 

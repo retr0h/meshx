@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -83,13 +84,7 @@ func BLEListDevices() ([]BLEDeviceView, error) {
 	}
 	out := make([]BLEDeviceView, 0, len(raw))
 	for _, d := range raw {
-		out = append(out, BLEDeviceView{
-			UUID:      d.UUID,
-			LongName:  d.LongName,
-			ShortName: d.ShortName,
-			HWModel:   d.HWModel,
-			Favorite:  d.Favorite,
-		})
+		out = append(out, BLEDeviceView(d))
 	}
 	return out, nil
 }
@@ -113,7 +108,7 @@ func BLEForget(out io.Writer, target string) error {
 	if err := forgetBLEDevice(db, d.UUID); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "forgot %s (%s)\n", d.DisplayName(), d.UUID)
+	_, _ = fmt.Fprintf(out, "forgot %s (%s)\n", d.DisplayName(), d.UUID)
 	return nil
 }
 
@@ -149,7 +144,7 @@ func BLEMarkFavorite(out io.Writer, target string) error {
 	if err := setBLEFavorite(db, d.UUID); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "★ %s (%s) is now the auto-connect favorite\n", d.DisplayName(), d.UUID)
+	_, _ = fmt.Fprintf(out, "★ %s (%s) is now the auto-connect favorite\n", d.DisplayName(), d.UUID)
 	return nil
 }
 
@@ -178,7 +173,7 @@ func BLEScan(out io.Writer) error {
 		hits = map[string]*hit{}
 	)
 
-	fmt.Fprintln(out, "scanning for Meshtastic radios over BLE (10s)…")
+	_, _ = fmt.Fprintln(out, "scanning for Meshtastic radios over BLE (10s)…")
 
 	wantUUID, err := bluetooth.ParseUUID(meshtasticServiceUUID)
 	if err != nil {
@@ -190,15 +185,8 @@ func BLEScan(out io.Writer) error {
 	// that don't advertise it aren't interesting to us.
 	scanDone := make(chan error, 1)
 	go func() {
-		scanDone <- adapter.Scan(func(a *bluetooth.Adapter, res bluetooth.ScanResult) {
-			advertisesMeshtastic := false
-			for _, u := range res.AdvertisementPayload.ServiceUUIDs() {
-				if u == wantUUID {
-					advertisesMeshtastic = true
-					break
-				}
-			}
-			if !advertisesMeshtastic {
+		scanDone <- adapter.Scan(func(_ *bluetooth.Adapter, res bluetooth.ScanResult) {
+			if !slices.Contains(res.ServiceUUIDs(), wantUUID) {
 				return
 			}
 			mu.Lock()
@@ -231,13 +219,16 @@ func BLEScan(out io.Writer) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(hits) == 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "no Meshtastic radios responded.")
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "troubleshooting:")
-		fmt.Fprintln(out, "  - confirm Bluetooth is on for both the host and the radio")
-		fmt.Fprintln(out, "  - the radio must have BLE enabled in its config (Meshtastic default)")
-		fmt.Fprintln(out, "  - on macOS, grant the first-time Bluetooth permission prompt")
+		_, _ = fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out, "no Meshtastic radios responded.")
+		_, _ = fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out, "troubleshooting:")
+		_, _ = fmt.Fprintln(out, "  - confirm Bluetooth is on for both the host and the radio")
+		_, _ = fmt.Fprintln(
+			out,
+			"  - the radio must have BLE enabled in its config (Meshtastic default)",
+		)
+		_, _ = fmt.Fprintln(out, "  - on macOS, grant the first-time Bluetooth permission prompt")
 		return nil
 	}
 
@@ -255,66 +246,81 @@ func BLEScan(out io.Writer) error {
 		return ordered[i].localName < ordered[j].localName
 	})
 
-	fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out)
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "UUID\tNAME\tRSSI")
+	_, _ = fmt.Fprintln(tw, "UUID\tNAME\tRSSI")
 	for _, h := range ordered {
 		name := h.localName
 		if name == "" {
 			name = "—"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%d dBm\n", h.address, name, h.rssi)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%d dBm\n", h.address, name, h.rssi)
 	}
 	_ = tw.Flush()
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "  → `meshx ble pair <uuid>` to save one of these")
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, "  → `meshx ble pair <uuid>` to save one of these")
 	return nil
 }
 
-// BLEPair initiates OS-level pairing for the given uuid and saves
-// the device to sqlite on success. The transport-layer pair flow
-// (discover, connect, bond, pull metadata) lands in a follow-up;
-// today this is a scaffolded entrypoint so the CLI tree compiles
-// and the user gets a clear "not yet" message instead of a silent
-// no-op.
+// BLEPair registers a Bluetooth device in the local ble_devices
+// table so it shows up in `meshx ble list` and can be targeted by
+// `meshx ble connect`. The OS-level pairing / bonding dialog still
+// has to be accepted separately (the platform handles it on first
+// Connect — macOS pops a system prompt, Linux goes through BlueZ's
+// agent) before the TUI can actually exchange data.
+//
+// Metadata (longname / shortname / hardware) is left empty and
+// filled in lazily: the first time the user runs `meshx ble
+// connect <uuid>` successfully, the live session's upsertNode
+// populates those fields from the radio's MyNodeInfo stream.
 func BLEPair(out io.Writer, _ io.Reader, uuid string) error {
-	fmt.Fprintln(out, "BLE pair is not yet implemented — transport layer lands in a follow-up.")
-	fmt.Fprintf(out, "Target device uuid: %s\n", uuid)
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "In the meantime you can manually seed a device to test the CLI:")
-	fmt.Fprintln(out, "  sqlite3 ~/.meshx/meshx.db \\")
-	fmt.Fprintln(
-		out,
-		`    "INSERT INTO ble_devices (uuid, long_name) VALUES ('$UUID', 'TestRadio')"`,
-	)
-	return nil
-}
-
-// RunBLE opens the TUI against a saved Bluetooth device. Hits the
-// same stub as BLEPair until the transport lands — the cmd layer
-// needs the entrypoint to compile, and making it explicit (rather
-// than "command not found") gives the user a clear signal of where
-// we are in the rollout.
-func RunBLE(target string) error {
 	db, err := openSharedStorage()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = db.Close() }()
-	d, err := lookupBLEDevice(db, target)
+	if err := saveBLEDevice(db, bleDevice{UUID: uuid}); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "saved %s to ~/.meshx/meshx.db\n", uuid)
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, "next steps:")
+	_, _ = fmt.Fprintln(out, "  - accept the OS Bluetooth pairing prompt if one hasn't fired yet")
+	_, _ = fmt.Fprintln(out, "  - `meshx ble connect "+uuid+"` to open the TUI")
+	_, _ = fmt.Fprintln(
+		out,
+		"  - `meshx ble fav "+uuid+"` to make bare `meshx` auto-connect here",
+	)
+	return nil
+}
+
+// RunBLE opens the TUI against a saved Bluetooth device. Resolves
+// the name-or-uuid target from the ble_devices table, then hands
+// off to RunRadio with the "ble:<uuid>" prefix so the shared
+// transport.Dial dispatcher routes it through DialBLE. The pump
+// doesn't need to know it's a radio over Bluetooth versus USB —
+// the transport/Client abstraction keeps it oblivious.
+func RunBLE(target string) error {
+	db, err := openSharedStorage()
 	if err != nil {
 		return err
 	}
+	d, err := lookupBLEDevice(db, target)
+	if err != nil {
+		_ = db.Close()
+		return err
+	}
+	// Close the setup-path handle before handing off to the TUI —
+	// RunRadio opens its own storage handle for the live session,
+	// and holding two fights the SQLite WAL lock on some systems.
+	_ = db.Close()
 	if d == nil {
 		return fmt.Errorf(
 			"no saved device matches %q — run `meshx ble list` to see what's paired",
 			target,
 		)
 	}
-	return fmt.Errorf(
-		"BLE transport not yet implemented — would connect to %s (%s)",
-		d.DisplayName(), d.UUID,
-	)
+	return RunRadio("ble:" + d.UUID)
 }
 
 // AutoConnectTarget resolves the bare-`meshx` fallback chain:

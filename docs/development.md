@@ -31,59 +31,76 @@ just just::fmt     # format justfiles
 ## Running
 
 ```bash
-go run . --demo                   # irssi-style UI with canned data, no radio
-go run .                          # auto-detect USB Meshtastic radio, connect
-go run . --port /dev/cu.usbmodem2101  # explicit serial path
-go run . --port 10.0.0.50:4403    # TCP to meshtasticd / WiFi radio
-go run . probe                    # scan USB ports, label each as Meshtastic or not
-go build -o meshx . && ./meshx --demo
+go run . demo                              # canned-fixture UI, no radio
+go run .                                   # auto-connect: USB → saved BLE
+go run . usb probe                         # list USB candidates
+go run . usb connect /dev/cu.usbmodem2101  # explicit serial path
+go run . tcp connect 10.0.0.50:4403        # meshtasticd / WiFi radio
+go run . ble scan                          # nearby Bluetooth radios
+go run . ble pair <uuid>                   # save for later connects
+go run . ble connect <uuid|name>           # open TUI over Bluetooth
+go run . ble probe <uuid>                  # 15s diagnostic packet dump
+
+# Pump events to a log file when the TUI is up (alt-screen swallows
+# stderr so this is the only way to inspect live transport flow).
+MESHX_DEBUG=1 go run . ble connect <uuid>  # writes /tmp/meshx-pump.log
 ```
 
 ## Architecture
 
 ```
 meshx/
-├── main.go                   # tiny — forwards to cmd.Execute()
+├── main.go                       # tiny — forwards to cmd.Execute()
 ├── cmd/
-│   ├── root.go               # cobra root + --demo / --port flags
-│   └── probe.go              # `meshx probe` — USB discovery dumper
+│   ├── root.go                   # cobra root + auto-connect chain
+│   ├── demo.go                   # `meshx demo`
+│   ├── usb.go                    # `meshx usb {probe,connect}`
+│   ├── probe.go                  # body of `meshx usb probe`
+│   ├── tcp.go                    # `meshx tcp connect`
+│   ├── ble.go                    # `meshx ble {scan,pair,list,forget,connect,disconnect,fav}`
+│   └── ble_probe.go              # `meshx ble probe` diagnostic dump
 └── internal/meshx/
-    ├── demo.go               # Bubble Tea model: state, Update, View,
-    │                         # executeCommand, renderers, newModel()
-    ├── fixture.go            # Demo struct + DefaultDemo() canonical
-    │                         # "KC7XYZ Retr0h Base" persona
-    ├── pump.go               # transport → tea.Msg goroutine, one
-    │                         # radio<Name>Msg per FromRadio envelope
-    ├── storage.go            # SQLite scrollback persistence
-    │                         # (live-radio mode only)
-    ├── splash.go             # BitchX-style rotating graffiti banner
-    │                         # (4 variants, pickSplash at launch)
-    ├── complete.go           # Tab completion — /cmd, #chan, nicks
-    ├── palette.go            # maxheadroom color constants
-    ├── doc.go                # package doc
-    ├── demo_snapshot_test.go # golden-view snapshot for visual diffs
+    ├── app.go                    # Bubble Tea model: state, Update, View,
+    │                             # newModel, autoConnect, myCallsign …
+    ├── fixture.go                # Demo struct + DefaultDemo() persona
+    ├── pump.go                   # transport → tea.Msg pump (+ MESHX_DEBUG)
+    ├── commands.go               # /command dispatcher + ham bangs
+    ├── input.go                  # key bindings, nav mode, tab wiring
+    ├── ui.go                     # renderers, pane styles, selection highlight
+    ├── notices.go                # TTL + pin + fade for `-!-` rows
+    ├── storage.go                # SQLite: nodes, messages, ble_devices,
+    │                             # backfills, stale-pending sweep
+    ├── ble_cli.go                # `meshx ble` CLI helpers
+    ├── splash.go                 # BitchX-style rotating graffiti banner
+    ├── complete.go               # Tab completion — /cmd, #chan, nicks
+    ├── palette.go                # maxheadroom color constants
+    ├── migrations/               # embedded goose SQL migrations
     └── transport/
-        ├── client.go         # Client interface, Dial() factory
-        ├── framing.go        # 0x94 0xc3 <hi> <lo> <proto> wire frame
-        ├── serial.go         # USB-serial transport (go.bug.st/serial)
-        ├── tcp.go            # TCP transport (meshtasticd / WiFi)
-        ├── stream.go         # FromRadio reader → chan FromRadio
-        └── identify.go       # AutoDetectMeshtastic() USB probe
+        ├── client.go             # Client interface + Dial dispatcher
+        ├── framing.go            # 0x94 0xc3 <hi> <lo> <proto> frame codec
+        ├── stream.go             # Shared framed-stream runner (serial/tcp)
+        ├── serial.go             # USB-serial transport
+        ├── tcp.go                # TCP transport (meshtasticd / WiFi)
+        ├── ble.go                # Bluetooth LE transport
+        └── identify.go           # AutoDetectMeshtastic USB probe
 ```
 
 ### Public API
 
 ```go
 meshx.RunDemo()                            // demo fixture, no radio
-meshx.RunRadio("/dev/cu.usbmodem2101")     // live — serial or TCP dest
+meshx.RunRadio("/dev/cu.usbmodem2101")     // live — serial / TCP / "ble:<uuid>"
+meshx.RunBLE("<uuid|name>")                // resolve saved BLE device + open TUI
+meshx.AutoConnectTarget()                  // bare-`meshx` resolution chain
+meshx.BLEScan / BLEPair / BLEListDevices
+meshx.BLEForget / BLEMarkFavorite / BLESetFavorite
 meshx.DefaultDemo() *Demo                  // canonical persona
-meshx.Demo                                 // exported fixture type
 ```
 
 `RunDemo` / `RunRadio` both boil down to
-`tea.NewProgram(newModel(demo, dest), tea.WithAltScreen()).Run()`; the only
-difference is which Demo pointer they pass. Internals (model, modes, commands,
-renderers, transport pump) are unexported.
+`tea.NewProgram(newModel(demo, dest), tea.WithAltScreen()).Run()`. `RunBLE` is a
+thin wrapper that resolves a name-or-uuid against `ble_devices` and delegates to
+`RunRadio("ble:<uuid>")` — `transport.Dial` routes the prefix to `DialBLE`.
 
 ## Dependencies
 
@@ -95,13 +112,15 @@ renderers, transport pump) are unexported.
 | `spf13/cobra`                   | CLI command tree                               |
 | `lmatte7/gomesh/...gomeshproto` | Meshtastic protobuf definitions                |
 | `go.bug.st/serial`              | cross-platform USB-serial                      |
+| `tinygo.org/x/bluetooth`        | cross-platform Bluetooth LE (macOS / Linux)    |
 | `google.golang.org/protobuf`    | proto marshal / unmarshal                      |
 | `mattn/go-sqlite3`              | SQLite driver (CGo) for scrollback persistence |
+| `pressly/goose`                 | embedded SQL migrations                        |
 
 ## Modal UI — where the code lives
 
 - **Mode constants** — `modeSplash`, `modeInput`, `modeNav`, `modeSearch`,
-  `modeHelp` in `demo.go`
+  `modeHelp` in `app.go`
 - **Dispatcher** — `(m model) Update(tea.Msg)` routes by mode to `updateInput` /
   `updateNav` / `updateSearch` / `updateHelp` (splash is inlined)
 - **Overlays** — `overlayNone` / `overlayChannels` / `overlayNodes`; set by
@@ -144,8 +163,8 @@ renderers, transport pump) are unexported.
 ## Ham command dispatch
 
 Every ham `/command` runs through `executeCommand(raw string) tea.Cmd` in
-`demo.go`. Target-taking commands default to the highlighted sender in nav mode
-via `selectedSender()`.
+`commands.go`. Target-taking commands default to the highlighted sender in nav
+mode via `selectedSender()`.
 
 Reports use real node telemetry:
 
@@ -193,8 +212,9 @@ identical across serial and TCP: `0x94 0xc3 <hi> <lo> <protobuf>` — see
 `framing.go`.
 
 `AutoDetectMeshtastic(timeout)` walks `/dev/cu.*` ports, handshakes each, and
-returns the first that talks Meshtastic. Used by `cmd.Execute` when no `--port`
-is given.
+returns the first that talks Meshtastic. Used by `cmd.usbConnect` with no
+explicit device path, and by `meshx.AutoConnectTarget` for the bare-`meshx`
+resolution chain.
 
 `pump.go` runs as a goroutine kicked off from the model's `Init()` via
 `openPumpMsg` — deferring the spawn until after `tea.Program.Run()` avoids a

@@ -23,6 +23,7 @@ package meshx
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -286,7 +287,29 @@ func (p *pump) Enqueue(msg *pb.ToRadio) bool {
 // run is the main pump loop. Spawns the transport Run goroutine,
 // pumps outbound messages, translates inbound FromRadio frames into
 // tea.Msg and ships them via program.Send().
+//
+// When $MESHX_DEBUG is set (to a file path, or to "1" for a default
+// path), every pump event is appended to that file — the TUI's
+// alt-screen swallows stderr so this is the only way to see what's
+// flowing when a BLE / serial session appears to hang. Pipe-friendly
+// single-line records so `tail -f` reads cleanly.
 func (p *pump) run(ctx context.Context) {
+	dbg := openPumpDebugLog()
+	defer func() {
+		if dbg != nil {
+			_ = dbg.Close()
+		}
+	}()
+	dbgf := func(format string, args ...any) {
+		if dbg == nil {
+			return
+		}
+		line := fmt.Sprintf(format, args...)
+		_, _ = fmt.Fprintf(dbg, "[%s] %s\n", time.Now().Format("15:04:05.000"), line)
+	}
+
+	dbgf("pump.run start")
+
 	inbound := make(chan *pb.FromRadio, 64)
 
 	// Kick off the transport read+write goroutines.
@@ -294,31 +317,66 @@ func (p *pump) run(ctx context.Context) {
 	go func() {
 		runErr <- p.client.Run(ctx, inbound, p.outbound)
 	}()
+	dbgf("transport.Run goroutine started")
 
 	// Fire the config handshake — prompts the radio to dump its NodeDB,
 	// channels, configs, and ConfigComplete.
-	_ = transport.SendWantConfig(p.outbound)
+	nonce := transport.SendWantConfig(p.outbound)
+	dbgf("SendWantConfig nonce=0x%08x", nonce)
 
+	totalIn := 0
 	for {
 		select {
 		case <-ctx.Done():
+			dbgf("ctx.Done — exiting")
 			return
 		case err := <-runErr:
 			if err != nil {
+				dbgf("transport.Run returned error: %v", err)
 				p.program.Send(radioErrorMsg{err: fmt.Errorf("transport: %w", err)})
 			} else {
+				dbgf("transport.Run returned cleanly (radio disconnect?)")
 				p.program.Send(radioDisconnectedMsg{})
 			}
 			return
 		case msg := <-inbound:
 			if msg == nil {
+				dbgf("inbound nil — skipping")
 				continue
 			}
-			if tm := p.translate(msg); tm != nil {
-				p.program.Send(tm)
+			totalIn++
+			tm := p.translate(msg)
+			if tm == nil {
+				dbgf("[%d] inbound translated to nil (housekeeping)", totalIn)
+				continue
 			}
+			dbgf("[%d] sending %T to tea", totalIn, tm)
+			p.program.Send(tm)
 		}
 	}
+}
+
+// openPumpDebugLog opens the pump debug log file when $MESHX_DEBUG
+// is set. Value is interpreted as a file path; special value "1"
+// expands to /tmp/meshx-pump.log for convenience. Returns nil (no
+// error) when the env var is unset — pump.run no-ops its logging
+// in that case. Safe to call at process startup; the file is
+// opened in append mode so repeated sessions accumulate.
+func openPumpDebugLog() *os.File {
+	path := os.Getenv("MESHX_DEBUG")
+	if path == "" {
+		return nil
+	}
+	if path == "1" {
+		path = "/tmp/meshx-pump.log"
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		// Silently fall back to no logging. Anything else (stderr
+		// write) would get eaten by the TUI's alt-screen anyway.
+		return nil
+	}
+	return f
 }
 
 // translate converts a FromRadio envelope to the corresponding

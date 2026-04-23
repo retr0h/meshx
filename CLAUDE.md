@@ -7,16 +7,16 @@ working with code in this repository.
 
 **meshX** is a glitched-out terminal Meshtastic messenger — an
 irssi-style chat client for LoRa radios with a vintage BBS aesthetic.
-It connects to a Meshtastic-compatible device (USB serial / TCP /
-future BLE), subscribes to the mesh, and surfaces everything in a
-dense Bubble Tea TUI with mutt-grade keyboard, BitchX-style splash,
-and a maxheadroom palette.
+It connects to a Meshtastic-compatible device over USB serial, TCP
+(`meshtasticd` / WiFi radio on port 4403), or Bluetooth LE, subscribes
+to the mesh, and surfaces everything in a dense Bubble Tea TUI with
+mutt-grade keyboard, BitchX-style splash, and a maxheadroom palette.
 
-Today the whole UI is demo-mode only (canned data, real interaction).
-Transport layer is not yet wired; every telemetry field in the model
-(`lastSNR`, `lastRSSI`, `lastHops`, `hwModel`, `firmware`) maps 1:1 to
-Meshtastic protobuf fields so the transport drops in without any UI
-changes.
+All three transports share one `Client` interface (`internal/meshx/
+transport/client.go`) and funnel through the same pump → tea.Msg →
+model path, so the renderer never branches on transport type. Every
+telemetry field in the model (`lastSNR`, `lastRSSI`, `lastHops`,
+`hwModel`, `firmware`) maps 1:1 to Meshtastic protobuf fields.
 
 ## Inspiration
 
@@ -41,28 +41,60 @@ and `░▒▓█` block-border language.
 
 ```
 meshx/
-├── main.go                      # 7-line entry → cmd.Execute()
+├── main.go                       # 7-line entry → cmd.Execute()
 ├── cmd/
-│   └── root.go                  # cobra root + --demo flag
-├── internal/meshx/              # all implementation
-│   ├── demo.go                  # Bubble Tea model, Update, View, commands
-│   ├── splash.go                # BitchX-style rotating graffiti banner
-│   ├── complete.go              # Tab completion — /cmd, #chan, nicks
-│   ├── palette.go               # maxheadroom color constants
-│   └── doc.go                   # package doc
+│   ├── root.go                   # cobra root + auto-connect fallback chain
+│   ├── demo.go                   # `meshx demo` — canned-fixture UI
+│   ├── usb.go                    # `meshx usb {probe,connect}`
+│   ├── probe.go                  # body of `meshx usb probe`
+│   ├── tcp.go                    # `meshx tcp connect`
+│   ├── ble.go                    # `meshx ble {scan,pair,list,forget,connect,disconnect,fav}`
+│   └── ble_probe.go              # `meshx ble probe` — diagnostic packet dump
+├── internal/meshx/               # all implementation
+│   ├── app.go                    # Bubble Tea model, Update, View wiring
+│   ├── pump.go                   # transport ↔ tea bridge (+ MESHX_DEBUG log)
+│   ├── commands.go               # /command dispatcher + ham bangs
+│   ├── input.go                  # key bindings, nav mode, tab completion entry
+│   ├── ui.go                     # renderers, pane styles, selection highlight
+│   ├── notices.go                # TTL + pin + fade for `-!-` rows
+│   ├── splash.go                 # BitchX-style rotating graffiti banner
+│   ├── complete.go               # Tab completion — /cmd, #chan, nicks
+│   ├── palette.go                # maxheadroom color constants
+│   ├── storage.go                # SQLite: nodes, messages, ble_devices, backfills
+│   ├── ble_cli.go                # `meshx ble` CLI helpers (scan, list, fav, …)
+│   ├── migrations/               # goose SQL migrations (001…005)
+│   └── transport/
+│       ├── client.go             # Client interface + Dial dispatcher
+│       ├── serial.go             # USB-serial transport
+│       ├── tcp.go                # TCP transport (port 4403)
+│       ├── ble.go                # Bluetooth LE transport
+│       ├── stream.go             # Shared framed-stream runner (serial + tcp)
+│       ├── framing.go            # START1/START2/LENGTH frame codec
+│       └── identify.go           # AutoDetectMeshtastic USB probe
 └── docs/
-    ├── commands.md                # every keybinding and /command
-    ├── development.md           # setup, testing, conventions
-    └── contributing.md          # PR workflow
+    ├── commands.md               # every keybinding and /command
+    ├── development.md            # setup, testing, conventions
+    └── contributing.md           # PR workflow
 ```
 
 ### Public API
 
-- `meshx.RunDemo()` — launch the Bubble Tea program in demo mode
-  (`tea.NewProgram(initialModel(), tea.WithAltScreen())`)
+- `meshx.RunDemo()` — launch the TUI with the canned Demo fixture.
+- `meshx.RunRadio(dest)` — launch the TUI against a serial device path
+  (`/dev/cu.usbserial-…`), a TCP endpoint (`host:port`), or a Bluetooth
+  peripheral via the `ble:<uuid>` prefix. `transport.Dial` routes on
+  the prefix.
+- `meshx.RunBLE(uuidOrName)` — resolve a saved BLE device from
+  `ble_devices` (accepting uuid, longname, or shortname) and hand off
+  to `RunRadio("ble:<uuid>")`.
+- `meshx.AutoConnectTarget()` — bare-`meshx` resolution chain (USB →
+  single saved BLE → favorite BLE → error with hint).
+- `meshx.BLEScan` / `BLEPair` / `BLEListDevices` / `BLEForget` /
+  `BLEMarkFavorite` / `BLESetFavorite` — CLI entrypoints for the
+  `meshx ble` subcommand tree.
 
-Internals are not re-exported; the package is consumed only by
-`cmd/root.go`.
+Internals beyond those are not re-exported; the package is consumed
+only by the `cmd/` tree.
 
 ### Dependencies
 
@@ -70,6 +102,11 @@ Internals are not re-exported; the package is consumed only by
 - `charmbracelet/bubbles` — textinput for input + search prompts
 - `charmbracelet/lipgloss` — colors, borders, layout primitives
 - `spf13/cobra` — CLI framework
+- `go.bug.st/serial` — USB-serial transport
+- `tinygo.org/x/bluetooth` — Bluetooth LE transport (CoreBluetooth on
+  macOS, BlueZ on Linux)
+- `pressly/goose` — embedded sqlite migrations
+- `lmatte7/gomesh/gomeshproto` — Meshtastic protobuf bindings
 
 ## Modal UI model
 
@@ -137,12 +174,15 @@ Operational: `/msg  /reply(/r)  /ping  /tr(/traceroute)  /whois(/w)
 
 ## Roadmap
 
-- [x] Full irssi-style UI in demo mode
+- [x] Full irssi-style UI (demo + live)
 - [x] BitchX rotating splash
 - [x] 16 ham-radio `/commands` wired to real telemetry
 - [x] Bracketed BitchX-style users grid
 - [x] Tab completion + `/` search + `n/N` cycling
-- [ ] USB-serial Meshtastic transport (go.bug.st/serial + meshtastic/go)
-- [ ] TCP transport — meshtasticd / WiFi radio on port 4403
+- [x] USB-serial Meshtastic transport (go.bug.st/serial + meshtastic/go)
+- [x] TCP transport — meshtasticd / WiFi radio on port 4403
+- [x] BLE transport (tinygo.org/x/bluetooth; pair via `meshx ble pair`,
+      fav + scan + connect subcommands)
+- [x] Notice TTL + pin with `⌜ ⌟` corners and fade
+- [x] Stale-pending message sweep on startup; `R` resends pending OR fail
 - [ ] PSK import via `/channel add <meshtastic://url>`
-- [ ] BLE transport (stretch)

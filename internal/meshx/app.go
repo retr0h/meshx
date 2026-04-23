@@ -1456,7 +1456,20 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		replyID:  msg.replyID,
 		fromNum:  msg.fromNum,
 	}
+	// Snapshot whether the user was anchored at the tail BEFORE we
+	// append. If they were (selectedMsg was on the last row of the
+	// log, or the log was empty) we auto-follow new traffic by
+	// advancing selectedMsg to the fresh tail. If they'd scrolled up
+	// to read history, leave selectedMsg alone — irssi convention:
+	// scrollback is sticky, new messages appear at the bottom
+	// invisibly until the user returns to tail. Without this
+	// incoming texts would arrive but never scroll into view because
+	// renderMessagesPane anchors its viewport on selectedMsg.
+	wasAtTail := len(m.messages) == 0 || m.selectedMsg == len(m.messages)-1
 	m.messages = append(m.messages, item)
+	if wasAtTail {
+		m.selectedMsg = len(m.messages) - 1
+	}
 
 	// Persist the incoming message so it survives a restart. Channel
 	// name is resolved from the packet's channel index against the

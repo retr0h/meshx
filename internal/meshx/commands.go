@@ -35,7 +35,7 @@ package meshx
 
 import (
 	"fmt"
-	"math/rand"
+	mathrand "math/rand"
 	"strings"
 	"time"
 
@@ -45,8 +45,14 @@ import (
 )
 
 func (m *model) sendPlainMessage(text string) {
+	var pid uint32
+	var envelope *pb.ToRadio
+	if m.pump != nil {
+		envelope, pid = newTextToRadio(text, m.currentChannelIndex(), 0)
+	}
 	item := messageItem{
-		time: timeNowHHMM(), from: "me", mine: true, text: text, status: "pending",
+		time: timeNowHHMM(), from: "me", mine: true, text: text,
+		status: "pending", packetID: pid,
 	}
 	m.messages = append(m.messages, item)
 	m.selectedMsg = len(m.messages) - 1
@@ -54,8 +60,8 @@ func (m *model) sendPlainMessage(text string) {
 
 	m.storagePersist(saveMessage(m.db, m.currentChannel, item))
 
-	if m.pump != nil {
-		m.pump.Enqueue(newTextToRadio(text, m.currentChannelIndex(), 0))
+	if envelope != nil {
+		m.pump.Enqueue(envelope)
 	}
 }
 
@@ -65,9 +71,16 @@ func (m *model) sendPlainMessage(text string) {
 // When replyID != 0 the packet threads to the referenced parent
 // (Data.reply_id) — this is how /73 <call> and friends tie their
 // outgoing text to the specific message from that operator.
-func newTextToRadio(text string, channel, replyID uint32) *pb.ToRadio {
+//
+// Returns both the envelope and the generated MeshPacket.id so the
+// caller can stash it on the local messageItem.packetID — that's
+// the correlation key the ROUTING_APP reply lands on when the
+// radio acks (or errors) delivery.
+func newTextToRadio(text string, channel, replyID uint32) (*pb.ToRadio, uint32) {
+	pid := randPacketID()
 	return &pb.ToRadio{
 		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			Id:      pid,
 			To:      0xFFFFFFFF,
 			Channel: channel,
 			WantAck: true,
@@ -77,6 +90,18 @@ func newTextToRadio(text string, channel, replyID uint32) *pb.ToRadio {
 				ReplyId: replyID,
 			}},
 		}},
+	}, pid
+}
+
+// randPacketID returns a non-zero 32-bit id suitable for
+// MeshPacket.id. Zero is reserved (the firmware treats 0 as
+// "unassigned") so we re-roll on the unlikely collision.
+func randPacketID() uint32 {
+	for {
+		pid := mathrand.Uint32()
+		if pid != 0 {
+			return pid
+		}
 	}
 }
 
@@ -333,7 +358,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			body = fmt.Sprintf("CQ de %s via %s %s", call, clientTag, rest)
 		}
 		m.sendBang("/cq", body)
-		m.flash = "!cq broadcast — awaiting acks…"
+		m.flash = "/cq broadcast sent"
 	case "cqr":
 		target := rest
 		if target == "" {
@@ -918,7 +943,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "/sync needs a live radio connection (demo mode)"
 			return nil
 		}
-		nonce := rand.Uint32()
+		nonce := mathrand.Uint32()
 		if nonce == 0 {
 			nonce = 1
 		}
@@ -1018,17 +1043,23 @@ func (m *model) sendBang(bang, body string) {
 // above the reply.
 func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	status := "ack"
+	var pid uint32
+	var envelope *pb.ToRadio
 	if !m.isDemo() {
-		status = "pending" // flipped to "ack" when the radio echoes our packet back
+		status = "pending" // flipped by radioRoutingMsg handler
+	}
+	if m.pump != nil {
+		envelope, pid = newTextToRadio(body, m.currentChannelIndex(), replyToID)
 	}
 	item := messageItem{
-		time:    timeNowHHMM(),
-		from:    "me",
-		mine:    true,
-		bang:    bang,
-		text:    body,
-		status:  status,
-		replyID: replyToID,
+		time:     timeNowHHMM(),
+		from:     "me",
+		mine:     true,
+		bang:     bang,
+		text:     body,
+		status:   status,
+		replyID:  replyToID,
+		packetID: pid,
 	}
 	m.messages = append(m.messages, item)
 	m.selectedMsg = len(m.messages) - 1
@@ -1038,8 +1069,8 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	// demo mode (m.db is always nil there).
 	m.storagePersist(saveMessage(m.db, m.currentChannel, item))
 
-	if m.pump != nil {
-		m.pump.Enqueue(newTextToRadio(body, m.currentChannelIndex(), replyToID))
+	if envelope != nil {
+		m.pump.Enqueue(envelope)
 	}
 }
 

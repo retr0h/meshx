@@ -22,6 +22,7 @@ package meshx
 
 import (
 	"math/rand"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -72,7 +73,13 @@ var allSplashVariants = []splashVariant{
 	{
 		name: "pixel-blocks",
 		rows: []string{
-			" ██████  ██████ ██████ ██   ██ ██   ██",
+			// Row 0's M was 6 cells (██████) while rows 1-4's M was
+			// 7 cells (███ ███, ██ █ ██, ██   ██). The one-cell
+			// delta rendered as a visible "bite" out of the top-
+			// right corner of the M — widened row 0 to a solid
+			// 7-cell slab so the letter's top edge aligns with the
+			// body.
+			" ███████ ██████ ██████ ██   ██ ██   ██",
 			" ███ ███ ██     ██     ██   ██  ██ ██ ",
 			" ██ █ ██ ██████ ██████ ███████   ███  ",
 			" ██   ██ ██         ██ ██   ██  ██ ██ ",
@@ -114,7 +121,13 @@ var allSplashVariants = []splashVariant{
 	{
 		name: "slab-classic",
 		rows: []string{
-			" ███▄ ▄███ ████ █████ ██  ██ ██  ██",
+			// M E S H X — every letter exactly 8 cells wide with
+			// 1-cell gap. Row 0's M used to be 9 wide (two peaks
+			// separated by a space) while rows 1-4 were 8 wide,
+			// shifting every following letter by one column on the
+			// top row. Collapsed the inner gap on row 0 so all five
+			// rows align to the same column grid.
+			" ███▄▄███ ████ █████ ██  ██ ██  ██",
 			" ████████ █▄▄  █▄▄▄▄ ██  ██ ██▄▄██",
 			" ██▀▀▀▀██ █    ▀▀▀▀█ ██████   ██  ",
 			" ██    ██ ████ █████ ██  ██ ██▀▀██",
@@ -148,6 +161,28 @@ func splashAsNotices(v splashVariant) []messageItem {
 	t := timeNowHHMM()
 	gid := nextGroupID() // every splash row shares the same group
 
+	// Normalize row widths to the variant's widest row so every line
+	// centers at the same column. Hand-drawn block-art tends to
+	// drift a cell or two row-to-row (slab-classic had row 0 at 35
+	// cells and rows 1-4 at 34 — enough to make the whole block
+	// look tilted since our centering math uses per-row width).
+	// Right-padding with spaces keeps the logo rectangular.
+	maxW := 0
+	for _, row := range v.rows {
+		if w := lipgloss.Width(row); w > maxW {
+			maxW = w
+		}
+	}
+	normalizedRows := make([]string, len(v.rows))
+	for i, row := range v.rows {
+		w := lipgloss.Width(row)
+		if w < maxW {
+			normalizedRows[i] = row + strings.Repeat(" ", maxW-w)
+		} else {
+			normalizedRows[i] = row
+		}
+	}
+
 	// withGroup stamps the shared group id + hides the timestamp
 	// on continuation rows. Only the very first row carries time so
 	// the `-!-` column stays aligned top-to-bottom (same convention
@@ -169,7 +204,7 @@ func splashAsNotices(v splashVariant) []messageItem {
 
 	// Block-art rows: per-row variant color + centered so the logo
 	// floats in the pane middle while the `-!-` prefix stays flush.
-	for i, row := range v.rows {
+	for i, row := range normalizedRows {
 		out = append(out, withGroup(buildNotice(row, noticeStyle{
 			fg:     v.color(i),
 			bold:   true,

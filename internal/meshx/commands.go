@@ -710,7 +710,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 						pos.longitude,
 						pos.altitude,
 					),
-					fmt.Sprintf("pos:    %s ago", humanDuration(time.Since(pos.at))),
+					fmt.Sprintf("fix age: %s ago", humanDuration(time.Since(pos.at))),
 				)
 				// Distance from us if we also have a fix — same
 				// great-circle helper /ping uses.

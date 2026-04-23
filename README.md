@@ -118,6 +118,7 @@ meshX sits at the intersection of three lineages:
 - [ ] 🗺️ QR code share — `/channel share <name>`
 - [x] 💾 SQLite scrollback persistence — message log survives restarts (`~/.meshx/meshx.db`); node cache still in-memory
 - [ ] 📱 BLE transport (stretch)
+- [ ] 🎨 Low-color / no-truecolor fallback palette — detect `$COLORTERM` / `$TERM` and swap the neon maxheadroom hex values for a 16-color ANSI ladder when the terminal doesn't support 24-bit color; same plan for the `░▒▓█` block chrome (ASCII fallback `===` / `---` for terminals without unicode block support)
 
 ## 📚 Docs
 

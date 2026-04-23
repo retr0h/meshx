@@ -11,20 +11,6 @@
 ![github commit activity](https://img.shields.io/github/commit-activity/m/retr0h/meshx?style=for-the-badge)
 [![hovnokod](https://raw.githubusercontent.com/tekk/hovnokod-badge/main/assets/badges/hovnokod-for-the-badge.svg)](https://github.com/tekk/hovnokod-badge)
 
-<h1 align="center">
-<pre>
-                    ░▒▓█▓▒░
-
- ██████  ██████ ██████ ██   ██ ██   ██
- ███ ███ ██     ██     ██   ██  ██ ██
- ██ █ ██ ██████ ██████ ███████   ███
- ██   ██ ██         ██ ██   ██  ██ ██
- ██   ██ ██████ ██████ ██   ██ ██   ██
-
-                    ░▒▓█▓▒░
-</pre>
-</h1>
-
 <p align="center">📡 Glitched-out terminal Meshtastic messenger.</p>
 
 <p align="center">

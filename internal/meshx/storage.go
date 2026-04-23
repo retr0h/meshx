@@ -373,3 +373,157 @@ func loadMessages(db *sql.DB, channel string, limit int) ([]messageItem, error) 
 	}
 	return out, nil
 }
+
+// bleDevice is the slim persisted shape of a Bluetooth-paired
+// Meshtastic radio. Populated from the ble_devices table and
+// consumed by the `meshx ble` subcommand tree + bare-meshx fallback
+// resolution.
+type bleDevice struct {
+	UUID      string
+	LongName  string
+	ShortName string
+	HWModel   string
+	Favorite  bool
+}
+
+// DisplayName returns the human-facing label the CLI prints in
+// `meshx ble list` and in "connecting to …" messages. Prefers the
+// longname (the name printed on the radio's OLED), falls back to
+// shortname, then the raw uuid. Always non-empty.
+func (d bleDevice) DisplayName() string {
+	switch {
+	case d.LongName != "":
+		return d.LongName
+	case d.ShortName != "":
+		return d.ShortName
+	default:
+		return d.UUID
+	}
+}
+
+// saveBLEDevice inserts a newly-paired device (or updates its
+// metadata on re-pair). Does NOT touch the favorite flag —
+// setBLEFavorite is the single entrypoint for that so we don't
+// accidentally change which device is auto-connected.
+func saveBLEDevice(db *sql.DB, d bleDevice) error {
+	if db == nil {
+		return nil
+	}
+	if d.UUID == "" {
+		return fmt.Errorf("save ble device: uuid required")
+	}
+	_, err := db.Exec(`
+        INSERT INTO ble_devices (uuid, long_name, short_name, hw_model, paired_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(uuid) DO UPDATE SET
+            long_name  = excluded.long_name,
+            short_name = excluded.short_name,
+            hw_model   = excluded.hw_model`,
+		d.UUID, d.LongName, d.ShortName, d.HWModel,
+	)
+	if err != nil {
+		return fmt.Errorf("save ble device: %w", err)
+	}
+	return nil
+}
+
+// loadBLEDevices returns every saved Bluetooth device ordered by
+// favorite DESC, paired_at DESC so `meshx ble list` naturally
+// surfaces the auto-connect target at the top. Empty slice when
+// no devices are paired yet.
+func loadBLEDevices(db *sql.DB) ([]bleDevice, error) {
+	if db == nil {
+		return nil, nil
+	}
+	rows, err := db.Query(`
+        SELECT uuid, long_name, short_name, hw_model, favorite
+        FROM ble_devices
+        ORDER BY favorite DESC, paired_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("query ble devices: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []bleDevice
+	for rows.Next() {
+		var (
+			d   bleDevice
+			fav int
+		)
+		if err := rows.Scan(&d.UUID, &d.LongName, &d.ShortName, &d.HWModel, &fav); err != nil {
+			return nil, fmt.Errorf("scan ble device: %w", err)
+		}
+		d.Favorite = fav != 0
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// lookupBLEDevice finds a saved device by exact uuid OR by longname
+// / shortname match (case-insensitive). Returns nil if no match,
+// error only on DB failure. Accepting the friendly name is what
+// makes `meshx ble connect T-Beam-Mobile` work alongside the
+// hex-uuid form.
+func lookupBLEDevice(db *sql.DB, needle string) (*bleDevice, error) {
+	devs, err := loadBLEDevices(db)
+	if err != nil {
+		return nil, err
+	}
+	lowered := strings.ToLower(needle)
+	for _, d := range devs {
+		if d.UUID == needle {
+			return &d, nil
+		}
+		if strings.EqualFold(d.LongName, needle) || strings.EqualFold(d.ShortName, needle) {
+			return &d, nil
+		}
+		// Allow case-insensitive UUID match too — macOS sometimes
+		// uppercases, Linux sometimes lowercases, user shouldn't
+		// have to care.
+		if strings.ToLower(d.UUID) == lowered {
+			return &d, nil
+		}
+	}
+	return nil, nil
+}
+
+// setBLEFavorite marks exactly one device as the auto-connect
+// fallback for bare `meshx`. Clears the flag on every other row in
+// the same transaction so we never end up with two favorites. Empty
+// uuid clears the flag entirely (no favorite set).
+func setBLEFavorite(db *sql.DB, uuid string) error {
+	if db == nil {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin set favorite: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`UPDATE ble_devices SET favorite = 0`); err != nil {
+		return fmt.Errorf("clear favorites: %w", err)
+	}
+	if uuid != "" {
+		if _, err := tx.Exec(`UPDATE ble_devices SET favorite = 1 WHERE uuid = ?`, uuid); err != nil {
+			return fmt.Errorf("set favorite: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit favorite: %w", err)
+	}
+	return nil
+}
+
+// forgetBLEDevice removes a paired device from persistence. The
+// caller is responsible for any OS-level unpair call (macOS doesn't
+// expose one programmatically; Linux uses `bluetoothctl remove`).
+// Missing uuids return nil (idempotent forget).
+func forgetBLEDevice(db *sql.DB, uuid string) error {
+	if db == nil {
+		return nil
+	}
+	_, err := db.Exec(`DELETE FROM ble_devices WHERE uuid = ?`, uuid)
+	if err != nil {
+		return fmt.Errorf("forget ble device: %w", err)
+	}
+	return nil
+}

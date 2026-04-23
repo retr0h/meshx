@@ -24,43 +24,54 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"time"
-
-	"github.com/spf13/cobra"
+	"strings"
 
 	"github.com/retr0h/meshx/internal/meshx"
-	"github.com/retr0h/meshx/internal/meshx/transport"
+	"github.com/spf13/cobra"
 )
 
-var (
-	demoFlag bool
-	portFlag string
-)
-
+// rootCmd handles bare `meshx` by running the auto-connect
+// resolution chain (USB first, saved Bluetooth as fallback). The
+// typed subcommands (usb / tcp / ble / demo) live in their own
+// files and attach to this root via init().
 var rootCmd = &cobra.Command{
 	Use:   "meshx",
 	Short: "Glitched-out terminal Meshtastic messenger",
-	Long: `meshx is an irssi-style terminal Meshtastic messenger — an irssi/BitchX/mutt-
-inspired chat client for your LoRa radio with a vintage BBS aesthetic.
+	Long: `meshx is an irssi-style terminal Meshtastic messenger — an
+irssi/BitchX/mutt-inspired chat client for your LoRa radio with a
+vintage BBS aesthetic.
 
-Default behavior: auto-detect a connected Meshtastic radio on USB and
-launch the live UI. Use "meshx probe" to see what devices are
-available, or --port <path> to pick one explicitly.
+Usage patterns:
 
-Pass --demo to run the UI with canned data — no radio required.`,
+  meshx                        # auto-connect: USB if plugged in,
+                               # else saved Bluetooth favorite
+  meshx usb connect [dev]      # open TUI over USB serial
+  meshx tcp connect host[:p]   # open TUI over TCP
+  meshx ble connect <uuid|name># open TUI over Bluetooth (paired device)
+  meshx demo                   # canned-fixture UI, no radio needed
+
+Transport-specific commands:
+
+  meshx usb probe              # list USB candidates
+  meshx ble scan               # scan for nearby Bluetooth radios
+  meshx ble pair <uuid>        # save a device for future connects
+  meshx ble list               # show saved Bluetooth devices
+  meshx ble fav  <uuid|name>   # auto-connect target for bare meshx
+  meshx ble forget <uuid|name>
+  meshx ble disconnect         # clear the auto-connect favorite`,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		if demoFlag {
-			return meshx.RunDemo()
+		target, err := meshx.AutoConnectTarget()
+		if err != nil {
+			return err
 		}
-		dest := portFlag
-		if dest == "" {
-			auto, err := transport.AutoDetectMeshtastic(1500 * time.Millisecond)
-			if err != nil {
-				return err
-			}
-			dest = auto
+		if rest, ok := strings.CutPrefix(target, "ble:"); ok {
+			// Bluetooth fallback — delegate to the BLE session
+			// launcher. Until the transport lands, this returns a
+			// "not yet implemented" error that's much nicer than
+			// cobra dumping the help text.
+			return meshx.RunBLE(rest)
 		}
-		return meshx.RunRadio(dest)
+		return meshx.RunRadio(target)
 	},
 }
 
@@ -70,15 +81,4 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-func init() {
-	rootCmd.PersistentFlags().BoolVar(
-		&demoFlag, "demo", false,
-		"Run the UI with canned data — no radio required.",
-	)
-	rootCmd.PersistentFlags().StringVar(
-		&portFlag, "port", "",
-		"Serial device path (e.g. /dev/cu.usbmodem2101) or TCP host[:port]. Auto-detects when omitted.",
-	)
 }

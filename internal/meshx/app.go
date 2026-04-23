@@ -23,6 +23,7 @@ package meshx
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -380,6 +381,28 @@ func mod(x, y float64) float64 {
 	return r
 }
 
+// haversineKm returns the great-circle distance in kilometers between
+// two lat/lon points (degrees). Used by /ping and /whois to surface
+// peer-to-self distance when we have a GPS fix on both ends. Returns
+// 0 if either coordinate is the (0, 0) origin (Meshtastic's "no fix"
+// sentinel).
+func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
+	if (lat1 == 0 && lon1 == 0) || (lat2 == 0 && lon2 == 0) {
+		return 0
+	}
+	const r = 6371.0
+	toRad := func(d float64) float64 { return d * math.Pi / 180 }
+	dLat := toRad(lat2 - lat1)
+	dLon := toRad(lon2 - lon1)
+	phi1 := toRad(lat1)
+	phi2 := toRad(lat2)
+	sinLat := math.Sin(dLat / 2)
+	sinLon := math.Sin(dLon / 2)
+	a := sinLat*sinLat + math.Cos(phi1)*math.Cos(phi2)*sinLon*sinLon
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	return r * c
+}
+
 // newModel builds the bubble-tea model for either demo mode
 // (demo != nil) or live-radio mode (demo == nil, dest != "").
 //
@@ -449,13 +472,23 @@ func newModel(demo *Demo, dest string) model {
 						if name == "" {
 							name = n.shortName
 						}
+						// Carry prefs even for peers we still only
+						// know by node num (user may have starred a
+						// ghost before NodeInfo arrived); use the
+						// placeholder longname so they still land
+						// in m.nodes.
 						if name == "" {
-							continue
+							name = fmt.Sprintf("node 0x%x", n.nodeNum)
+						}
+						state := "offline"
+						if n.muted {
+							state = "muted"
 						}
 						m.nodes = append(m.nodes, nodeItem{
 							callsign:  name,
 							shortName: n.shortName,
-							state:     "offline",
+							state:     state,
+							fav:       n.favorite,
 							lastHeard: "cached",
 							hwModel:   n.hwModel,
 						})

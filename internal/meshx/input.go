@@ -117,16 +117,17 @@ func (m *model) closeOverlayToInput() tea.Cmd {
 // revealMessages is the "I just produced a message-pane entry, show
 // it to the user" helper used by nav-mode keys like p/t/w that fire
 // commands whose output lands as a systemBlock. Closes any open
-// overlay, focuses the messages pane, keeps nav mode so the cursor
-// sits on the fresh entry (j/k navigate the new block), and drops a
-// flash so the action feels acknowledged even when the user was
-// already looking at messages.
-func (m *model) revealMessages(flash string) {
+// overlay, focuses the messages pane, and lands in input mode so the
+// freshly-appended card renders in its plain drained sys style — not
+// nav-mode's full-row selection highlight that extends past the
+// text into the right margin and looks different from the same
+// card produced via /whois from input mode.
+func (m *model) revealMessages(flash string) tea.Cmd {
 	m.overlay = overlayNone
 	m.focused = paneMessages
-	m.mode = modeNav
-	m.input.Blur()
+	m.mode = modeInput
 	m.flash = flash
+	return m.input.Focus()
 }
 
 // updateInput is the irssi default mode — cursor is in the bottom
@@ -375,13 +376,13 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		target := m.selectedSender()
 		if target != "" {
 			m.executeCommand("tr " + target)
-			m.revealMessages(fmt.Sprintf("traced %s — see messages", target))
+			return m, m.revealMessages(fmt.Sprintf("traced %s — see messages", target))
 		}
 	case "p":
 		target := m.selectedSender()
 		if target != "" {
 			m.executeCommand("ping " + target)
-			m.revealMessages(fmt.Sprintf("pinged %s — see messages", target))
+			return m, m.revealMessages(fmt.Sprintf("pinged %s — see messages", target))
 		}
 	case "w":
 		target := m.selectedSender()
@@ -389,18 +390,28 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Delegate to the same code path /whois uses so nav-key
 			// output stays in lock-step with the slash command.
 			m.executeCommand("whois " + target)
-			m.revealMessages(fmt.Sprintf("whois %s — see messages", target))
+			return m, m.revealMessages(fmt.Sprintf("whois %s — see messages", target))
 		}
 	case "*":
+		var persistNum uint32
+		var persistFav, persistMute bool
 		m.actOnSelectedNode(func(n *nodeItem) {
 			n.fav = !n.fav
+			persistNum = m.nodeNumOf(n.callsign)
+			persistFav = n.fav
+			persistMute = n.state == "muted"
 			m.flash = fmt.Sprintf(
 				"%s %s",
 				n.callsign,
 				toggleFlash(n.fav, "favorited", "unfavorited"),
 			)
 		})
+		if persistNum != 0 {
+			_ = saveNodePrefs(m.db, persistNum, persistFav, persistMute)
+		}
 	case "m":
+		var persistNum uint32
+		var persistFav, persistMute bool
 		m.actOnSelectedNode(func(n *nodeItem) {
 			if n.state == "muted" {
 				n.state = "online"
@@ -409,7 +420,13 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				n.state = "muted"
 				m.flash = fmt.Sprintf("%s muted", n.callsign)
 			}
+			persistNum = m.nodeNumOf(n.callsign)
+			persistFav = n.fav
+			persistMute = n.state == "muted"
 		})
+		if persistNum != 0 {
+			_ = saveNodePrefs(m.db, persistNum, persistFav, persistMute)
+		}
 	case "s":
 		if m.focused == paneNodes {
 			m.nodeSort = (m.nodeSort + 1) % 3

@@ -237,42 +237,83 @@ func saveNode(db *sql.DB, nodeNum uint32, longName, shortName, hwModel string) e
 	return nil
 }
 
-// cachedNode is the slim shape of a persisted node row — just the
-// identity fields our UI needs at replay time, no telemetry (which
-// is per-session by nature).
+// cachedNode is the slim shape of a persisted node row — identity
+// fields + sticky UX preferences (favorite / muted). No telemetry
+// (per-session by nature).
 type cachedNode struct {
 	nodeNum   uint32
 	longName  string
 	shortName string
 	hwModel   string
+	favorite  bool
+	muted     bool
 }
 
 // loadNodes reads every persisted node. Used at startup to
-// pre-populate m.nodes / m.nodesByNum with real callsigns before
-// the radio handshake, so ghost-peer replay can skip nodes we
-// already know by name — and messages render "WiobooJones"
-// immediately on relaunch instead of "node 0x…".
+// pre-populate m.nodes / m.nodesByNum with real callsigns AND the
+// user's sticky favorite / muted preferences, so the star next to
+// a node and the "⊘ muted" state survive restarts.
 func loadNodes(db *sql.DB) ([]cachedNode, error) {
 	if db == nil {
 		return nil, nil
 	}
-	rows, err := db.Query(`SELECT node_num, long_name, short_name, hw_model FROM nodes`)
+	rows, err := db.Query(
+		`SELECT node_num, long_name, short_name, hw_model, favorite, muted FROM nodes`,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("query nodes: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []cachedNode
 	for rows.Next() {
-		var n cachedNode
-		if err := rows.Scan(&n.nodeNum, &n.longName, &n.shortName, &n.hwModel); err != nil {
+		var (
+			n   cachedNode
+			fav int
+			mu  int
+		)
+		if err := rows.Scan(&n.nodeNum, &n.longName, &n.shortName, &n.hwModel, &fav, &mu); err != nil {
 			return nil, fmt.Errorf("scan node: %w", err)
 		}
+		n.favorite = fav != 0
+		n.muted = mu != 0
 		out = append(out, n)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iter: %w", err)
 	}
 	return out, nil
+}
+
+// saveNodePrefs writes just the sticky UX preferences (favorite /
+// muted) for a single node num. INSERT-on-conflict so this works
+// even if the NodeInfo identity row isn't saved yet (user stars a
+// still-ghost peer). The identity fields stay empty until
+// saveNode fills them in later; saveNode's ON CONFLICT UPDATE
+// explicitly does NOT touch favorite / muted so this pref never
+// gets clobbered.
+func saveNodePrefs(db *sql.DB, nodeNum uint32, favorite, muted bool) error {
+	if db == nil {
+		return nil
+	}
+	fav, mu := 0, 0
+	if favorite {
+		fav = 1
+	}
+	if muted {
+		mu = 1
+	}
+	_, err := db.Exec(`
+        INSERT INTO nodes (node_num, favorite, muted)
+        VALUES (?, ?, ?)
+        ON CONFLICT(node_num) DO UPDATE SET
+            favorite = excluded.favorite,
+            muted    = excluded.muted`,
+		nodeNum, fav, mu,
+	)
+	if err != nil {
+		return fmt.Errorf("save node prefs: %w", err)
+	}
+	return nil
 }
 
 // loadMessages reads the most recent `limit` rows, oldest-first (so

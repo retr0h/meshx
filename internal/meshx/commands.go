@@ -602,11 +602,28 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.systemLine(fmt.Sprintf("ping: node %s unknown", target))
 			return nil
 		}
-		m.systemBlock(
-			fmt.Sprintf("ping %s", n.callsign),
+		// Pinging ourselves yields meaningless telemetry (0s / 0.0 dB
+		// because we never rx our own packets). Refuse with a note
+		// rather than emitting a card full of zeros.
+		if nodeNum := m.nodeNumOf(target); nodeNum != 0 && nodeNum == m.myNodeNum {
+			m.systemLine("ping: that's you — /whois for your own config")
+			return nil
+		}
+		lines := []string{
 			fmt.Sprintf("last heard: %s ago", n.lastHeard),
 			fmt.Sprintf("signal:     %s", signalReport(n)),
-		)
+		}
+		// Include peer battery + distance if we've received Device
+		// Metrics + Position for them. Both are optional — Meshtastic
+		// peers don't always broadcast telemetry or a GPS fix.
+		if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
+			if pos, ok := m.peerPositions[nodeNum]; ok && m.myGrid != "" {
+				if km := haversineKm(m.myLatitude, m.myLongitude, pos.latitude, pos.longitude); km > 0 {
+					lines = append(lines, fmt.Sprintf("distance:   %.1f km  (grid %s)", km, pos.grid))
+				}
+			}
+		}
+		m.systemBlock(fmt.Sprintf("ping %s", n.callsign), lines...)
 	case "w", "whois":
 		target := rest
 		if target == "" {

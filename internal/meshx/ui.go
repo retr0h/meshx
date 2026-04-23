@@ -194,7 +194,7 @@ func (m model) renderInputRow() string {
 	}
 	if m.mode == modeNav {
 		hint := dim.Render(
-			"NAV · j/k · r reply · t trace · p ping · * star · ESC back to input · / search · ? help",
+			"NAV · j/k · r reply · w whois · t trace · p ping · * star · ESC back to input · / search · ? help",
 		)
 		return " " + hint
 	}

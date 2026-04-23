@@ -712,8 +712,8 @@ func stateWeight(s string) int {
 func (m model) renderNodesPane(width, height int) string {
 	total := len(m.nodes)
 	online := 0
-	for _, n := range m.nodes {
-		if n.state == "online" {
+	for i := range m.nodes {
+		if m.nodes[i].currentState() == "online" {
 			online++
 		}
 	}
@@ -780,7 +780,8 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 	// IRC-style sigil choice:
 	sigil := " "
 	sigilColor := mhDrained
-	switch n.state {
+	state := n.currentState()
+	switch state {
 	case "online":
 		sigil = "@"
 		sigilColor = mhGreen
@@ -804,7 +805,7 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 	// convention). Non-online states do tint the name since those
 	// ARE worth surfacing at a glance.
 	nameColor := mhFG
-	switch n.state {
+	switch state {
 	case "offline":
 		nameColor = mhDrained
 	case "failed":
@@ -987,11 +988,34 @@ func (m model) renderMessagesPane(width, height int) string {
 	// BitchX / irssi gravity — pin the log to the bottom of the
 	// pane. `rowsFree` IS the pane's total content budget
 	// (includes header + separator + message rows), so pad to
-	// that total. Previous attempt treated rowsFree as
-	// message-only budget, which overflowed the paneStyle height
-	// by 2 rows and pushed the top-bar off-screen.
-	if pad := rowsFree - len(lines); pad > 0 {
-		rebuilt := make([]string, 0, rowsFree)
+	// that total.
+	//
+	// Reply-threaded rows render as TWO visual lines (quote-line +
+	// row, joined with "\n" inside one string). tailStartList +
+	// naive `len(lines)` padding both treat each slice element as
+	// one row, which under-counts the real row usage and makes the
+	// pane overflow — that overflow bubbles through paneStyle's
+	// Height limit, pushes the whole view up, and shears the top
+	// status bar off the terminal top. Count visual rows instead
+	// (1 + strings.Count(line, "\n")) for both the trim-to-fit and
+	// the pad-up-to-fit passes.
+	visualRows := func(ls []string) int {
+		n := 0
+		for _, l := range ls {
+			n += 1 + strings.Count(l, "\n")
+		}
+		return n
+	}
+	// Overflow trim — drop the oldest message rows (keeping
+	// header + separator + any trailing banner) until visual rows
+	// ≤ rowsFree. Catches reply-threaded rows that tailStartList
+	// undercounted, and any other multi-line render the row
+	// budgeter can't predict.
+	for visualRows(lines) > rowsFree && len(lines) > 2 {
+		lines = append(lines[:2:2], lines[3:]...)
+	}
+	if pad := rowsFree - visualRows(lines); pad > 0 {
+		rebuilt := make([]string, 0, len(lines)+pad)
 		rebuilt = append(rebuilt, lines[:2]...) // preserve header + separator
 		for i := 0; i < pad; i++ {
 			rebuilt = append(rebuilt, "")

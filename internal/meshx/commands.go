@@ -287,7 +287,7 @@ func (m *model) activate() {
 			}
 			m.flash = fmt.Sprintf(
 				"%s  ·  %s  ·  fw %s  ·  last heard %s  ·  %s",
-				n.callsign, hw, fw, n.lastHeard, n.state,
+				n.callsign, hw, fw, n.currentLastHeard(), n.currentState(),
 			)
 		}
 	case paneMessages:
@@ -585,8 +585,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// Meshtastic-specific — summarize what the mesh looks like
 		// from our vantage: number of nodes we can hear, by state.
 		online, muted, offline := 0, 0, 0
-		for _, n := range m.nodes {
-			switch n.state {
+		for i := range m.nodes {
+			switch m.nodes[i].currentState() {
 			case "online":
 				online++
 			case "muted":
@@ -654,7 +654,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		lines := []string{
-			fmt.Sprintf("last heard: %s ago", n.lastHeard),
+			fmt.Sprintf("last heard: %s ago", n.currentLastHeard()),
 			fmt.Sprintf("signal:     %s", signalReport(n)),
 		}
 		// Include peer battery + distance if we've received Device
@@ -724,8 +724,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		lines = append(lines,
 			fmt.Sprintf("hw:     %s", hw),
 			fmt.Sprintf("fw:     %s", fw),
-			fmt.Sprintf("heard:  %s ago", n.lastHeard),
-			fmt.Sprintf("state:  %s", n.state),
+			fmt.Sprintf("heard:  %s ago", n.currentLastHeard()),
+			fmt.Sprintf("state:  %s", n.currentState()),
 			fmt.Sprintf("signal: %s", signalReport(n)),
 		)
 		// Battery + channel-util are only tracked model-wide for

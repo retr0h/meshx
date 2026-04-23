@@ -142,6 +142,14 @@ type messageItem struct {
 	// we'd otherwise be stuck showing "node 0xabc" forever). Zero
 	// for "me" / system lines / demo seeds.
 	fromNum uint32
+
+	// style — notice-row styling knob set by the m.notice() writer.
+	// nil for chat rows; non-nil for every `-!-` entry (storage,
+	// whois, splash banner, future error/success pulses). Lets the
+	// renderer pick body fg / bold / center off one struct instead
+	// of branching on ad-hoc fields. See notices.go for the shape
+	// and defaults.
+	style *noticeStyle
 }
 
 type sortMode int
@@ -439,7 +447,7 @@ func newModel(demo *Demo, dest string) model {
 	// prompt and the cyan data color without adding more green.
 	in.Cursor.Style = lipgloss.NewStyle().
 		Background(lipgloss.Color(mhPink)).
-		Foreground(lipgloss.Color("#000000")).
+		Foreground(lipgloss.Color(mhCyan)).
 		Bold(true)
 	focusCmd := in.Focus()
 
@@ -448,7 +456,6 @@ func newModel(demo *Demo, dest string) model {
 		mode:            modeInput,
 		focused:         paneMessages,
 		splash:          chosenSplash,
-		messages:        splashAsMessages(chosenSplash),
 		connectDest:     dest,
 		demo:            demo,
 		nodesByNum:      make(map[uint32]int),
@@ -458,7 +465,6 @@ func newModel(demo *Demo, dest string) model {
 		searchInput:     func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
 		initialFocusCmd: focusCmd,
 	}
-	m.selectedMsg = len(m.messages) - 1
 
 	if demo == nil {
 		// Live-radio mode — open the persistence store and replay the
@@ -555,6 +561,12 @@ func newModel(demo *Demo, dest string) model {
 				}
 			}
 		}
+		// Splash notices come last so the BitchX greeter is the
+		// newest entry in the log — sits right at the bottom above
+		// the input bar on launch just like every other recent
+		// message, and scrolls UP naturally as fresh chat arrives.
+		m.messages = append(m.messages, splashAsNotices(chosenSplash)...)
+		m.selectedMsg = len(m.messages) - 1
 		return m
 	}
 
@@ -565,6 +577,9 @@ func newModel(demo *Demo, dest string) model {
 	m.channels = append([]channelItem(nil), demo.Channels...)
 	m.nodes = append([]nodeItem(nil), demo.Nodes...)
 	m.messages = append([]messageItem(nil), demo.Messages...)
+	// Splash notices land at the tail so the BitchX greeter is the
+	// newest entry in the log — same behaviour as live mode.
+	m.messages = append(m.messages, splashAsNotices(chosenSplash)...)
 	if len(demo.Channels) > 0 {
 		m.currentChannel = demo.Channels[0].name
 	}

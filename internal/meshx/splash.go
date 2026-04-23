@@ -134,50 +134,69 @@ func pickSplash() splashVariant {
 	return allSplashVariants[rand.Intn(len(allSplashVariants))]
 }
 
+// splashAsNotices emits the BitchX-on-connect greeting as a
+// group of status="notice" messageItems, all wearing the same
+// `║ ▎ HH:MM -!- …` frame every other system row has — the
+// block-art logo AND the brand tagline render cohesive together.
+// Only the first row carries a timestamp; continuation rows blank
+// it out (10-cell spacer) so the `-!-` column stays aligned down
+// the whole group, the same way systemBlock renders multi-line
+// cards. Each block-art row is pre-colored by the variant's
+// per-row color fn so the rotating maxheadroom gradient still
+// shines through on every launch.
+func splashAsNotices(v splashVariant) []messageItem {
+	t := timeNowHHMM()
+	gid := nextGroupID() // every splash row shares the same group
 
-// splashAsMessages emits the chosen variant as a sequence of
-// messageItems with status="splash". The renderer detects that
-// status and skips the `-!-` prefix, timestamp, sender column, and
-// selection highlight — the text is already fully lipgloss-styled
-// (colored block-art + tagline + credit) so it paints as-is and
-// preserves the rotating per-variant color scheme.
-//
-// This is what makes the splash actually *seen*: instead of a
-// blocking pre-content gate the user dismisses in a keystroke, the
-// banner becomes the first rows of the scrollback log. Fresh chat
-// appends below and pushes the splash upward until it scrolls off
-// — pure BitchX-on-connect feel.
-func splashAsMessages(v splashVariant) []messageItem {
-	// Colored block-art rows using the variant's per-row color fn.
-	logo := make([]string, len(v.rows))
-	for i, row := range v.rows {
-		logo[i] = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(v.color(i))).
-			Bold(true).
-			Render(row)
+	// withGroup stamps the shared group id + hides the timestamp
+	// on continuation rows. Only the very first row carries time so
+	// the `-!-` column stays aligned top-to-bottom (same convention
+	// noticeBlock uses for /whois and /config cards).
+	withGroup := func(mi messageItem, showTime bool) messageItem {
+		mi.group = gid
+		if !showTime {
+			mi.time = ""
+		} else {
+			mi.time = t
+		}
+		return mi
 	}
 
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	mesh := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
+	out := make([]messageItem, 0, len(v.rows)+4)
+
+	// Leading blank padding row — breathing room above the logo.
+	out = append(out, withGroup(buildNotice("", noticeStyle{}), true))
+
+	// Block-art rows: per-row variant color + centered so the logo
+	// floats in the pane middle while the `-!-` prefix stays flush.
+	for i, row := range v.rows {
+		out = append(out, withGroup(buildNotice(row, noticeStyle{
+			fg:     v.color(i),
+			bold:   true,
+			center: true,
+		}), false))
+	}
+
+	// Blank separator between logo and tagline.
+	out = append(out, withGroup(buildNotice("", noticeStyle{}), false))
+
+	// Tagline — cyan brand, drained punctuation, magenta handle,
+	// bracketed with the mesh-green ░▒▓█▓▒░ spark. Pre-styled body
+	// passed as-is; the renderer doesn't wrap it in sys.Render since
+	// center means the style split stays visible.
 	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
 	magenta := lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta))
-	sparkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen))
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	spark := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Render("░▒▓█▓▒░")
+	tagline := spark + " " +
+		cyan.Render("Meshtastic") + dim.Render(" messenger  ·  by ") +
+		magenta.Render("retr0h") + " " + spark
+	out = append(out, withGroup(buildNotice(tagline, noticeStyle{
+		center: true,
+	}), false))
 
-	tagline := cyan.Render("Meshtastic") + dim.Render(" messenger  ·  ") +
-		magenta.Render("inspired by BitchX + irssi + mutt")
-	credit := dim.Render("// by retr0h  ·  ") +
-		mesh.Render(`//\`) +
-		dim.Render("  ·  maxheadroom palette  ·  variant: ") +
-		mesh.Render(v.name)
-	spark := sparkStyle.Render("░▒▓█▓▒░")
+	// Trailing blank padding row.
+	out = append(out, withGroup(buildNotice("", noticeStyle{}), false))
 
-	rows := []string{spark, ""}
-	rows = append(rows, logo...)
-	rows = append(rows, "", spark, "", tagline, credit)
-
-	out := make([]messageItem, len(rows))
-	for i, r := range rows {
-		out[i] = messageItem{status: "splash", text: r}
-	}
 	return out
 }

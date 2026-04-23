@@ -927,6 +927,15 @@ func (m model) renderMessagesPane(width, height int) string {
 			bg = rowBgOdd
 			lastGroup = msg.group
 			groupBg = bg
+		case msg.status == "system" || msg.status == "notice":
+			// Standalone `-!-` rows (storage notices, single-line
+			// system messages) also pin to rowBgOdd so they read
+			// the same shade as grouped system blocks above and
+			// below them — mixing zebra parity into the system
+			// stream made storage lines flicker between shades.
+			bg = rowBgOdd
+			lastGroup = 0
+			groupBg = ""
 		default:
 			bg = zebraBg(i)
 			lastGroup = 0
@@ -1033,15 +1042,103 @@ func zebraBg(i int) string {
 // The entire row is rendered on a zebra bg so adjacent messages
 // alternate shade — no blank separator needed; the color alternation
 // is the visual separator. Continuous grid from top to bottom.
+// renderNoticeRow renders a status="notice" messageItem — a
+// pre-styled colored info line using the exact same frame every
+// other system row wears: 3-col wrapSelection gutter, lavender ▎
+// accent, drained `   HH:MM  ` timestamp column. The only thing
+// that differs from status="system" is the body: notice rows
+// pass msg.text through verbatim (caller supplies lipgloss-styled
+// text) instead of wrapping it with sys.Render's italic lavender.
+// Result: a line that looks identical to /storage and /whois
+// entries except the words themselves are colored. Used by the
+// BitchX splash greeter and any future "say something in color
+// without losing the chrome" moment.
+func (m model) renderNoticeRow(msg messageItem, selected bool, inner int, rowBg string) string {
+	// Default style — zero-value noticeStyle is the canonical
+	// lavender italic system line. Letting msg.style be nil falls
+	// back to this so callers without a style (legacy entry points
+	// that haven't migrated to m.notice yet) still render sanely.
+	style := noticeStyle{}
+	if msg.style != nil {
+		style = *msg.style
+	}
+
+	accent := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhLavender)).
+		Background(lipgloss.Color(rowBg)).
+		Bold(true).
+		Render("▎") + lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
+	tstamp := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Background(lipgloss.Color(rowBg))
+	// sys — the standard `-!-` chrome style. Lavender italic over
+	// rowBg, identical to what systemLine has worn since day one.
+	// Used for the prefix + center-pad so the left edge of every
+	// notice row reads cohesive regardless of body color.
+	sys := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhLavender)).
+		Background(lipgloss.Color(rowBg)).
+		Italic(true)
+
+	timeCol := "   " + msg.time + "  "
+	if msg.time == "" {
+		timeCol = "          "
+	}
+
+	// Fast path — default styling, no centering. One sys.Render
+	// over the whole msg.text produces a single uninterrupted ANSI
+	// span, which the terminal paints as one clean lavender-italic
+	// band on rowBg. Every storage / whois / identified line lands
+	// here.
+	if style.fg == "" && !style.center && !style.bold {
+		line := accent + tstamp.Render(timeCol) + sys.Render(msg.text)
+		return wrapSelection(line, selected, false, inner, rowBg)
+	}
+
+	// Styled path — the body takes a custom fg / bold / center.
+	// Split the literal "-!- " prefix off so it stays flush-left in
+	// the standard sys style; only the content after it receives
+	// the override styling. Keeping the prefix uniform across every
+	// notice row is what makes the splash banner visually stack
+	// with regular `-!-` lines.
+	const prefix = "-!- "
+	bodyContent := strings.TrimPrefix(msg.text, prefix)
+
+	bodyStyle := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
+	if style.fg != "" {
+		bodyStyle = bodyStyle.Foreground(lipgloss.Color(style.fg))
+	} else {
+		bodyStyle = bodyStyle.Foreground(lipgloss.Color(mhLavender)).Italic(true)
+	}
+	if style.bold {
+		bodyStyle = bodyStyle.Bold(true)
+	}
+	styledBody := bodyStyle.Render(bodyContent)
+
+	// center — pad leading sys-styled spaces so the body floats at
+	// (inner - bw) / 2 in the pane. Fixed 19-cell prefix = gutter 3
+	// + accent 2 + timeCol 10 + "-!- " 4.
+	var pad string
+	if style.center {
+		const prefixCells = 19
+		bw := lipgloss.Width(bodyContent)
+		padLen := (inner-bw)/2 - prefixCells
+		if padLen > 0 {
+			pad = sys.Render(strings.Repeat(" ", padLen))
+		}
+	}
+
+	line := accent + tstamp.Render(timeCol) + sys.Render(prefix) + pad + styledBody
+	return wrapSelection(line, selected, false, inner, rowBg)
+}
+
 func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg string) string {
-	// "splash" rows are decorative BitchX-style log banners — already
-	// lipgloss-styled (colored block-art + tagline), rendered with
-	// no `-!-` prefix, no timestamp, no sender column, no selection
-	// highlight. Just the pre-styled text centered in the pane so
-	// the splash sits quietly at the top of the scrollback until
-	// real messages push it off-screen.
-	if msg.status == "splash" {
-		return lipgloss.PlaceHorizontal(inner, lipgloss.Center, msg.text)
+	// "notice" rows are pre-styled colored info lines — the splash
+	// greeter on launch, future connection banners, anything that
+	// wants to say something in color without getting flattened by
+	// the default system-row lavender wrap. See renderNoticeRow.
+	if msg.status == "notice" || msg.status == "system" {
+		return m.renderNoticeRow(msg, selected, inner, rowBg)
 	}
 	tstamp := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).

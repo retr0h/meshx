@@ -177,10 +177,15 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
 	// Ctrl+W prefix — vim window-nav across the stacked log / input.
+	// From input (bottom pane), any direction hop lands on the
+	// messages pane — there's nowhere else to go. Accepting j/k/up/
+	// down all as aliases avoids the "I mashed Ctrl+W+j and nothing
+	// happened" dead-end when the user's muscle memory disagrees
+	// with vim's strict "j=down-only" semantics.
 	if m.ctrlWPend {
 		m.ctrlWPend = false
 		switch key {
-		case "k", "up":
+		case "j", "k", "up", "down":
 			m.mode = modeNav
 			m.focused = paneMessages
 			m.input.Blur()

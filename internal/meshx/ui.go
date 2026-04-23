@@ -932,7 +932,12 @@ func (m model) renderMessagesPane(width, height int) string {
 		case msg.group != 0 && msg.group == lastGroup:
 			bg = groupBg
 		case msg.group != 0:
-			bg = zebraBg(i)
+			// System blocks (/whois, /config, /ping, /env, /info
+			// cards) always use the lighter zebra tint so the block
+			// reads consistently as one shaded card — never the
+			// near-black rowBgEven that would make a block look
+			// like terminal-bg depending on parity.
+			bg = rowBgOdd
 			lastGroup = msg.group
 			groupBg = bg
 		default:

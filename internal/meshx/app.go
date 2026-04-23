@@ -711,6 +711,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyTextMessage(msg)
 		return m, nil
 
+	case radioRoutingMsg:
+		m.applyRouting(msg)
+		return m, nil
+
 	case radioMetadataMsg:
 		m.radioFirmware = msg.firmwareVersion
 		m.radioDeviceState = msg.deviceStateVer
@@ -1078,6 +1082,55 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 	if msg.channel < len(m.channels) && m.channels[msg.channel].name != m.currentChannel && !mine {
 		m.channels[msg.channel].unread++
 	}
+}
+
+// applyRouting flips the status of the local messageItem whose
+// packetID matches the Routing reply's request_id. NONE → "ack"
+// (delivery succeeded), anything else → "fail" (the errorName
+// hints at why: TIMEOUT, MAX_RETRANSMIT, NO_INTERFACE...).
+// Routing replies for packets we didn't originate silently drop —
+// request_id won't match any of our outbound rows.
+func (m *model) applyRouting(msg radioRoutingMsg) {
+	if msg.requestID == 0 {
+		return
+	}
+	for i := range m.messages {
+		if m.messages[i].packetID != msg.requestID || !m.messages[i].mine {
+			continue
+		}
+		if msg.ok {
+			m.messages[i].status = "ack"
+			m.flash = "ack received"
+		} else {
+			m.messages[i].status = "fail"
+			m.flash = "delivery failed: " + msg.errorName + "  (R to resend)"
+		}
+		return
+	}
+}
+
+// resend takes a prior outbound messageItem, re-enqueues it over
+// the pump with a fresh packetID, and flips the original row's
+// status back to "pending" so the user sees the retransmit in
+// flight. Bound to `R` in nav mode when the cursor is on a
+// status=="fail" row.
+func (m *model) resend(idx int) {
+	if idx < 0 || idx >= len(m.messages) {
+		return
+	}
+	msg := &m.messages[idx]
+	if !msg.mine || msg.status != "fail" {
+		return
+	}
+	if m.pump == nil {
+		m.flash = "no radio connected — cannot resend"
+		return
+	}
+	envelope, pid := newTextToRadio(msg.text, m.currentChannelIndex(), msg.replyID)
+	msg.packetID = pid
+	msg.status = "pending"
+	m.pump.Enqueue(envelope)
+	m.flash = "retransmit sent — awaiting ack"
 }
 
 // humanDuration formats a time.Duration as a compact label like "2m",

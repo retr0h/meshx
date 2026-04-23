@@ -181,7 +181,7 @@ func (m model) renderInputRow() string {
 	}
 	if m.mode == modeNav {
 		hint := dim.Render(
-			"NAV · j/k · r reply · w whois · t trace · p ping · * star · ESC back to input · / search · ? help",
+			"NAV · j/k · r reply · R resend · w whois · t trace · p ping · * star · ESC back to input · / search · ? help",
 		)
 		return " " + hint
 	}
@@ -267,6 +267,7 @@ func (m model) renderHelpView(height int) string {
 		"",
 		sec.Render("NAV-MODE QUICK-KEYS (on message/node selection)"),
 		kv("r", "reply — prefills /reply <sender> into input"),
+		kv("R", "resend — retransmit a failed (✗) outbound row"),
 		kv("t", "traceroute selected sender"),
 		kv("p", "ping selected sender"),
 		kv("w", "whois selected sender"),
@@ -1330,8 +1331,17 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 	if msg.snr != "" {
 		snrCol = fmt.Sprintf("%sdB  ", msg.snr)
 	}
+	// statusCol — per-message delivery state co-located with the row.
+	//   "…"  pending: sent, awaiting Routing reply from the radio
+	//   "✓"  ack:     radio acknowledged delivery
+	//   "✗"  fail:    Routing returned a non-NONE error reason
+	//   " "  empty:   inbound message (no delivery state to show)
+	// Persistent across scrollback + unique per row so multiple
+	// in-flight messages each carry their own indicator.
 	statusCol := "  "
 	switch msg.status {
+	case "pending":
+		statusCol = "… "
 	case "ack":
 		statusCol = "✓ "
 	case "fail":
@@ -1339,6 +1349,8 @@ func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg
 	}
 	right := hop.Render(hopCol) + hop.Render(snrCol) + func() string {
 		switch msg.status {
+		case "pending":
+			return tstamp.Render(statusCol) // dim drained — in flight
 		case "ack":
 			return ack.Render(statusCol)
 		case "fail":

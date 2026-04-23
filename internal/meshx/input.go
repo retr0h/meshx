@@ -417,6 +417,14 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if target != "" {
 			return m, m.prefillInput("/reply " + target + " ")
 		}
+	case "R":
+		// Resend a failed outbound message — rebuilds the ToRadio
+		// envelope with a fresh packetID and flips the row back to
+		// "pending" so the user sees the retransmit in flight.
+		// Only valid on an own-row with status=="fail".
+		if m.focused == paneMessages && m.selectedMsg >= 0 && m.selectedMsg < len(m.messages) {
+			m.resend(m.selectedMsg)
+		}
 	case "t":
 		target := m.selectedSender()
 		if target != "" {

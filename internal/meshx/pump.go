@@ -134,6 +134,19 @@ type (
 		replyID  uint32
 	}
 
+	// radioRoutingMsg is the Meshtastic delivery receipt — the radio
+	// echoes a Routing packet with request_id == our packetID once it
+	// finishes the send (or gives up). errorReason == NONE means the
+	// packet made it onto the mesh; anything else (TIMEOUT,
+	// MAX_RETRANSMIT, NO_INTERFACE, etc.) is a delivery failure.
+	// The UI flips the matching local row's status to "ack" / "fail"
+	// so the `…` in-flight marker becomes ✓ or ✗.
+	radioRoutingMsg struct {
+		requestID uint32
+		errorName string // e.g. "NONE", "TIMEOUT", "MAX_RETRANSMIT"
+		ok        bool   // true when errorName == "NONE"
+	}
+
 	// radioMetadataMsg delivers firmware_version + hw identity
 	// details from the one-shot FromRadio.Metadata envelope.
 	radioMetadataMsg struct {
@@ -451,6 +464,24 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 				rssi:        fmt.Sprintf("%d", p.GetRxRssi()),
 				hops:        int(p.GetHopStart()) - int(p.GetHopLimit()),
 				lastHeardAt: time.Unix(int64(p.GetRxTime()), 0),
+			}
+		case pb.PortNum_ROUTING_APP:
+			// Routing payload carries the radio's verdict on a packet
+			// we (or someone else) sent. For our own outbound: the
+			// MeshPacket's request_id == our stashed packetID and the
+			// Routing.error_reason says NONE (ack) or a failure code
+			// (TIMEOUT, MAX_RETRANSMIT, ...). For foreign packets the
+			// request_id won't match any of ours so the UI handler
+			// simply drops it.
+			r := &pb.Routing{}
+			if err := proto.Unmarshal(dec.GetPayload(), r); err != nil {
+				return nil
+			}
+			reason := r.GetErrorReason().String()
+			return radioRoutingMsg{
+				requestID: dec.GetRequestId(),
+				errorName: reason,
+				ok:        reason == "NONE",
 			}
 		}
 		return nil

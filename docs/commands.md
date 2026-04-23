@@ -65,6 +65,7 @@ Single-letter shortcuts that operate on whatever's highlighted:
 | Key | Action                                                 |
 | --- | ------------------------------------------------------ |
 | `r` | reply — prefills `/reply <sender> ` into the input bar |
+| `R` | resend — retransmit a failed (`✗`) outbound row        |
 | `t` | traceroute selected sender                             |
 | `p` | ping selected sender                                   |
 | `w` | whois selected sender                                  |
@@ -73,6 +74,21 @@ Single-letter shortcuts that operate on whatever's highlighted:
 | `F` | filter the log to this node's traffic                  |
 | `X` | clear active filter                                    |
 | `s` | cycle node sort (heard → name → state) — nodes overlay |
+
+### Delivery status (outbound messages)
+
+Every message you send carries a right-edge indicator that reflects what the
+radio told us about delivery:
+
+| Glyph | Status    | Meaning                                                    |
+| ----- | --------- | ---------------------------------------------------------- |
+| `…`   | `pending` | sent to the radio; waiting for the `ROUTING_APP` receipt   |
+| `✓`   | `ack`     | radio acknowledged delivery (Routing `errorReason = NONE`) |
+| `✗`   | `fail`    | delivery failed (TIMEOUT, MAX_RETRANSMIT, NO_INTERFACE, …) |
+
+A failed row can be resent in-place from nav mode with `R` — meshX rebuilds the
+`ToRadio` envelope with a fresh `MeshPacket.id` and flips the row back to `…`
+until the radio reports again.
 
 ## Ham radio /commands
 
@@ -184,18 +200,21 @@ client (phone app, Python CLI, web UI) can consume our packets and vice-versa.
 This table is the quick cross-reference for what each slash command sends and
 what protobuf field each display surface reads.
 
-| Command                                            | Wire format                                                                                                     | Meshtastic field / API                                                                        |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| chat / `/73` / `/qsl` / `/cq` / `/wx` / `/grid`    | `MeshPacket` with `Data.portnum = TEXT_MESSAGE_APP`, `Data.payload` = UTF-8 text, `To = 0xFFFFFFFF` (broadcast) | text is just bytes on the wire; receivers look up `from` in their NodeDB                      |
-| threaded reply (`/73 <call>`, `/cqr <call>`, etc.) | adds `Data.reply_id = <parent packet id>` to the same TEXT_MESSAGE_APP packet                                   | firmware doesn't parse it; clients that support threading render as quote                     |
-| `/nick <longname>`                                 | `ToRadio` with `AdminMessage.SetOwner.User.long_name`, port `ADMIN_APP`, addressed to own node num              | updates `User.long_name` on the radio; persisted to flash; next NodeInfo broadcast carries it |
-| `/tag <emoji>`                                     | same as `/nick` but fills `User.short_name`                                                                     | updates `User.short_name`; up to 4 bytes                                                      |
-| `/sync`                                            | `ToRadio.WantConfigId = <nonce>`                                                                                | triggers the radio to re-dump its NodeDB + channels + configs                                 |
-| `/whois <call>`                                    | local only — reads from `m.nodes[idx]` populated by earlier `FromRadio.NodeInfo` and `NODEINFO_APP` packets     | nothing on the wire                                                                           |
-| `/config`, `/info`                                 | local only — reads from the radio's initial handshake state                                                     | nothing on the wire                                                                           |
-| incoming `NODEINFO_APP`                            | `MeshPacket` with `Data.portnum = NODEINFO_APP`, payload is a `User` proto                                      | surfaces peer longname/shortname, upgrades 👻 ghost peers to real names                       |
-| incoming `POSITION_APP`                            | payload is a `Position` proto                                                                                   | feeds `/qth <call>` and status-bar `☖ <grid>`                                                 |
-| incoming `TELEMETRY_APP`                           | payload is a `Telemetry` proto with `DeviceMetrics` or `EnvironmentMetrics` variants                            | feeds status-bar `⚡ battery` and `/env <call>`                                               |
+| Command                                            | Wire format                                                                                                                                                                                     | Meshtastic field / API                                                                        |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| chat / `/73` / `/qsl` / `/cq` / `/wx` / `/grid`    | `MeshPacket` with `Data.portnum = TEXT_MESSAGE_APP`, `Data.payload` = UTF-8 text, `To = 0xFFFFFFFF` (broadcast)                                                                                 | text is just bytes on the wire; receivers look up `from` in their NodeDB                      |
+| threaded reply (`/73 <call>`, `/cqr <call>`, etc.) | adds `Data.reply_id = <parent packet id>` to the same TEXT_MESSAGE_APP packet                                                                                                                   | firmware doesn't parse it; clients that support threading render as quote                     |
+| `/nick <longname>`                                 | `ToRadio` with `AdminMessage.SetOwner.User.long_name`, port `ADMIN_APP`, addressed to own node num                                                                                              | updates `User.long_name` on the radio; persisted to flash; next NodeInfo broadcast carries it |
+| `/tag <emoji>`                                     | same as `/nick` but fills `User.short_name`                                                                                                                                                     | updates `User.short_name`; up to 4 bytes                                                      |
+| `/sync`                                            | `ToRadio.WantConfigId = <nonce>`                                                                                                                                                                | triggers the radio to re-dump its NodeDB + channels + configs                                 |
+| `/whois <call>`                                    | local only — reads from `m.nodes[idx]` populated by earlier `FromRadio.NodeInfo` and `NODEINFO_APP` packets                                                                                     | nothing on the wire                                                                           |
+| `/config`, `/info`                                 | local only — reads from the radio's initial handshake state                                                                                                                                     | nothing on the wire                                                                           |
+| incoming `NODEINFO_APP`                            | `MeshPacket` with `Data.portnum = NODEINFO_APP`, payload is a `User` proto                                                                                                                      | surfaces peer longname/shortname, upgrades 👻 ghost peers to real names                       |
+| incoming `POSITION_APP`                            | payload is a `Position` proto                                                                                                                                                                   | feeds `/qth <call>` and status-bar `☖ <grid>`                                                 |
+| incoming `TELEMETRY_APP`                           | payload is a `Telemetry` proto with `DeviceMetrics` or `EnvironmentMetrics` variants                                                                                                            | feeds status-bar `⚡ battery` and `/env <call>`                                               |
+| outgoing packet id                                 | every `TEXT_MESSAGE_APP` packet we send fills `MeshPacket.id` with a random non-zero uint32, stashed on `messageItem.packetID`                                                                  | correlation key for the later Routing reply; without it ack tracking is blind                 |
+| incoming `ROUTING_APP`                             | `Data.portnum = ROUTING_APP`, `Data.request_id = <our sent packetID>`, payload is a `Routing` proto whose `error_reason` is `NONE` on ack or a code (`TIMEOUT`, `MAX_RETRANSMIT`, …) on failure | flips the outbound row's `status` to `ack` / `fail`; drives the `…` → `✓` / `✗` indicator     |
+| `R` in nav mode                                    | rebuilds the original `ToRadio` envelope with a fresh `MeshPacket.id`, re-enqueues                                                                                                              | retransmit of a failed outbound; fresh id so the next routing reply lands cleanly             |
 
 meshX doesn't ship a radio configurator for LoRa region / modem preset / role —
 those require a reboot and the official Meshtastic app / CLI handle them

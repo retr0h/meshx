@@ -119,6 +119,16 @@ func (m model) computeCompletions(text string, cursor int) (matches []matchItem,
 		cursor = len(text)
 	}
 
+	// Help-arg completion — `/help <verb>` (or the `/h` alias)
+	// completes the argument against the slashCommands universe.
+	// Uses word bounds rather than rest-of-line because help topics
+	// are single tokens, unlike multi-word callsigns.
+	if helpArgStart(text, cursor) {
+		start, end = wordBounds(text, cursor)
+		word := text[start:end]
+		return helpUniverse(word), start, end
+	}
+
 	// Command-aware arg boundary — if the line looks like
 	// `/<callsign-arg-cmd> <anything>` and the cursor is past the
 	// first space, treat the whole rest as one completion target so
@@ -266,6 +276,41 @@ func sortMatches(xs []matchItem) {
 	sort.SliceStable(xs, func(i, j int) bool {
 		return xs[i].display < xs[j].display
 	})
+}
+
+// helpArgStart reports whether the cursor sits inside the argument
+// of `/help` or its `/h` alias — i.e. the user is typing the topic
+// name, not the verb itself. Mirrors commandArgStart's first-space
+// check; kept separate so the help universe doesn't leak into the
+// callsign-arg path (and vice versa).
+func helpArgStart(text string, cursor int) bool {
+	if !strings.HasPrefix(text, "/") {
+		return false
+	}
+	space := strings.IndexByte(text, ' ')
+	if space < 0 || cursor <= space {
+		return false
+	}
+	verb := strings.ToLower(text[1:space])
+	return verb == "help" || verb == "h"
+}
+
+// helpUniverse returns slashCommands entries whose name prefixes the
+// stem. Emits bare verbs (`cq`, not `/cq`) because the insert goes
+// into an arg position. Empty stem returns nil to match nickUniverse:
+// Tab on empty input is a no-op rather than a dump-the-world.
+func helpUniverse(word string) []matchItem {
+	stem := strings.ToLower(strings.TrimSpace(word))
+	if stem == "" {
+		return nil
+	}
+	var matches []matchItem
+	for _, c := range slashCommands {
+		if strings.HasPrefix(c, stem) {
+			matches = append(matches, matchItem{display: c, insert: c})
+		}
+	}
+	return matches
 }
 
 // commandArgStart checks whether the input line reads as

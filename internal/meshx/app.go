@@ -3645,13 +3645,19 @@ func (m model) renderMessagesPane(width, height int) string {
 	// else is message rows. rowsFree is the budget passed to
 	// tailStartList so it's also the correct cap for what we're
 	// bottom-aligning against.
-	used := len(lines) - 2 // subtract the header + blank
-	if startIdx > 0 {
-		used-- // "… N earlier" line already counted inside `used`
-	}
+	// `used` counts everything after the 2-row header (header +
+	// separator) — that's the message rows plus optional
+	// "… N earlier" banner. Subtract from rowsFree and pad the
+	// top of the content region with blanks to bottom-align.
+	used := len(lines) - 2
 	if pad := rowsFree - used; pad > 0 {
-		blanks := make([]string, pad)
-		lines = append(lines[:2], append(blanks, lines[2:]...)...)
+		rebuilt := make([]string, 0, len(lines)+pad)
+		rebuilt = append(rebuilt, lines[:2]...) // preserve header + separator
+		for i := 0; i < pad; i++ {
+			rebuilt = append(rebuilt, "")
+		}
+		rebuilt = append(rebuilt, lines[2:]...)
+		lines = rebuilt
 	}
 	return paneStyle(width, height, paneMessages, m.focused == paneMessages).
 		Render(strings.Join(lines, "\n"))

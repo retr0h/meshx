@@ -11,6 +11,15 @@ builds:
     goarch:
       - amd64
       - arm64
+    # CGo required: tinygo.org/x/bluetooth wraps CoreBluetooth via
+    # the cbgo package (needs `-framework CoreBluetooth` at link
+    # time), and mattn/go-sqlite3 is a CGo binding. GoReleaser
+    # defaults to CGO_ENABLED=0 for cross-compile safety — that's
+    # how the BLE dep started failing with "undefined: CentralManager"
+    # in cbgo's own Darwin-only files (they get build-tagged out
+    # when CGo is off, leaving the delegate file unable to resolve).
+    env:
+      - CGO_ENABLED=1
 
 archives:
   - formats:

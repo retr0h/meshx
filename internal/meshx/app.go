@@ -3645,13 +3645,14 @@ func (m model) renderMessagesPane(width, height int) string {
 	// else is message rows. rowsFree is the budget passed to
 	// tailStartList so it's also the correct cap for what we're
 	// bottom-aligning against.
-	// `used` counts everything after the 2-row header (header +
-	// separator) — that's the message rows plus optional
-	// "… N earlier" banner. Subtract from rowsFree and pad the
-	// top of the content region with blanks to bottom-align.
-	used := len(lines) - 2
-	if pad := rowsFree - used; pad > 0 {
-		rebuilt := make([]string, 0, len(lines)+pad)
+	// BitchX / irssi gravity — pin the log to the bottom of the
+	// pane. `rowsFree` IS the pane's total content budget
+	// (includes header + separator + message rows), so pad to
+	// that total. Previous attempt treated rowsFree as
+	// message-only budget, which overflowed the paneStyle height
+	// by 2 rows and pushed the top-bar off-screen.
+	if pad := rowsFree - len(lines); pad > 0 {
+		rebuilt := make([]string, 0, rowsFree)
 		rebuilt = append(rebuilt, lines[:2]...) // preserve header + separator
 		for i := 0; i < pad; i++ {
 			rebuilt = append(rebuilt, "")

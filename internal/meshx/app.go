@@ -3632,6 +3632,27 @@ func (m model) renderMessagesPane(width, height int) string {
 		}
 		lines = append(lines, line)
 	}
+	// BitchX / irssi gravity — pin the log to the BOTTOM of the
+	// pane. When the message list doesn't fill the available rows,
+	// pad the top with blank lines so content rises from the input
+	// bar upward instead of hanging off the pane header. Once the
+	// log outgrows rowsFree, tailStartList trims the head so we're
+	// always showing the newest rows flush against the bottom of
+	// the pane.
+	//
+	// Rows-used math: 2 header rows (header + blank separator), plus
+	// one optional "… N earlier" row when startIdx > 0. Everything
+	// else is message rows. rowsFree is the budget passed to
+	// tailStartList so it's also the correct cap for what we're
+	// bottom-aligning against.
+	used := len(lines) - 2 // subtract the header + blank
+	if startIdx > 0 {
+		used-- // "… N earlier" line already counted inside `used`
+	}
+	if pad := rowsFree - used; pad > 0 {
+		blanks := make([]string, pad)
+		lines = append(lines[:2], append(blanks, lines[2:]...)...)
+	}
 	return paneStyle(width, height, paneMessages, m.focused == paneMessages).
 		Render(strings.Join(lines, "\n"))
 }

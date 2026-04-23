@@ -330,7 +330,7 @@ func loadMessages(db *sql.DB, channel string, limit int) ([]messageItem, error) 
 		return nil, nil
 	}
 	query := `
-        SELECT time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num
+        SELECT time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num, created_at
         FROM messages`
 	var args []any
 	if channel != "" {
@@ -357,6 +357,7 @@ func loadMessages(db *sql.DB, channel string, limit int) ([]messageItem, error) 
 		if err := rows.Scan(
 			&msg.time, &msg.from, &msg.text, &mine, &msg.bang, &msg.status,
 			&msg.hops, &msg.snr, &msg.packetID, &msg.replyID, &msg.fromNum,
+			&msg.sentAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}

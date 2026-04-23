@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -181,7 +182,7 @@ func (m model) renderInputRow() string {
 	}
 	if m.mode == modeNav {
 		hint := dim.Render(
-			"NAV · j/k · r reply · R resend · w whois · t trace · p ping · * star · ESC back to input · / search · ? help",
+			"NAV · j/k · r reply · R resend · w whois · t trace · p ping · P pin · * star · ESC back to input · / search · ? help",
 		)
 		return " " + hint
 	}
@@ -711,8 +712,8 @@ func stateWeight(s string) int {
 func (m model) renderNodesPane(width, height int) string {
 	total := len(m.nodes)
 	online := 0
-	for _, n := range m.nodes {
-		if n.state == "online" {
+	for i := range m.nodes {
+		if m.nodes[i].currentState() == "online" {
 			online++
 		}
 	}
@@ -779,7 +780,8 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 	// IRC-style sigil choice:
 	sigil := " "
 	sigilColor := mhDrained
-	switch n.state {
+	state := n.currentState()
+	switch state {
 	case "online":
 		sigil = "@"
 		sigilColor = mhGreen
@@ -803,7 +805,7 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 	// convention). Non-online states do tint the name since those
 	// ARE worth surfacing at a glance.
 	nameColor := mhFG
-	switch n.state {
+	switch state {
 	case "offline":
 		nameColor = mhDrained
 	case "failed":
@@ -953,7 +955,18 @@ func (m model) renderMessagesPane(width, height int) string {
 			}
 		}
 
-		line := m.renderMessageRow(msg, isSelected, width-4, bg)
+		// Pin-corner boundaries — `⌜` goes on the first row of a
+		// pinned group, `⌟` on the last. For singleton pinned rows
+		// (group == 0) both are true so the row reads as self-
+		// bracketed. Computing here rather than inside renderNoticeRow
+		// keeps the renderer oblivious to message-list indices.
+		pinFirst := false
+		pinLast := false
+		if msg.pinned {
+			pinFirst = msg.group == 0 || i == 0 || m.messages[i-1].group != msg.group
+			pinLast = msg.group == 0 || i+1 >= len(m.messages) || m.messages[i+1].group != msg.group
+		}
+		line := m.renderMessageRow(msg, isSelected, width-4, bg, pinFirst, pinLast)
 		if faded {
 			line = dimRow(line)
 		}
@@ -975,11 +988,34 @@ func (m model) renderMessagesPane(width, height int) string {
 	// BitchX / irssi gravity — pin the log to the bottom of the
 	// pane. `rowsFree` IS the pane's total content budget
 	// (includes header + separator + message rows), so pad to
-	// that total. Previous attempt treated rowsFree as
-	// message-only budget, which overflowed the paneStyle height
-	// by 2 rows and pushed the top-bar off-screen.
-	if pad := rowsFree - len(lines); pad > 0 {
-		rebuilt := make([]string, 0, rowsFree)
+	// that total.
+	//
+	// Reply-threaded rows render as TWO visual lines (quote-line +
+	// row, joined with "\n" inside one string). tailStartList +
+	// naive `len(lines)` padding both treat each slice element as
+	// one row, which under-counts the real row usage and makes the
+	// pane overflow — that overflow bubbles through paneStyle's
+	// Height limit, pushes the whole view up, and shears the top
+	// status bar off the terminal top. Count visual rows instead
+	// (1 + strings.Count(line, "\n")) for both the trim-to-fit and
+	// the pad-up-to-fit passes.
+	visualRows := func(ls []string) int {
+		n := 0
+		for _, l := range ls {
+			n += 1 + strings.Count(l, "\n")
+		}
+		return n
+	}
+	// Overflow trim — drop the oldest message rows (keeping
+	// header + separator + any trailing banner) until visual rows
+	// ≤ rowsFree. Catches reply-threaded rows that tailStartList
+	// undercounted, and any other multi-line render the row
+	// budgeter can't predict.
+	for visualRows(lines) > rowsFree && len(lines) > 2 {
+		lines = append(lines[:2:2], lines[3:]...)
+	}
+	if pad := rowsFree - visualRows(lines); pad > 0 {
+		rebuilt := make([]string, 0, len(lines)+pad)
 		rebuilt = append(rebuilt, lines[:2]...) // preserve header + separator
 		for i := 0; i < pad; i++ {
 			rebuilt = append(rebuilt, "")
@@ -1054,7 +1090,13 @@ func zebraBg(i int) string {
 // entries except the words themselves are colored. Used by the
 // BitchX splash greeter and any future "say something in color
 // without losing the chrome" moment.
-func (m model) renderNoticeRow(msg messageItem, selected bool, inner int, rowBg string) string {
+func (m model) renderNoticeRow(
+	msg messageItem,
+	selected bool,
+	inner int,
+	rowBg string,
+	pinFirst, pinLast bool,
+) string {
 	// Default style — zero-value noticeStyle is the canonical
 	// lavender italic system line. Letting msg.style be nil falls
 	// back to this so callers without a style (legacy entry points
@@ -1064,26 +1106,57 @@ func (m model) renderNoticeRow(msg messageItem, selected bool, inner int, rowBg 
 		style = *msg.style
 	}
 
+	// Fade — lerp every fg on this row toward rowBg during the last
+	// noticeFadeWindow before expiry. Frozen at 0 while the user is
+	// in modeNav so a mid-scroll read doesn't dim under the cursor.
+	// Pinned rows also get alpha=0 (computed inside noticeFadeAlpha).
+	fade := 0.0
+	if m.mode != modeNav {
+		fade = noticeFadeAlpha(msg, time.Now())
+	}
+	lav := lerpHex(mhLavender, rowBg, fade)
+	drn := lerpHex(mhDrained, rowBg, fade)
+	bodyFg := style.fg
+	if bodyFg == "" {
+		bodyFg = mhLavender
+	}
+	bodyFg = lerpHex(bodyFg, rowBg, fade)
+
 	accent := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhLavender)).
+		Foreground(lipgloss.Color(lav)).
 		Background(lipgloss.Color(rowBg)).
 		Bold(true).
 		Render("▎") + lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
 	tstamp := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained)).
+		Foreground(lipgloss.Color(drn)).
 		Background(lipgloss.Color(rowBg))
 	// sys — the standard `-!-` chrome style. Lavender italic over
 	// rowBg, identical to what systemLine has worn since day one.
 	// Used for the prefix + center-pad so the left edge of every
 	// notice row reads cohesive regardless of body color.
 	sys := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhLavender)).
+		Foreground(lipgloss.Color(lav)).
 		Background(lipgloss.Color(rowBg)).
 		Italic(true)
 
 	timeCol := "   " + msg.time + "  "
 	if msg.time == "" {
 		timeCol = "          "
+	}
+	// Pinned first-of-group corner — replace the leading space of
+	// timeCol with `⌜`. Same 10-cell width, so alignment down the
+	// pane is preserved. Rendered in meshGreen without fade so the
+	// pin affordance stays at full brightness even if the row is
+	// mid-fade (which shouldn't happen since pin pauses expiry, but
+	// defensive).
+	tsRendered := tstamp.Render(timeCol)
+	if pinFirst && len(timeCol) > 0 {
+		corner := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(meshGreen)).
+			Background(lipgloss.Color(rowBg)).
+			Bold(true).
+			Render("⌜")
+		tsRendered = corner + tstamp.Render(timeCol[1:])
 	}
 
 	// Fast path — default styling, no centering. One sys.Render
@@ -1092,7 +1165,8 @@ func (m model) renderNoticeRow(msg messageItem, selected bool, inner int, rowBg 
 	// band on rowBg. Every storage / whois / identified line lands
 	// here.
 	if style.fg == "" && !style.center && !style.bold {
-		line := accent + tstamp.Render(timeCol) + sys.Render(msg.text)
+		line := accent + tsRendered + sys.Render(msg.text)
+		line = appendPinTail(line, inner, rowBg, pinLast)
 		return wrapSelection(line, selected, false, inner, rowBg)
 	}
 
@@ -1105,11 +1179,11 @@ func (m model) renderNoticeRow(msg messageItem, selected bool, inner int, rowBg 
 	const prefix = "-!- "
 	bodyContent := strings.TrimPrefix(msg.text, prefix)
 
-	bodyStyle := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
-	if style.fg != "" {
-		bodyStyle = bodyStyle.Foreground(lipgloss.Color(style.fg))
-	} else {
-		bodyStyle = bodyStyle.Foreground(lipgloss.Color(mhLavender)).Italic(true)
+	bodyStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color(rowBg)).
+		Foreground(lipgloss.Color(bodyFg))
+	if style.fg == "" {
+		bodyStyle = bodyStyle.Italic(true)
 	}
 	if style.bold {
 		bodyStyle = bodyStyle.Bold(true)
@@ -1129,17 +1203,50 @@ func (m model) renderNoticeRow(msg messageItem, selected bool, inner int, rowBg 
 		}
 	}
 
-	line := accent + tstamp.Render(timeCol) + sys.Render(prefix) + pad + styledBody
+	line := accent + tsRendered + sys.Render(prefix) + pad + styledBody
+	line = appendPinTail(line, inner, rowBg, pinLast)
 	return wrapSelection(line, selected, false, inner, rowBg)
 }
 
-func (m model) renderMessageRow(msg messageItem, selected bool, inner int, rowBg string) string {
+// appendPinTail pads `line` with rowBg-colored spaces and terminates
+// with a meshGreen `⌟` at the rightmost content column when pinLast
+// is true. Sized to `inner - gutterWidth - 1` so wrapSelection's
+// Width() pass leaves the corner flush against the `║` pane frame.
+// No-op when pinLast is false.
+func appendPinTail(line string, inner int, rowBg string, pinLast bool) string {
+	if !pinLast {
+		return line
+	}
+	innerW := inner - gutterWidth
+	curW := lipgloss.Width(line)
+	padN := innerW - curW - 1
+	if padN < 0 {
+		padN = 0
+	}
+	fill := lipgloss.NewStyle().
+		Background(lipgloss.Color(rowBg)).
+		Render(strings.Repeat(" ", padN))
+	corner := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(meshGreen)).
+		Background(lipgloss.Color(rowBg)).
+		Bold(true).
+		Render("⌟")
+	return line + fill + corner
+}
+
+func (m model) renderMessageRow(
+	msg messageItem,
+	selected bool,
+	inner int,
+	rowBg string,
+	pinFirst, pinLast bool,
+) string {
 	// "notice" rows are pre-styled colored info lines — the splash
 	// greeter on launch, future connection banners, anything that
 	// wants to say something in color without getting flattened by
 	// the default system-row lavender wrap. See renderNoticeRow.
 	if msg.status == "notice" || msg.status == "system" {
-		return m.renderNoticeRow(msg, selected, inner, rowBg)
+		return m.renderNoticeRow(msg, selected, inner, rowBg, pinFirst, pinLast)
 	}
 	tstamp := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).

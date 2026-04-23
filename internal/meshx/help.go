@@ -129,6 +129,10 @@ var helpEntries = map[string]helpEntry{
 		summary: "dump node metadata for <call> — hw, fw, last-heard, signal, grid if published",
 	},
 	"w": {usage: "/w <call>", summary: "alias for /whois"},
+	"pin": {
+		usage:   "/pin",
+		summary: "toggle pin on the last ephemeral notice — pauses its 60s TTL so it stays in the log; `⌜ … ⌟` corners mark it. Run again to resume the timer. Nav alternative: highlight the row and press `P`.",
+	},
 
 	// Overlays & utilities.
 	"channels": {

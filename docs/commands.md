@@ -62,18 +62,19 @@ the universal quit.
 
 Single-letter shortcuts that operate on whatever's highlighted:
 
-| Key | Action                                                 |
-| --- | ------------------------------------------------------ |
-| `r` | reply — prefills `/reply <sender> ` into the input bar |
-| `R` | resend — retransmit a failed (`✗`) outbound row        |
-| `t` | traceroute selected sender                             |
-| `p` | ping selected sender                                   |
-| `w` | whois selected sender                                  |
-| `*` | pin / unpin selected node                              |
-| `m` | mute / unmute selected node                            |
-| `F` | filter the log to this node's traffic                  |
-| `X` | clear active filter                                    |
-| `s` | cycle node sort (heard → name → state) — nodes overlay |
+| Key | Action                                                  |
+| --- | ------------------------------------------------------- |
+| `r` | reply — prefills `/reply <sender> ` into the input bar  |
+| `R` | resend — retransmit a failed (`✗`) outbound row         |
+| `t` | traceroute selected sender                              |
+| `p` | ping selected sender                                    |
+| `w` | whois selected sender                                   |
+| `P` | pin / unpin highlighted notice — pauses TTL (see below) |
+| `*` | pin / unpin selected node                               |
+| `m` | mute / unmute selected node                             |
+| `F` | filter the log to this node's traffic                   |
+| `X` | clear active filter                                     |
+| `s` | cycle node sort (heard → name → state) — nodes overlay  |
 
 ### Delivery status (outbound messages)
 
@@ -180,6 +181,28 @@ Every report-producing command (`/rs`, `/cqr`, `/ping`, `/tr`, `/whois`) pulls
 from **real node telemetry** — `rx_snr`, `rx_rssi`, and hop count as recorded
 for the target's last-seen packet. If the node is unknown, the flash bar says so
 honestly rather than making up numbers.
+
+## Notes on notice TTL
+
+Command-triggered `-!-` notices (`/whois`, `/ping`, `/config`, `/env`, `/info`,
+`/sync`, …) auto-expire **60 seconds** after they land in the log — the last 10
+seconds fade toward the row background so you see the row age out before it
+disappears. The reap is paused while you're in nav mode (ESC) so you never lose
+a row mid-scroll; it catches up as soon as you drop back to the input bar.
+
+Permanent notices that **never** auto-expire: `storage: persistence degraded`
+alerts and anything routed through `m.noticePermanent` internally. The BitchX
+splash banner also ages out under the same 60s rule — it's just scrollback by
+the time you've been in the app for a minute.
+
+To hold a notice past its TTL, pin it:
+
+- **Nav mode:** highlight the row and press `P`.
+- **Anywhere:** type `/pin` to toggle the last ephemeral notice.
+
+Pinned groups render `⌜` at the top-left of the first row and `⌟` at the
+bottom-right of the last row. Pin pauses the timer; the remaining time is
+restored verbatim when you unpin (running `/pin` again, or pressing `P` again).
 
 ## Notes on persistence
 

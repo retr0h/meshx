@@ -96,8 +96,16 @@ type nodeItem struct {
 	nodeNum   uint32
 	state     string // "online", "offline", "failed", "muted"
 	fav       bool
-	lastHeard string // display string like "2m", "14:02", "3h"; caller-computed
-	heardRank int    // lower = more recent; used purely for sort stability
+	lastHeard string // display string like "2m", "14:02", "3h"; fallback
+	// when lastHeardAt is zero (demo fixtures, rows that haven't
+	// been updated since the timestamp-based migration).
+	lastHeardAt time.Time // absolute time of the most recent packet
+	// we've decoded from this peer — any port (NodeInfo, text,
+	// telemetry, routing). currentState / currentLastHeard derive
+	// "online" / "offline" and the human age from this at render
+	// time so the UI never shows stale frozen state. Zero = unknown;
+	// renderers fall back to the lastHeard / state string fields.
+	heardRank int // lower = more recent; used purely for sort stability
 	// Telemetry from the most recently heard packet — maps directly to
 	// Meshtastic MeshPacket.rx_snr / rx_rssi, and hops computed as
 	// hop_start - hop_limit. Used to build real /rs, /cqr, /ping
@@ -135,6 +143,15 @@ type messageItem struct {
 	packetID uint32
 	replyID  uint32
 
+	// sentAt — absolute timestamp the message was received (live)
+	// or originally persisted (replay from sqlite). Populated from
+	// messages.created_at on replay; set to time.Now() on live
+	// inbound/outbound. Used by newModel's startup backfill to
+	// recompute each sender's lastHeardAt from replayed history so
+	// /whois and the nodes overlay don't show stale state right
+	// after a restart. Zero for in-memory-only entries.
+	sentAt time.Time
+
 	// fromNum — Meshtastic node num of the sender, captured at
 	// ingest. Persisted so the renderer can backfill the displayed
 	// callsign from m.nodesByNum LIVE (the stored `from` field is
@@ -150,6 +167,25 @@ type messageItem struct {
 	// of branching on ad-hoc fields. See notices.go for the shape
 	// and defaults.
 	style *noticeStyle
+
+	// expireAt — non-nil for command-triggered notices (/whois,
+	// /ping, /config, …) stamped by m.notice / m.noticeCard.
+	// The reap tick drops rows whose expireAt has passed (whole
+	// groups atomically); during the last noticeFadeWindow the
+	// renderer lerps fg toward rowBg so the row visibly dims
+	// before it vanishes. Nil = permanent — chat rows, splash
+	// banner, storage/error alerts. See notices.go.
+	expireAt *time.Time
+
+	// pinned — user has paused this row's TTL via `p` in modeNav
+	// or `/pin`. While true, the reap tick skips the row and the
+	// renderer suppresses the fade. `⌜ … ⌟` diagonal corners mark
+	// the group in the pane. pinnedRemaining captures time.Until
+	// (expireAt) at the moment pin was toggled on so a subsequent
+	// unpin can re-stamp expireAt = now + pinnedRemaining and the
+	// row resumes with the same time budget it had.
+	pinned          bool
+	pinnedRemaining time.Duration
 }
 
 type sortMode int
@@ -551,6 +587,30 @@ func newModel(demo *Demo, dest string) model {
 						m.nodesByNum[msg.fromNum] = len(m.nodes) - 1
 					}
 				}
+				// Startup backfill — walk the replayed messages once
+				// and push each sender's most recent sentAt onto the
+				// corresponding node's lastHeardAt. Without this,
+				// /whois and the nodes overlay open a fresh session
+				// showing peers as "offline, heard 30m ago" even
+				// when we've got a recent chat from them sitting
+				// right there in the log. After this sweep, the
+				// currentState / currentLastHeard derivations give
+				// the expected "online / Xm ago" on the first render.
+				touched := map[uint32]struct{}{}
+				for _, past := range m.messages {
+					if past.fromNum == 0 || past.sentAt.IsZero() {
+						continue
+					}
+					idx, ok := m.nodesByNum[past.fromNum]
+					if !ok {
+						continue
+					}
+					if past.sentAt.After(m.nodes[idx].lastHeardAt) {
+						m.nodes[idx].lastHeardAt = past.sentAt
+						touched[past.fromNum] = struct{}{}
+					}
+				}
+				backfilled := len(touched)
 				// Emit storage notes AFTER NodeDB + message replay so
 				// they land at the tail of the log (bottom-pinned in
 				// the pane) where the user naturally looks for the
@@ -559,14 +619,18 @@ func newModel(demo *Demo, dest string) model {
 				for _, n := range notes {
 					m.systemLine("storage: " + n)
 				}
+				if backfilled > 0 {
+					m.systemLine(fmt.Sprintf(
+						"nodes: backfilled %d peer recency from message history", backfilled,
+					))
+				}
 			}
 		}
 		// Splash notices come last so the BitchX greeter is the
 		// newest entry in the log — sits right at the bottom above
 		// the input bar on launch just like every other recent
 		// message, and scrolls UP naturally as fresh chat arrives.
-		m.messages = append(m.messages, splashAsNotices(chosenSplash)...)
-		m.selectedMsg = len(m.messages) - 1
+		m.noticeCard(splashAsNotices(chosenSplash)...)
 		return m
 	}
 
@@ -579,7 +643,7 @@ func newModel(demo *Demo, dest string) model {
 	m.messages = append([]messageItem(nil), demo.Messages...)
 	// Splash notices land at the tail so the BitchX greeter is the
 	// newest entry in the log — same behaviour as live mode.
-	m.messages = append(m.messages, splashAsNotices(chosenSplash)...)
+	m.noticeCard(splashAsNotices(chosenSplash)...)
 	if len(demo.Channels) > 0 {
 		m.currentChannel = demo.Channels[0].name
 	}
@@ -656,6 +720,11 @@ func (m model) Init() tea.Cmd {
 		// cursor silently drops mismatched BlinkMsgs so the chain
 		// would die on tick #1.
 		m.initialFocusCmd,
+		// Start the notice TTL reaper loop — fires every second for
+		// the life of the program. Cheap enough to always be on; the
+		// handler is a one-pass scan of m.messages guarded so it no-
+		// ops when there's nothing expiring.
+		noticeTickCmd(),
 	}
 	// Live-radio mode: kick off the pump from within the running
 	// program. Deferring to Init (rather than RunRadio) guarantees
@@ -675,8 +744,36 @@ func (m model) Init() tea.Cmd {
 // stashes the handle in the model.
 type openPumpMsg struct{ dest string }
 
+// noticeTickMsg drives the notice reap + fade redraw. Fires every
+// second while the program is running; Update routes it through
+// m.reapExpiredNotices (skipped in modeNav so mid-scroll reads don't
+// vanish) and re-arms the next tick. 1s granularity is fine: the
+// fade-window is 10s so the user sees ~10 discrete dim steps — not
+// "smooth" but visibly aging, and the reap is per-second-accurate.
+type noticeTickMsg struct{}
+
+// noticeTickCmd produces the tea.Cmd that fires the next
+// noticeTickMsg 1 second from now. Called from Init to start the
+// loop and from the Update handler to keep it going.
+func noticeTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+		return noticeTickMsg{}
+	})
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case noticeTickMsg:
+		// Skip the reap while the user is navigating scrollback — a
+		// row vanishing mid-read is the exact UX we're trying to
+		// avoid. Expiry resumes as soon as they ESC back to input
+		// (next tick catches up). The fade renderer also freezes in
+		// modeNav, so while nav'd everything visually holds still.
+		if m.mode != modeNav {
+			m.reapExpiredNotices()
+		}
+		return m, noticeTickCmd()
+
 	case openPumpMsg:
 		// Program is running; safe to spawn the pump now.
 		if globalProgramRef == nil {
@@ -864,6 +961,49 @@ func (m model) isDemo() bool {
 	return m.demo != nil
 }
 
+// currentState returns the peer's effective online/offline/muted
+// state, derived at call time from lastHeardAt so every render
+// reflects the real elapsed duration — a peer who was "online" an
+// hour ago but has been silent since will correctly read "offline"
+// on the next frame without any periodic sweep.
+//
+// "muted" always wins (user-sticky preference). For everyone else:
+// heard in the last 15 minutes = online, older = offline, zero
+// lastHeardAt falls back to the stored n.state so demo fixtures and
+// rows that haven't been touched since the timestamp migration
+// still render their pre-set values.
+func (n *nodeItem) currentState() string {
+	if n.state == "muted" {
+		return "muted"
+	}
+	if n.lastHeardAt.IsZero() {
+		return n.state
+	}
+	if time.Since(n.lastHeardAt) < 15*time.Minute {
+		return "online"
+	}
+	return "offline"
+}
+
+// currentLastHeard returns the display string for "how long ago we
+// heard this peer." Derived from lastHeardAt when set; falls back to
+// the stored n.lastHeard for rows without an absolute timestamp
+// (demo, pre-backfill rows).
+func (n *nodeItem) currentLastHeard() string {
+	if n.lastHeardAt.IsZero() {
+		return n.lastHeard
+	}
+	age := time.Since(n.lastHeardAt)
+	if age < time.Minute {
+		// "<1m" composes naturally with the " ago" suffix every
+		// caller already appends, unlike "now ago" which reads
+		// ungrammatical. Sub-minute granularity is below what the
+		// mesh gives us anyway (RF latency + decode + redraw).
+		return "<1m"
+	}
+	return humanDuration(age)
+}
+
 // myCallsign returns the call to use for "me" in outbound messages,
 // the status bar, etc. Demo mode: whatever the Demo fixture's
 // Callsign says. Live mode: look up our own node by myNodeNum in
@@ -942,16 +1082,17 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	}
 
 	item := nodeItem{
-		callsign:  callsign,
-		shortName: msg.shortName,
-		nodeNum:   msg.nodeNum,
-		state:     state,
-		lastHeard: lastHeard,
-		heardRank: int(time.Since(msg.lastHeardAt).Seconds()),
-		lastSNR:   msg.snr,
-		lastRSSI:  msg.rssi,
-		lastHops:  msg.hops,
-		hwModel:   msg.hwModel,
+		callsign:    callsign,
+		shortName:   msg.shortName,
+		nodeNum:     msg.nodeNum,
+		state:       state,
+		lastHeard:   lastHeard,
+		lastHeardAt: msg.lastHeardAt,
+		heardRank:   int(time.Since(msg.lastHeardAt).Seconds()),
+		lastSNR:     msg.snr,
+		lastRSSI:    msg.rssi,
+		lastHops:    msg.hops,
+		hwModel:     msg.hwModel,
 	}
 
 	// Persist to the cross-session NodeDB cache so once we've learned
@@ -964,6 +1105,15 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	if idx, ok := m.nodesByNum[msg.nodeNum]; ok {
 		// Preserve fav flag across updates.
 		item.fav = m.nodes[idx].fav
+		// Preserve the NEWER lastHeardAt — text packets between
+		// NodeInfo beacons bump lastHeardAt on applyTextMessage,
+		// and a subsequent NodeInfo arrival would clobber that
+		// recency if we just overwrote the row wholesale. Take
+		// the max so the derived currentState always reflects the
+		// most recent evidence we have.
+		if m.nodes[idx].lastHeardAt.After(item.lastHeardAt) {
+			item.lastHeardAt = m.nodes[idx].lastHeardAt
+		}
 		prev := m.nodes[idx].callsign
 		m.nodes[idx] = item
 		// Ghost upgrade notification — when a peer that was
@@ -1021,6 +1171,22 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 	from := fmt.Sprintf("node 0x%x", msg.fromNum)
 	if idx, ok := m.nodesByNum[msg.fromNum]; ok {
 		from = m.nodes[idx].callsign
+		// Live RF contact — stamp lastHeardAt + refresh signal
+		// telemetry. currentState / currentLastHeard derive
+		// "online" and "now" from lastHeardAt at render time, so
+		// there's no need to poke state / lastHeard strings here;
+		// the renderer always reads the live derivation.
+		m.nodes[idx].lastHeardAt = time.Now()
+		m.nodes[idx].heardRank = 0
+		if msg.snr != "" {
+			m.nodes[idx].lastSNR = msg.snr
+		}
+		if msg.rssi != "" {
+			m.nodes[idx].lastRSSI = msg.rssi
+		}
+		if msg.hops > 0 {
+			m.nodes[idx].lastHops = msg.hops
+		}
 	} else if msg.fromNum != 0 {
 		// We've heard a text packet from a peer whose NodeInfo we
 		// haven't received yet — ghost them into m.nodes so
@@ -1029,13 +1195,12 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		// moment a real NodeInfo arrives (nodesByNum index is
 		// stable so all references stay valid).
 		m.nodes = append(m.nodes, nodeItem{
-			callsign:  from,
-			nodeNum:   msg.fromNum,
-			state:     "online",
-			lastHeard: "now",
-			lastSNR:   msg.snr,
-			lastRSSI:  msg.rssi,
-			lastHops:  msg.hops,
+			callsign:    from,
+			nodeNum:     msg.fromNum,
+			lastHeardAt: time.Now(),
+			lastSNR:     msg.snr,
+			lastRSSI:    msg.rssi,
+			lastHops:    msg.hops,
 		})
 		m.nodesByNum[msg.fromNum] = len(m.nodes) - 1
 	}
@@ -1052,6 +1217,7 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		packetID: msg.packetID,
 		replyID:  msg.replyID,
 		fromNum:  msg.fromNum,
+		sentAt:   msg.at,
 	}
 	// Snapshot whether the user was anchored at the tail BEFORE we
 	// append. If they were (selectedMsg was on the last row of the

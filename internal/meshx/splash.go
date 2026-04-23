@@ -147,20 +147,15 @@ func pickSplash() splashVariant {
 	return allSplashVariants[rand.Intn(len(allSplashVariants))]
 }
 
-// splashAsNotices emits the BitchX-on-connect greeting as a
-// group of status="notice" messageItems, all wearing the same
-// `║ ▎ HH:MM -!- …` frame every other system row has — the
-// block-art logo AND the brand tagline render cohesive together.
-// Only the first row carries a timestamp; continuation rows blank
-// it out (10-cell spacer) so the `-!-` column stays aligned down
-// the whole group, the same way systemBlock renders multi-line
-// cards. Each block-art row is pre-colored by the variant's
-// per-row color fn so the rotating maxheadroom gradient still
-// shines through on every launch.
-func splashAsNotices(v splashVariant) []messageItem {
-	t := timeNowHHMM()
-	gid := nextGroupID() // every splash row shares the same group
-
+// splashAsNotices builds the BitchX-on-connect greeting as a slice
+// of noticeRow values — one group, `-!- ` chrome on every line,
+// centered block-art logo with per-row color from the variant's
+// gradient, cyan+magenta tagline underneath. Returned as raw rows
+// (not appended) so the caller composes them into the log via
+// m.noticeCard; that's the same single-entrypoint discipline every
+// other `-!-` writer follows and keeps splash out of the "rogue
+// m.messages = append" smell.
+func splashAsNotices(v splashVariant) []noticeRow {
 	// Normalize row widths to the variant's widest row so every line
 	// centers at the same column. Hand-drawn block-art tends to
 	// drift a cell or two row-to-row (slab-classic had row 0 at 35
@@ -183,37 +178,26 @@ func splashAsNotices(v splashVariant) []messageItem {
 		}
 	}
 
-	// withGroup stamps the shared group id + hides the timestamp
-	// on continuation rows. Only the very first row carries time so
-	// the `-!-` column stays aligned top-to-bottom (same convention
-	// noticeBlock uses for /whois and /config cards).
-	withGroup := func(mi messageItem, showTime bool) messageItem {
-		mi.group = gid
-		if !showTime {
-			mi.time = ""
-		} else {
-			mi.time = t
-		}
-		return mi
-	}
-
-	out := make([]messageItem, 0, len(v.rows)+4)
+	out := make([]noticeRow, 0, len(v.rows)+4)
 
 	// Leading blank padding row — breathing room above the logo.
-	out = append(out, withGroup(buildNotice("", noticeStyle{}), true))
+	out = append(out, noticeRow{text: "", style: noticeStyle{}})
 
 	// Block-art rows: per-row variant color + centered so the logo
 	// floats in the pane middle while the `-!-` prefix stays flush.
 	for i, row := range normalizedRows {
-		out = append(out, withGroup(buildNotice(row, noticeStyle{
-			fg:     v.color(i),
-			bold:   true,
-			center: true,
-		}), false))
+		out = append(out, noticeRow{
+			text: row,
+			style: noticeStyle{
+				fg:     v.color(i),
+				bold:   true,
+				center: true,
+			},
+		})
 	}
 
 	// Blank separator between logo and tagline.
-	out = append(out, withGroup(buildNotice("", noticeStyle{}), false))
+	out = append(out, noticeRow{text: "", style: noticeStyle{}})
 
 	// Tagline — cyan brand, drained punctuation, magenta handle,
 	// bracketed with the mesh-green ░▒▓█▓▒░ spark. Pre-styled body
@@ -226,12 +210,13 @@ func splashAsNotices(v splashVariant) []messageItem {
 	tagline := spark + " " +
 		cyan.Render("Meshtastic") + dim.Render(" messenger  ·  by ") +
 		magenta.Render("retr0h") + " " + spark
-	out = append(out, withGroup(buildNotice(tagline, noticeStyle{
-		center: true,
-	}), false))
+	out = append(out, noticeRow{
+		text:  tagline,
+		style: noticeStyle{center: true},
+	})
 
 	// Trailing blank padding row.
-	out = append(out, withGroup(buildNotice("", noticeStyle{}), false))
+	out = append(out, noticeRow{text: "", style: noticeStyle{}})
 
 	return out
 }

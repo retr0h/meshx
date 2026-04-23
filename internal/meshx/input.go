@@ -425,6 +425,15 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focused == paneMessages && m.selectedMsg >= 0 && m.selectedMsg < len(m.messages) {
 			m.resend(m.selectedMsg)
 		}
+	case "P":
+		// Pin/unpin the selected notice (whole group if grouped).
+		// Pauses the TTL clock while pinned; unpin resumes the row
+		// with the same remaining time budget it had when pinned.
+		// Only fires on notice rows — toggleNoticePin is a no-op on
+		// chat rows and permanent notices (expireAt == nil).
+		if m.focused == paneMessages && m.selectedMsg >= 0 && m.selectedMsg < len(m.messages) {
+			m.toggleNoticePin(m.selectedMsg)
+		}
 	case "t":
 		target := m.selectedSender()
 		if target != "" {

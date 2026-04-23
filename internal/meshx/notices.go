@@ -23,16 +23,24 @@ package meshx
 // notices.go is the single home for every "tell the user something"
 // surface in the app. Every `-!-` row — storage alerts, /whois
 // cards, /ping replies, identified notifications, the splash
-// banner, any future error/success pulse — flows through one
-// writer:
+// banner, any future error/success pulse — flows through one of
+// three writers:
 //
-//   m.notice(text, noticeStyle{...})            // one-shot row
-//   m.noticeBlock(header, body1, body2, ...)    // grouped card
-//   buildNotice(text, noticeStyle{...})         // returns
-//                                               // messageItem for
-//                                               // callers that
-//                                               // need to batch
-//                                               // (splash).
+//   m.notice(text, noticeStyle{...})        // one-shot row
+//   m.noticeBlock(header, body1, body2)     // grouped card with
+//                                           // auto-indented body
+//                                           // (for /whois, /config)
+//   m.noticeCard(row0, row1, ...)           // low-level grouped
+//                                           // block with per-row
+//                                           // style + no auto-
+//                                           // indent (for splash
+//                                           // block-art, pre-shaped
+//                                           // ASCII, custom colors)
+//
+// buildNotice is the internal primitive all three writers call; it
+// lives here because the top-level chrome (`-!- ` prefix, timestamp,
+// status="notice") is always the same — only grouping, per-row
+// style, and auto-indent vary.
 //
 // Named wrappers carry intent, not implementation:
 //
@@ -82,27 +90,57 @@ func (m *model) notice(text string, style noticeStyle) {
 	m.selectedMsg = len(m.messages) - 1
 }
 
+// noticeRow is the (text, style) pair noticeCard consumes — one row
+// of a grouped `-!-` block. Callers that need per-row color (splash
+// block-art's rotating gradient) or pre-shaped row text (ASCII art
+// that can't tolerate the auto-indent noticeBlock prepends) build a
+// slice of these. The simpler /whois-style cards stay on
+// m.noticeBlock which takes plain strings.
+type noticeRow struct {
+	text  string
+	style noticeStyle
+}
+
+// noticeCard is the low-level block emitter — every row in `rows`
+// gets stamped with the same group id, rendered with `-!- ` chrome,
+// and only the first row carries a timestamp so the `-!-` column
+// stays aligned down the whole block. No auto-indent, no style
+// flattening: callers get exactly the per-row style they pass.
+// m.noticeBlock is a thin convenience wrapper over this for the
+// "one header + a few indented body lines" case; splash calls it
+// directly because the block-art needs per-row fg overrides.
+func (m *model) noticeCard(rows ...noticeRow) {
+	if len(rows) == 0 {
+		return
+	}
+	t := timeNowHHMM()
+	gid := nextGroupID()
+	for i, r := range rows {
+		n := buildNotice(r.text, r.style)
+		n.group = gid
+		if i == 0 {
+			n.time = t
+		} else {
+			n.time = ""
+		}
+		m.messages = append(m.messages, n)
+	}
+	m.selectedMsg = len(m.messages) - 1
+}
+
 // noticeBlock emits a multi-line card — /whois, /config, /env, /ping
 // replies. Every line shares a group id so the renderer binds them
 // visually (same bg, timestamp on header only). Body lines render
 // with the same noticeStyle as the header; pass fg/bold/center once
-// to color the whole block.
+// to color the whole block. Thin wrapper over m.noticeCard that
+// pre-indents body lines with "   " for the /whois card look.
 func (m *model) noticeBlock(header string, body ...string) {
-	gid := nextGroupID()
-	t := timeNowHHMM()
-
-	head := buildNotice(header, noticeStyle{})
-	head.time = t
-	head.group = gid
-	m.messages = append(m.messages, head)
-
+	rows := make([]noticeRow, 0, 1+len(body))
+	rows = append(rows, noticeRow{text: header})
 	for _, line := range body {
-		row := buildNotice("   "+line, noticeStyle{})
-		row.time = t
-		row.group = gid
-		m.messages = append(m.messages, row)
+		rows = append(rows, noticeRow{text: "   " + line})
 	}
-	m.selectedMsg = len(m.messages) - 1
+	m.noticeCard(rows...)
 }
 
 // systemLine — vocabulary wrapper. Reads as "tell the user this

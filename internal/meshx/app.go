@@ -565,8 +565,7 @@ func newModel(demo *Demo, dest string) model {
 		// newest entry in the log — sits right at the bottom above
 		// the input bar on launch just like every other recent
 		// message, and scrolls UP naturally as fresh chat arrives.
-		m.messages = append(m.messages, splashAsNotices(chosenSplash)...)
-		m.selectedMsg = len(m.messages) - 1
+		m.noticeCard(splashAsNotices(chosenSplash)...)
 		return m
 	}
 
@@ -579,7 +578,7 @@ func newModel(demo *Demo, dest string) model {
 	m.messages = append([]messageItem(nil), demo.Messages...)
 	// Splash notices land at the tail so the BitchX greeter is the
 	// newest entry in the log — same behaviour as live mode.
-	m.messages = append(m.messages, splashAsNotices(chosenSplash)...)
+	m.noticeCard(splashAsNotices(chosenSplash)...)
 	if len(demo.Channels) > 0 {
 		m.currentChannel = demo.Channels[0].name
 	}

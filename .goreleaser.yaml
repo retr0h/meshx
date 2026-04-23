@@ -23,31 +23,41 @@ changelog:
   sort: asc
   filters:
     exclude:
-      - '^test:'
-      - "^chore"
+      - "^test(\\(.+?\\))?:"
+      - "^chore(\\(.+?\\))?:"
       - "merge conflict"
       - Merge pull request
       - Merge remote-tracking branch
       - Merge branch
       - go mod tidy
+  # Regexes accept the conventional-commits optional scope — both
+  # `feat: foo` AND `feat(scope): foo` match. Without the `(\(.+?\))?`
+  # every scoped subject (which is most of ours) fell through to
+  # "Others", making the grouping useless.
   groups:
     - title: "Features"
-      regexp: "^.*?feat:.*$"
+      regexp: "^.*?feat(\\(.+?\\))?:.*$"
       order: 0
     - title: "Bug fixes"
-      regexp: "^.*?fix:.*$"
+      regexp: "^.*?fix(\\(.+?\\))?:.*$"
       order: 1
-    - title: "Chores"
-      regexp: "^.*?chore:.*$"
+    - title: "Performance"
+      regexp: "^.*?perf(\\(.+?\\))?:.*$"
       order: 2
-    - title: "Docs"
-      regexp: "^.*?docs:.*$"
+    - title: "Refactor"
+      regexp: "^.*?refactor(\\(.+?\\))?:.*$"
       order: 3
-    - title: "CI"
-      regexp: "^.*?ci:.*$"
+    - title: "Docs"
+      regexp: "^.*?docs(\\(.+?\\))?:.*$"
       order: 4
-    - title: "Build"
-      regexp: "^.*?build:.*$"
+    - title: "CI"
+      regexp: "^.*?ci(\\(.+?\\))?:.*$"
       order: 5
+    - title: "Build"
+      regexp: "^.*?build(\\(.+?\\))?:.*$"
+      order: 6
+    - title: "Style"
+      regexp: "^.*?style(\\(.+?\\))?:.*$"
+      order: 7
     - title: Others
       order: 999

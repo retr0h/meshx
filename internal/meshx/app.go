@@ -455,18 +455,18 @@ func newModel(demo *Demo, dest string) model {
 
 	chosenSplash := pickSplash()
 	m := model{
-		mode:            modeInput,
-		focused:         paneMessages,
-		splash:          chosenSplash,
-		connectDest:     dest,
-		demo:            demo,
+		mode:               modeInput,
+		focused:            paneMessages,
+		splash:             chosenSplash,
+		connectDest:        dest,
+		demo:               demo,
 		nodesByNum:         make(map[uint32]int),
 		messagesByPacketID: make(map[uint32]int),
 		peerPositions:      make(map[uint32]peerPosition),
 		peerEnv:            make(map[uint32]peerEnvMetrics),
-		input:           in,
-		searchInput:     func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
-		initialFocusCmd: focusCmd,
+		input:              in,
+		searchInput:        func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
+		initialFocusCmd:    focusCmd,
 	}
 
 	if demo == nil {

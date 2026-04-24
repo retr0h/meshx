@@ -220,6 +220,38 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		fromNum:  msg.fromNum,
 		sentAt:   msg.at,
 	}
+
+	// Dedupe replays from the radio's RAM queue. When we reconnect
+	// after a short disconnect, the radio re-drains any packets it
+	// still holds — some of those will be ones we already persisted
+	// to SQLite in the previous session. Without dedup, the same
+	// on-wire packet lands twice (once from loadMessages, again from
+	// this replay), duplicating both m.messages and SQLite rows.
+	// The messagesByPacketID index lets us find the existing entry
+	// and upgrade it in place (telemetry refresh) instead.
+	channelName := m.currentChannel
+	if msg.channel < len(m.channels) {
+		channelName = m.channels[msg.channel].name
+	}
+	if msg.packetID != 0 {
+		if existing, ok := m.messagesByPacketID[msg.packetID]; ok &&
+			existing >= 0 && existing < len(m.messages) {
+			// Refresh signal telemetry in case the replay carries
+			// fresher RSSI/SNR/hops than the stored row (can happen
+			// when the firmware re-measures before handing off).
+			// Leave status alone unless it was pending and we now
+			// have a real ack.
+			prev := &m.messages[existing]
+			prev.hops = msg.hops
+			prev.snr = msg.snr
+			if prev.status == "pending" {
+				prev.status = "ack"
+			}
+			m.storagePersist(saveMessage(m.db, channelName, *prev))
+			return
+		}
+	}
+
 	// Snapshot whether the user was anchored at the tail BEFORE we
 	// append. If they were (selectedMsg was on the last row of the
 	// log, or the log was empty) we auto-follow new traffic by
@@ -231,18 +263,14 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 	// renderMessagesPane anchors its viewport on selectedMsg.
 	wasAtTail := len(m.messages) == 0 || m.selectedMsg == len(m.messages)-1
 	m.messages = append(m.messages, item)
+	if msg.packetID != 0 {
+		m.messagesByPacketID[msg.packetID] = len(m.messages) - 1
+	}
 	if wasAtTail {
 		m.selectedMsg = len(m.messages) - 1
 	}
 
-	// Persist the incoming message so it survives a restart. Channel
-	// name is resolved from the packet's channel index against the
-	// NodeDB we've built up; falls back to the active channel if the
-	// index is out of range (shouldn't happen on a real radio).
-	channelName := m.currentChannel
-	if msg.channel < len(m.channels) {
-		channelName = m.channels[msg.channel].name
-	}
+	// Persist the incoming message so it survives a restart.
 	m.storagePersist(saveMessage(m.db, channelName, item))
 
 	// Bump unread count on non-active channels.

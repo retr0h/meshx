@@ -225,10 +225,21 @@ func saveMessage(db *sql.DB, channel string, msg messageItem) error {
 	if msg.mine {
 		mine = 1
 	}
+	// ON CONFLICT(packet_id) DO UPDATE — when a replay lands for a
+	// packet we already have, refresh the mutable state (status,
+	// signal telemetry) in place instead of failing the unique
+	// index added in migration 006. The WHERE excluded.packet_id > 0
+	// guard mirrors the partial index: system rows / local-only
+	// entries carry packet_id = 0 and the constraint doesn't apply
+	// to them, so those still append freely.
 	_, err := db.Exec(`
         INSERT INTO messages
         (channel, time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(packet_id) WHERE packet_id > 0 DO UPDATE SET
+            status = excluded.status,
+            hops   = excluded.hops,
+            snr    = excluded.snr`,
 		channel, msg.time, msg.from, msg.text, mine, msg.bang, msg.status,
 		msg.hops, msg.snr, msg.packetID, msg.replyID, msg.fromNum,
 	)

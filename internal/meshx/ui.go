@@ -1616,19 +1616,23 @@ func (m model) renderMessageRow(
 	row := left + right
 
 	// Continuation lines (line 2+) hang under the text column.
-	// Left-pad to `leftFixed` cells so they sit flush with
-	// firstStyled's left edge; span `textW + rightW` cells on the
-	// right so the tinted bg reaches the full row width — without
-	// it, wrapSelection's per-line truncation + pad would leave a
-	// ragged right edge on multi-line rows.
+	// Carry the same sender-color ▎ accent as the first line so the
+	// color bar reads as one tall strip spanning the whole message
+	// group — easier to scan "where does this message end" when a
+	// solar-node end-of-day report runs three or four lines deep.
+	// hangIndent covers leftFixed-2 cells because `accent` already
+	// occupies the first two. contW = textW + rightW so the tinted
+	// bg reaches the full row width; without it, wrapSelection's
+	// per-line truncation + pad would leave a ragged right edge on
+	// multi-line rows.
 	if len(bodyLines) > 1 {
-		hangIndent := gapStyle.Render(strings.Repeat(" ", leftFixed))
+		hangIndent := gapStyle.Render(strings.Repeat(" ", leftFixed-2))
 		contW := textW + rightW
 		if contW < textW {
 			contW = textW
 		}
 		for _, bl := range bodyLines[1:] {
-			cont := hangIndent + text.Render(padOrTruncate(bl, contW))
+			cont := accent + hangIndent + text.Render(padOrTruncate(bl, contW))
 			row += "\n" + cont
 		}
 	}

@@ -260,6 +260,15 @@ type model struct {
 	connected   bool           // true once ConfigComplete arrives
 	myNodeNum   uint32         // populated by MyNodeInfo
 	nodesByNum  map[uint32]int // radio node id → m.nodes index, for O(1) upsert
+	// messagesByPacketID — Meshtastic wire packet id → m.messages
+	// index, used to dedupe replays. On startup we populate this
+	// from the SQLite backfill; when the radio drains its RAM queue
+	// after WantConfigId, applyTextMessage checks here first and
+	// upgrades the existing row (ack state, signal telemetry)
+	// instead of appending a duplicate. Entries with packetID==0
+	// (system rows, demo seeds, pre-2.x local-only sends) never
+	// go in this map because their zero key would collide.
+	messagesByPacketID map[uint32]int
 
 	// Telemetry + config snapshot — populated as FromRadio packets
 	// arrive. Zero-value means "not yet received" so renderers can
@@ -451,9 +460,10 @@ func newModel(demo *Demo, dest string) model {
 		splash:          chosenSplash,
 		connectDest:     dest,
 		demo:            demo,
-		nodesByNum:      make(map[uint32]int),
-		peerPositions:   make(map[uint32]peerPosition),
-		peerEnv:         make(map[uint32]peerEnvMetrics),
+		nodesByNum:         make(map[uint32]int),
+		messagesByPacketID: make(map[uint32]int),
+		peerPositions:      make(map[uint32]peerPosition),
+		peerEnv:            make(map[uint32]peerEnvMetrics),
 		input:           in,
 		searchInput:     func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
 		initialFocusCmd: focusCmd,
@@ -524,10 +534,24 @@ func newModel(demo *Demo, dest string) model {
 				// arrives). Load is by `currentChannel` so messages
 				// migrate as the handshake resolves the channel name.
 				if past, err := loadMessages(db, "", 500); err == nil {
+					baseIdx := len(m.messages)
 					m.messages = append(m.messages, past...)
 					m.selectedMsg = len(m.messages) - 1
 					if m.selectedMsg < 0 {
 						m.selectedMsg = 0
+					}
+					// Seed messagesByPacketID so applyTextMessage can
+					// dedupe when the radio's RAM queue replays a
+					// packet we already persisted last session.
+					// Entries with packetID==0 (system rows, demo
+					// seeds) are skipped — the zero key would
+					// collide and they never arrive from the wire
+					// anyway.
+					for i, msg := range past {
+						if msg.packetID == 0 {
+							continue
+						}
+						m.messagesByPacketID[msg.packetID] = baseIdx + i
 					}
 					// Ghost-peer replay — every historical message
 					// with a fromNum we haven't seen in m.nodes gets

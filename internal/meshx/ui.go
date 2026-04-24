@@ -195,36 +195,59 @@ func (m model) renderInputRow() string {
 	// for the highlighted active-channel tab in the status row above.
 	prefix := green.Render("["+m.currentChannel+"] ") + amber.Render("› ")
 
-	// Byte counter on the right edge — users can see how close they
-	// are to the Meshtastic wire cap as they type, not just when they
-	// slam into it. Dim while you've got headroom, amber in the last
-	// 28 bytes, pink bold once the cap is reached (input refuses new
-	// chars at that point; the pink counter is the "that's the limit"
-	// affordance). Spaces around the digits guarantee a fixed 10-cell
-	// footprint so the input view's right edge doesn't jitter.
+	// Byte counter on the right edge. Ramps through five discrete
+	// colors as the composition approaches the wire cap so the user
+	// sees pressure build, not just a sudden red stop-sign at 228:
+	//
+	//   < 50%   — drained (plenty of room)
+	//   50–75%  — fg      (hello, counter exists)
+	//   75–90%  — yellow  (starting to watch)
+	//   90–99%  — orange  (careful)
+	//   ≥ 100%  — pink bold (cap reached; textinput refuses more)
+	//
+	// Fixed " %3d/228 " footprint (9 cells) so the input view's
+	// right edge never jitters as the digit count changes.
 	n := len(m.input.Value())
-	counterTxt := fmt.Sprintf(" %d/%d ", n, meshtasticMaxTextBytes)
+	counterTxt := fmt.Sprintf(" %3d/%d ", n, meshtasticMaxTextBytes)
+	pct := float64(n) / float64(meshtasticMaxTextBytes)
 	counterStyle := dim
 	switch {
 	case n >= meshtasticMaxTextBytes:
 		counterStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(mhPink)).Bold(true)
-	case n >= meshtasticMaxTextBytes-28:
+	case pct >= 0.9:
+		counterStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(mhOrange)).Bold(true)
+	case pct >= 0.75:
 		counterStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(mhYellow)).Bold(true)
+	case pct >= 0.5:
+		counterStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(mhFG))
 	}
 	counter := counterStyle.Render(counterTxt)
 
-	// Fill between the input view and the counter so the counter
-	// sits flush against the right margin regardless of input length.
-	// Visual cells: 1 leading space + prefix + input + fill + counter.
+	// Size the input view based on what actually fits THIS frame —
+	// prefix width depends on channel name (`#default` vs `*secret*`
+	// vs a longer imported channel) and the counter width is fixed
+	// but we want the counter flush-right regardless. Leading space
+	// (1) + prefix + input + gap (1) + counter = m.w.
+	counterW := lipgloss.Width(counter)
 	prefixW := lipgloss.Width(prefix)
-	inputW := lipgloss.Width(m.input.View())
-	fill := m.w - 1 - prefixW - inputW - lipgloss.Width(counter)
+	availInput := m.w - 1 - prefixW - 1 - counterW
+	if availInput < 10 {
+		availInput = 10
+	}
+	if m.input.Width != availInput {
+		m.input.Width = availInput
+	}
+	inputView := m.input.View()
+	inputW := lipgloss.Width(inputView)
+	fill := m.w - 1 - prefixW - inputW - counterW
 	if fill < 1 {
 		fill = 1
 	}
-	return " " + prefix + m.input.View() + strings.Repeat(" ", fill) + counter
+	return " " + prefix + inputView + strings.Repeat(" ", fill) + counter
 }
 
 // renderTopDivider draws a full-width double-line ruler across the

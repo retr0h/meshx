@@ -388,14 +388,25 @@ func wirePayloadBytes(input string) int {
 	rest := strings.TrimPrefix(input, "/")
 	verb, rest, _ := strings.Cut(rest, " ")
 	switch strings.ToLower(verb) {
-	case "reply", "r", "msg":
-		// /reply <target> <body>  /msg <target> <body>
-		// The verb + target are chrome; body is the remainder.
+	case "reply", "r":
+		// /reply <target> <body> — body is what goes over the wire;
+		// threading to the parent is carried in Data.reply_id, not
+		// in the body, so the target arg is pure meshx chrome.
 		_, body, hasBody := strings.Cut(rest, " ")
 		if !hasBody {
 			return 0
 		}
 		return len(body)
+	case "msg":
+		// /msg <target> <body> becomes "<target>: <body>" on the
+		// wire (Meshtastic has no true DM on a public channel, so
+		// the addressing has to live in the payload). Account for
+		// the ": " separator so the counter reflects reality.
+		target, body, hasBody := strings.Cut(rest, " ")
+		if !hasBody {
+			return 0
+		}
+		return len(target) + len(": ") + len(body)
 	case "cq", "qth":
 		// /cq [tail]  /qth [text] — the arg IS the body.
 		return len(rest)

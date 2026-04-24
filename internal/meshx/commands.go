@@ -791,14 +791,20 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		if body == "" {
 			return m.prefillInput("/reply " + target + " ")
 		}
-		m.messages = append(m.messages, messageItem{
-			time: "14:13", from: "me", mine: true,
-			text: "→" + target + ": " + body, status: "ack",
-		})
-		m.selectedMsg = len(m.messages) - 1
+		// Route through sendBangReply so the packet actually hits
+		// the pump and picks up Data.reply_id threading to the
+		// parent message. Body stays clean — no "→<target>: " chrome
+		// in the wire payload; the threading line above the row
+		// (rendered from replyID) is how "this replies to X" is
+		// surfaced to readers.
+		m.sendBangReply("/reply "+target, body, m.replyTargetFor(target))
 		m.flash = fmt.Sprintf("reply sent to %s", target)
 	case "msg":
-		// /msg <call> <text> — direct message, same shape as /reply with args.
+		// /msg <call> <text> — directed message. Meshtastic has no
+		// formal DM on the public channel (this still broadcasts),
+		// so convention is to prefix the body with the target's name
+		// so humans see the addressing. Unlike /reply there's no
+		// parent to thread against, so replyID is zero.
 		sp := strings.IndexByte(rest, ' ')
 		if sp < 0 {
 			m.flash = "usage: /msg <callsign> <text>"
@@ -806,11 +812,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		target := rest[:sp]
 		body := strings.TrimSpace(rest[sp+1:])
-		m.messages = append(m.messages, messageItem{
-			time: "14:13", from: "me", mine: true,
-			text: "→" + target + ": " + body, status: "ack",
-		})
-		m.selectedMsg = len(m.messages) - 1
+		if body == "" {
+			m.flash = "usage: /msg <callsign> <text>"
+			return nil
+		}
+		m.sendBang("/msg "+target, target+": "+body)
 		m.flash = fmt.Sprintf("DM sent to %s", target)
 	case "join":
 		if rest == "" {

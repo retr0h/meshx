@@ -259,6 +259,8 @@ func (m model) renderHelpView(height int) string {
 		sec.Render("OVERLAYS"),
 		kv("/channels", "open channels list — j/k walk, Enter opens"),
 		kv("/nodes /users /names", "open users grid — h/j/k/l walk, Enter whois"),
+		kv("/nearby", "distance-sorted peer roster (closest first; requires own GPS fix)"),
+		kv("/radar", "polar scope — peers plotted by bearing + distance around you"),
 		kv("/help or ?", "this help screen — j/k scroll, Esc closes"),
 		"",
 		sec.Render("NAV MODE (after Esc)"),

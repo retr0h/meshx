@@ -893,11 +893,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w = msg.Width
 		m.h = msg.Height
-		// -8 for "[channel] › " chrome on the left, -12 for the
-		// byte-counter's fixed-width slot on the right (e.g. " 228/228 ")
-		// plus a couple cells of breathing room so the counter never
-		// kisses the input text.
-		m.input.Width = m.w - 8 - 12
+		m.input.Width = m.w - 8
 		return m, nil
 
 	case tea.KeyMsg:

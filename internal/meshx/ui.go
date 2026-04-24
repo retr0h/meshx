@@ -148,7 +148,36 @@ func (m model) renderChannelStatus() string {
 	case modeHelp:
 		modeTag = "HELP"
 	}
-	right := label.Render("[" + modeTag + "]")
+	var right string
+	if m.mode == modeInput {
+		// Byte counter lives in the mode badge while composing — the
+		// status row is fixed-width and flush-right, so the counter
+		// never gets pushed off-screen by long input text. Ramps
+		// through five colors as the composition approaches the wire
+		// cap so pressure is visible before you hit it.
+		n := len(m.input.Value())
+		pct := float64(n) / float64(meshtasticMaxTextBytes)
+		counterTxt := fmt.Sprintf("%d/%d", n, meshtasticMaxTextBytes)
+		counterStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+		switch {
+		case n >= meshtasticMaxTextBytes:
+			counterStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhPink)).Bold(true)
+		case pct >= 0.9:
+			counterStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhOrange)).Bold(true)
+		case pct >= 0.75:
+			counterStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhYellow)).Bold(true)
+		case pct >= 0.5:
+			counterStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhFG))
+		}
+		right = counterStyle.Render(counterTxt) + " " +
+			label.Render("["+modeTag+"]")
+	} else {
+		right = label.Render("[" + modeTag + "]")
+	}
 	if m.flash != "" {
 		// Flash color depends on kind — errors / hints in dim lavender,
 		// successful actions in quiet green. Heuristic: anything that
@@ -193,61 +222,11 @@ func (m model) renderInputRow() string {
 	// Input mode — default.
 	// Input-bar channel prefix stays mesh-green — pink is reserved
 	// for the highlighted active-channel tab in the status row above.
+	// The byte counter lives in the [INPUT] badge on the top status
+	// row so it stays visible regardless of composition length;
+	// nothing here on the right.
 	prefix := green.Render("["+m.currentChannel+"] ") + amber.Render("› ")
-
-	// Byte counter on the right edge. Ramps through five discrete
-	// colors as the composition approaches the wire cap so the user
-	// sees pressure build, not just a sudden red stop-sign at 228:
-	//
-	//   < 50%   — drained (plenty of room)
-	//   50–75%  — fg      (hello, counter exists)
-	//   75–90%  — yellow  (starting to watch)
-	//   90–99%  — orange  (careful)
-	//   ≥ 100%  — pink bold (cap reached; textinput refuses more)
-	//
-	// Fixed " %3d/228 " footprint (9 cells) so the input view's
-	// right edge never jitters as the digit count changes.
-	n := len(m.input.Value())
-	counterTxt := fmt.Sprintf(" %3d/%d ", n, meshtasticMaxTextBytes)
-	pct := float64(n) / float64(meshtasticMaxTextBytes)
-	counterStyle := dim
-	switch {
-	case n >= meshtasticMaxTextBytes:
-		counterStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mhPink)).Bold(true)
-	case pct >= 0.9:
-		counterStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mhOrange)).Bold(true)
-	case pct >= 0.75:
-		counterStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mhYellow)).Bold(true)
-	case pct >= 0.5:
-		counterStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mhFG))
-	}
-	counter := counterStyle.Render(counterTxt)
-
-	// Size the input view based on what actually fits THIS frame —
-	// prefix width depends on channel name (`#default` vs `*secret*`
-	// vs a longer imported channel) and the counter width is fixed
-	// but we want the counter flush-right regardless. Leading space
-	// (1) + prefix + input + gap (1) + counter = m.w.
-	counterW := lipgloss.Width(counter)
-	prefixW := lipgloss.Width(prefix)
-	availInput := m.w - 1 - prefixW - 1 - counterW
-	if availInput < 10 {
-		availInput = 10
-	}
-	if m.input.Width != availInput {
-		m.input.Width = availInput
-	}
-	inputView := m.input.View()
-	inputW := lipgloss.Width(inputView)
-	fill := m.w - 1 - prefixW - inputW - counterW
-	if fill < 1 {
-		fill = 1
-	}
-	return " " + prefix + inputView + strings.Repeat(" ", fill) + counter
+	return " " + prefix + m.input.View()
 }
 
 // renderTopDivider draws a full-width double-line ruler across the

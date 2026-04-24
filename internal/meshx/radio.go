@@ -285,6 +285,13 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 // hints at why: TIMEOUT, MAX_RETRANSMIT, NO_INTERFACE...).
 // Routing replies for packets we didn't originate silently drop —
 // request_id won't match any of our outbound rows.
+//
+// Persists the new status through saveMessage's UPSERT path so the
+// flip survives a restart. Without this, SQLite would still hold
+// "pending", expireStalePendingMessages would mark the row "fail"
+// after 5 minutes on next launch, and old messages that actually
+// delivered would surface as ✗ — misleading the user about what
+// went out.
 func (m *model) applyRouting(msg radioRoutingMsg) {
 	if msg.requestID == 0 {
 		return
@@ -300,6 +307,7 @@ func (m *model) applyRouting(msg radioRoutingMsg) {
 			m.messages[i].status = "fail"
 			m.flash = "delivery failed: " + msg.errorName + "  (R to resend)"
 		}
+		m.storagePersist(saveMessage(m.db, m.currentChannel, m.messages[i]))
 		return
 	}
 }

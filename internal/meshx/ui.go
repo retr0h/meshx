@@ -194,7 +194,37 @@ func (m model) renderInputRow() string {
 	// Input-bar channel prefix stays mesh-green — pink is reserved
 	// for the highlighted active-channel tab in the status row above.
 	prefix := green.Render("["+m.currentChannel+"] ") + amber.Render("› ")
-	return " " + prefix + m.input.View()
+
+	// Byte counter on the right edge — users can see how close they
+	// are to the Meshtastic wire cap as they type, not just when they
+	// slam into it. Dim while you've got headroom, amber in the last
+	// 28 bytes, pink bold once the cap is reached (input refuses new
+	// chars at that point; the pink counter is the "that's the limit"
+	// affordance). Spaces around the digits guarantee a fixed 10-cell
+	// footprint so the input view's right edge doesn't jitter.
+	n := len(m.input.Value())
+	counterTxt := fmt.Sprintf(" %d/%d ", n, meshtasticMaxTextBytes)
+	counterStyle := dim
+	switch {
+	case n >= meshtasticMaxTextBytes:
+		counterStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(mhPink)).Bold(true)
+	case n >= meshtasticMaxTextBytes-28:
+		counterStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(mhYellow)).Bold(true)
+	}
+	counter := counterStyle.Render(counterTxt)
+
+	// Fill between the input view and the counter so the counter
+	// sits flush against the right margin regardless of input length.
+	// Visual cells: 1 leading space + prefix + input + fill + counter.
+	prefixW := lipgloss.Width(prefix)
+	inputW := lipgloss.Width(m.input.View())
+	fill := m.w - 1 - prefixW - inputW - lipgloss.Width(counter)
+	if fill < 1 {
+		fill = 1
+	}
+	return " " + prefix + m.input.View() + strings.Repeat(" ", fill) + counter
 }
 
 // renderTopDivider draws a full-width double-line ruler across the

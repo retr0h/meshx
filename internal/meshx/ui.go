@@ -645,25 +645,6 @@ func nickColor(callsign string) string {
 	return nickColorPalette[int(sum)%len(nickColorPalette)]
 }
 
-// nodeNumColor is nickColor's identity-keyed sibling — hashes the
-// raw Meshtastic node num instead of the callsign. Used by /radar's
-// closest-N legend so two radios sharing a longname ("retr0h" on
-// three different HELTECs) each get a distinct palette slot; the
-// callsign-keyed nickColor would collapse them to the same hue.
-//
-// Implemented as a thin shim over nickColor keyed on the hex form
-// of num, so the same battle-tested FNV-1a + murmur avalanche that
-// distributes callsigns also distributes node nums. A handrolled
-// byte-by-byte hash kept hitting the same palette bucket on ~40%
-// of inputs; piping through nickColor with a longer seed string
-// fixes that without duplicating the mixer.
-func nodeNumColor(num uint32) string {
-	if num == 0 {
-		return mhDrained
-	}
-	return nickColor(fmt.Sprintf("node-%08x-color", num))
-}
-
 // paneHeader renders a plain bold uppercase header. Focused panes
 // already show their accent color in the double-lined border, so
 // the header itself stays neutral fg (focused) or drained (not) —

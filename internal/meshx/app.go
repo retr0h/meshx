@@ -189,17 +189,12 @@ type model struct {
 
 	input       textinput.Model // always-on bottom input (messages OR /commands)
 	searchInput textinput.Model
-	searchQuery string // committed search term
-	// searchOrigin records which mode opened the `/` prompt so ESC /
-	// Enter can restore the user to the right screen. modeNav is the
-	// common case (search in the message / channel / node panes);
-	// modeHelp is used when `/` is pressed inside the /help overlay.
-	searchOrigin mode
-	nodeFilter   string        // callsign filter on scrollback; "" = all
-	helpScroll   int           // scroll offset for help overlay
-	splash       splashVariant // which BitchX-style banner is showing this launch
-	tab          *tabState     // non-nil while cycling through Tab completions
-	ctrlWPend    bool          // Ctrl+W armed — next key is a window nav (j/k/i/h/l/1/2/3)
+	searchQuery string        // committed search term
+	nodeFilter  string        // callsign filter on scrollback; "" = all
+	helpScroll  int           // scroll offset for help overlay
+	splash      splashVariant // which BitchX-style banner is showing this launch
+	tab         *tabState     // non-nil while cycling through Tab completions
+	ctrlWPend   bool          // Ctrl+W armed — next key is a window nav (j/k/i/h/l/1/2/3)
 
 	// Input history — every committed line (message or /command) is
 	// pushed to inputHistory. Up / Down arrow in input mode walk the

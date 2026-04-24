@@ -204,12 +204,9 @@ func (m model) renderTopDivider() string {
 	return style.Render(strings.Repeat("═", m.w))
 }
 
-// helpStyledLines builds the full help overlay content as a slice of
-// lipgloss-rendered lines, in display order. Extracted so the `/`
-// search handler (jumpToHelpSearchHit) can reuse the same content —
-// match the ANSI-stripped form of each line against searchQuery and
-// know which helpScroll offset brings a hit into view.
-func (m model) helpStyledLines() []string {
+// renderHelpView draws a full-pane help overlay listing every keybind
+// and every `:` command, organized by category. Any key dismisses it.
+func (m model) renderHelpView(height int) string {
 	head := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(meshGreen)).
 		Bold(true)
@@ -229,7 +226,7 @@ func (m model) helpStyledLines() []string {
 		return "  " + key.Render(padOrTruncate(k, 14)) + "  " + desc.Render(d)
 	}
 
-	return []string{
+	lines := []string{
 		head.Render("S Q U E L C H   ·   H E L P"),
 		dim.Render("j/k scroll · q/Esc/? close · irssi-style modal UI"),
 		"",
@@ -329,30 +326,6 @@ func (m model) helpStyledLines() []string {
 		kv("", "Future: /channel add <meshtastic://url> to import by URL,"),
 		kv("", "/channel share <name> to emit a QR for another client."),
 	}
-}
-
-// renderHelpView draws the /help overlay: scrollable, /-searchable,
-// with matching lines tinted using the same dim-green bg the message
-// and node panes use for search hits. Any key dismisses it via
-// updateHelp.
-func (m model) renderHelpView(height int) string {
-	dim := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained))
-	lines := m.helpStyledLines()
-
-	// Apply search-hit tint to matching lines so the `/` result is
-	// visible without needing `n` to land on it — same dim-green bg
-	// wrapSelection uses for searchHit rows in the message/node panes.
-	if m.searchQuery != "" {
-		hitStyle := lipgloss.NewStyle().
-			Background(lipgloss.Color("#0e2618")).
-			Inline(true)
-		for i, ln := range lines {
-			if strings.Contains(strings.ToLower(stripANSICodes(ln)), m.searchQuery) {
-				lines[i] = hitStyle.Render(ln)
-			}
-		}
-	}
 
 	// Viewport: show only the window that fits in the frame. Reserve
 	// rows for the border (2), padding (2), header (1), blank (1),
@@ -382,7 +355,7 @@ func (m model) renderHelpView(height int) string {
 	indicator := ""
 	if len(lines) > visible {
 		pos := fmt.Sprintf("line %d/%d", scroll+1, len(lines))
-		hint := "j/k scroll · d/u page · g/G top/bottom · / search · n/N cycle · q/Esc/? close"
+		hint := "j/k scroll · d/u page · g/G top/bottom · q/Esc/? close"
 		indicator = dim.Render(pos + "   " + hint)
 	} else {
 		indicator = dim.Render("q / Esc / ? to close")
@@ -396,29 +369,6 @@ func (m model) renderHelpView(height int) string {
 		Width(m.w - 4).
 		Height(height - 2).
 		Render(strings.Join(viewLines, "\n"))
-}
-
-// stripANSICodes removes CSI escape sequences so search matching can
-// run against the user-visible text of a styled line. Mirrors the
-// stripANSI helper in layout_regression_test.go but lives in the main
-// package so the help search can use it.
-func stripANSICodes(s string) string {
-	var b strings.Builder
-	inSeq := false
-	for _, r := range s {
-		if r == 0x1b {
-			inSeq = true
-			continue
-		}
-		if inSeq {
-			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
-				inSeq = false
-			}
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
 
 // statusSegment wraps a styled value in the `░▒▓ value ▓▒░` tmux /

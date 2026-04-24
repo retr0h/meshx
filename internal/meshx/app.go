@@ -422,14 +422,16 @@ func newModel(demo *Demo, dest string) model {
 	// /commands when the line begins with "/". irssi-style.
 	in := textinput.New()
 	in.Prompt = ""
-	// CharLimit is a textinput rune cap, not a byte cap — we rely on
-	// the byte-aware enforcer in updateInput to hit the real
-	// meshtasticMaxTextBytes wire limit. Setting CharLimit equal to
-	// the byte cap ensures that for an all-ASCII composition the
-	// textinput refuses new characters at the same point our enforcer
-	// would. For emoji-heavy text (4-byte runes) the byte enforcer
-	// takes over first, which is correct.
-	in.CharLimit = meshtasticMaxTextBytes
+	// CharLimit is textinput's own rune cap. Leave it disabled (0 =
+	// unlimited) and let the byte-aware enforcer in updateInput be
+	// the single source of truth for when to refuse new input. A
+	// rune-based CharLimit interacts badly with the viewport scroll
+	// math (Width) — empirically, setting CharLimit equal to the
+	// byte cap can stop accepting new runes before the BYTE count
+	// reaches the cap. Since wirePayloadBytes + the revert-on-
+	// overflow guard already enforces the real wire limit, letting
+	// textinput run unbounded here is simpler and correct.
+	in.CharLimit = 0
 	in.Placeholder = "type a message, or /help for commands"
 	in.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(mhFG))
 	// Hot-pink blinking block cursor — bubbles textinput defaults

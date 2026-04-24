@@ -148,7 +148,41 @@ func (m model) renderChannelStatus() string {
 	case modeHelp:
 		modeTag = "HELP"
 	}
-	right := label.Render("[" + modeTag + "]")
+	var right string
+	if m.mode == modeInput {
+		// Byte counter lives in the mode badge while composing — the
+		// status row is fixed-width and flush-right, so the counter
+		// never gets pushed off-screen by long input text. Ramps
+		// through five colors as the composition approaches the wire
+		// cap so pressure is visible before you hit it.
+		//
+		// Counts BODY bytes only via wirePayloadBytes — the verb + any
+		// target arg is meshx chrome that doesn't cost budget.
+		// `/reply bubbingtenny2k ` reads 0/228 until the user starts
+		// typing the actual reply body.
+		n := wirePayloadBytes(m.input.Value())
+		pct := float64(n) / float64(meshtasticMaxTextBytes)
+		counterTxt := fmt.Sprintf("%d/%d", n, meshtasticMaxTextBytes)
+		counterStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+		switch {
+		case n >= meshtasticMaxTextBytes:
+			counterStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhPink)).Bold(true)
+		case pct >= 0.9:
+			counterStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhOrange)).Bold(true)
+		case pct >= 0.75:
+			counterStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhYellow)).Bold(true)
+		case pct >= 0.5:
+			counterStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(mhFG))
+		}
+		right = counterStyle.Render(counterTxt) + " " +
+			label.Render("["+modeTag+"]")
+	} else {
+		right = label.Render("[" + modeTag + "]")
+	}
 	if m.flash != "" {
 		// Flash color depends on kind — errors / hints in dim lavender,
 		// successful actions in quiet green. Heuristic: anything that
@@ -193,6 +227,9 @@ func (m model) renderInputRow() string {
 	// Input mode — default.
 	// Input-bar channel prefix stays mesh-green — pink is reserved
 	// for the highlighted active-channel tab in the status row above.
+	// The byte counter lives in the [INPUT] badge on the top status
+	// row so it stays visible regardless of composition length;
+	// nothing here on the right.
 	prefix := green.Render("["+m.currentChannel+"] ") + amber.Render("› ")
 	return " " + prefix + m.input.View()
 }

@@ -351,9 +351,85 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sendPlainMessage(raw)
 		return m, nil
 	}
+	// Forward the keypress to the textinput, then enforce the
+	// Meshtastic wire-level byte cap on the BODY portion only. The
+	// "/verb " and optional "<target> " prefix is meshx chrome, not
+	// wire bytes — counting them would force users to write a shorter
+	// reply than the firmware actually supports. wirePayloadBytes
+	// strips the command prefix so the cap reflects what'll actually
+	// hit the LoRa link.
+	prev := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	if wirePayloadBytes(m.input.Value()) > meshtasticMaxTextBytes {
+		m.input.SetValue(prev)
+		m.input.SetCursor(len(prev))
+		m.flash = byteCapFlash
+	} else if m.flash == byteCapFlash {
+		// User has edited off the cap — clear the sticky flash so
+		// it doesn't linger after backspace / clear-line / send.
+		m.flash = ""
+	}
 	return m, cmd
+}
+
+// byteCapFlash is the exact string used when the wire-limit enforcer
+// rejects a keypress. Held as a constant so the clear-on-recovery
+// branch above can match it precisely and drop the flash the moment
+// the input drops below the cap.
+var byteCapFlash = fmt.Sprintf(
+	"message at %d-byte cap (Meshtastic payload limit)",
+	meshtasticMaxTextBytes,
+)
+
+// wirePayloadBytes returns the byte length of the portion of `input`
+// that would end up in Data.payload on the wire. For plain chat the
+// whole line is payload. For /commands the verb + any target arg is
+// meshx-internal chrome that doesn't go over the air; only the body
+// (when the verb has one) counts. Local-only verbs (/help, /clear,
+// /nodes, …) produce no payload at all and return 0.
+//
+// Intentionally simple: recognizes the verbs that *let the user
+// author the body*. Verbs that auto-generate a body (/cqr, /rs,
+// /73, /qsl, /sked, /qrz …) aren't listed here because whatever
+// the user types after them isn't what gets transmitted — the
+// dispatcher builds the body from templates.
+func wirePayloadBytes(input string) int {
+	if !strings.HasPrefix(input, "/") {
+		return len(input)
+	}
+	rest := strings.TrimPrefix(input, "/")
+	verb, rest, _ := strings.Cut(rest, " ")
+	switch strings.ToLower(verb) {
+	case "reply", "r":
+		// /reply <target> <body> — body is what goes over the wire;
+		// threading to the parent is carried in Data.reply_id, not
+		// in the body, so the target arg is pure meshx chrome.
+		_, body, hasBody := strings.Cut(rest, " ")
+		if !hasBody {
+			return 0
+		}
+		return len(body)
+	case "msg":
+		// /msg <target> <body> becomes "<target>: <body>" on the
+		// wire (Meshtastic has no true DM on a public channel, so
+		// the addressing has to live in the payload). Account for
+		// the ": " separator so the counter reflects reality.
+		target, body, hasBody := strings.Cut(rest, " ")
+		if !hasBody {
+			return 0
+		}
+		return len(target) + len(": ") + len(body)
+	case "cq", "qth":
+		// /cq [tail]  /qth [text] — the arg IS the body.
+		return len(rest)
+	default:
+		// Any other /verb — either produces no wire payload (local
+		// overlays, local config) or has an auto-generated body the
+		// user can't size. Treat as 0 for the counter; sendBang's
+		// own body is always comfortably under the cap.
+		return 0
+	}
 }
 
 // updateNav — scrollback / overlay selection mode. j/k walks the

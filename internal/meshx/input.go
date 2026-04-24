@@ -411,6 +411,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter", " ":
 		m.activate()
 	case "/":
+		m.searchOrigin = modeNav
 		m.mode = modeSearch
 		m.searchInput.SetValue("")
 		m.searchInput.Focus()
@@ -893,11 +894,14 @@ func (m model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+x", "ctrl+c":
 		return m, tea.Quit
-	case "q", "esc", "?", "enter":
+	case "q", "esc", "enter":
 		// Return to the typing bar rather than nav mode —
 		// ESC-from-help should land the user back where they
 		// type, not drop them into scrollback selection. Matches
 		// how the overlay-close helper treats /channels /nodes.
+		// `?` is deliberately NOT a close key here — users want it
+		// for "what section am I in" re-reading, and binding it to
+		// close would surprise anyone who hit it twice.
 		m.helpScroll = 0
 		return m, m.closeOverlayToInput()
 	case "j", "down":
@@ -917,6 +921,32 @@ func (m model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.helpScroll = 0
 	case "G", "end":
 		m.helpScroll = 10000 // clamped in render
+	case "/":
+		// Same `/` + n/N surface the nav panes use — reuses
+		// modeSearch and updateSearch; searchOrigin=modeHelp routes
+		// the commit back to updateHelp and uses jumpToHelpSearchHit
+		// instead of the focused-pane jump.
+		m.searchOrigin = modeHelp
+		m.mode = modeSearch
+		m.searchInput.SetValue("")
+		m.searchInput.Focus()
+		return m, nil
+	case "n":
+		if m.searchQuery == "" {
+			m.flash = "n: no search query — press `/` to start one"
+			break
+		}
+		if !m.jumpToHelpSearchHit(+1) {
+			m.flash = fmt.Sprintf("n: no more matches for %q", m.searchQuery)
+		}
+	case "N":
+		if m.searchQuery == "" {
+			m.flash = "N: no search query — press `/` to start one"
+			break
+		}
+		if !m.jumpToHelpSearchHit(-1) {
+			m.flash = fmt.Sprintf("N: no more matches for %q", m.searchQuery)
+		}
 	}
 	return m, nil
 }
@@ -925,9 +955,16 @@ func (m model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // query, jumps the selection to the first match in the focused pane,
 // and exits back to normal mode. ESC cancels + clears query.
 func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Restore to whichever mode opened the prompt — modeNav for the
+	// panes, modeHelp for the /help overlay. Defaults to modeNav if
+	// something forgot to stamp searchOrigin.
+	restore := m.searchOrigin
+	if restore == 0 {
+		restore = modeNav
+	}
 	switch msg.String() {
 	case "esc":
-		m.mode = modeNav
+		m.mode = restore
 		m.searchInput.Blur()
 		m.searchQuery = ""
 		m.flash = "search cleared"
@@ -935,10 +972,18 @@ func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		q := strings.TrimSpace(m.searchInput.Value())
 		m.searchQuery = strings.ToLower(q)
-		m.mode = modeNav
+		m.mode = restore
 		m.searchInput.Blur()
 		if q == "" {
 			m.flash = ""
+			return m, nil
+		}
+		if restore == modeHelp {
+			if m.jumpToHelpSearchHit(+1) {
+				m.flash = fmt.Sprintf("search: %q", q)
+			} else {
+				m.flash = fmt.Sprintf("no match for %q", q)
+			}
 			return m, nil
 		}
 		if ok, count := m.jumpToSearchHit(+1); ok {
@@ -951,6 +996,37 @@ func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.searchInput, cmd = m.searchInput.Update(msg)
 	return m, cmd
+}
+
+// jumpToHelpSearchHit scrolls the /help overlay to the next (+1) or
+// previous (-1) line whose plain text contains searchQuery. Returns
+// true when a match was found. Used by updateHelp's n/N and by the
+// search-commit path in updateSearch when searchOrigin==modeHelp.
+func (m *model) jumpToHelpSearchHit(dir int) bool {
+	if m.searchQuery == "" {
+		return false
+	}
+	lines := m.helpStyledLines()
+	if len(lines) == 0 {
+		return false
+	}
+	plain := make([]string, len(lines))
+	for i, ln := range lines {
+		plain[i] = strings.ToLower(stripANSICodes(ln))
+	}
+	start := m.helpScroll + dir
+	if dir == 0 {
+		start = 0
+	}
+	n := len(plain)
+	for k := 0; k < n; k++ {
+		i := (start + k*dir + n) % n
+		if strings.Contains(plain[i], m.searchQuery) {
+			m.helpScroll = i
+			return true
+		}
+	}
+	return false
 }
 
 // jumpToSearchHit scans the focused pane's list from the current

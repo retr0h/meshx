@@ -364,10 +364,23 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if wirePayloadBytes(m.input.Value()) > meshtasticMaxTextBytes {
 		m.input.SetValue(prev)
 		m.input.SetCursor(len(prev))
-		m.flash = fmt.Sprintf("message at %d-byte cap (Meshtastic payload limit)", meshtasticMaxTextBytes)
+		m.flash = byteCapFlash
+	} else if m.flash == byteCapFlash {
+		// User has edited off the cap — clear the sticky flash so
+		// it doesn't linger after backspace / clear-line / send.
+		m.flash = ""
 	}
 	return m, cmd
 }
+
+// byteCapFlash is the exact string used when the wire-limit enforcer
+// rejects a keypress. Held as a constant so the clear-on-recovery
+// branch above can match it precisely and drop the flash the moment
+// the input drops below the cap.
+var byteCapFlash = fmt.Sprintf(
+	"message at %d-byte cap (Meshtastic payload limit)",
+	meshtasticMaxTextBytes,
+)
 
 // wirePayloadBytes returns the byte length of the portion of `input`
 // that would end up in Data.payload on the wire. For plain chat the

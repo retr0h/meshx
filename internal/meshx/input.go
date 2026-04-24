@@ -351,8 +351,21 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sendPlainMessage(raw)
 		return m, nil
 	}
+	// Forward the keypress to the textinput, then enforce the
+	// Meshtastic wire-level byte cap. textinput.CharLimit counts
+	// runes, not bytes — on ASCII that's the same, but a single
+	// emoji is 4 bytes, so a rune-based limit silently lets the user
+	// compose messages the firmware will truncate on TX. Revert to
+	// the pre-keypress value when the new one would exceed the byte
+	// budget so the user can't physically type past the limit.
+	prev := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	if len(m.input.Value()) > meshtasticMaxTextBytes {
+		m.input.SetValue(prev)
+		m.input.SetCursor(len(prev))
+		m.flash = fmt.Sprintf("message at %d-byte cap (Meshtastic payload limit)", meshtasticMaxTextBytes)
+	}
 	return m, cmd
 }
 

@@ -40,6 +40,17 @@ import (
 // messages + reply verbs stay clean to keep the LoRa byte budget low.
 const clientTag = "meshx (github.com/retr0h/meshx)"
 
+// meshtasticMaxTextBytes is the practical byte cap on a single
+// TEXT_MESSAGE_APP payload. Meshtastic's LoRa link carries ~237
+// bytes of MeshPacket; once you subtract the protobuf header +
+// encryption overhead, ~228 bytes remain for the Data.payload
+// itself. Longer payloads get silently truncated by the firmware
+// on the TX side — the wire only shows the cut-off version, and
+// the sender's ACK fires regardless, so without a client-side cap
+// users can silently lose the tail of anything they type. Matches
+// the official Meshtastic Android / iOS apps' input limit.
+const meshtasticMaxTextBytes = 228
+
 // Mode constants — mutt-style modal UI. Normal is the default
 // three-pane view; command drops you into a `:` prompt at the bottom;
 // insert takes over the middle pane with a compose editor.
@@ -411,7 +422,14 @@ func newModel(demo *Demo, dest string) model {
 	// /commands when the line begins with "/". irssi-style.
 	in := textinput.New()
 	in.Prompt = ""
-	in.CharLimit = 200
+	// CharLimit is a textinput rune cap, not a byte cap — we rely on
+	// the byte-aware enforcer in updateInput to hit the real
+	// meshtasticMaxTextBytes wire limit. Setting CharLimit equal to
+	// the byte cap ensures that for an all-ASCII composition the
+	// textinput refuses new characters at the same point our enforcer
+	// would. For emoji-heavy text (4-byte runes) the byte enforcer
+	// takes over first, which is correct.
+	in.CharLimit = meshtasticMaxTextBytes
 	in.Placeholder = "type a message, or /help for commands"
 	in.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(mhFG))
 	// Hot-pink blinking block cursor — bubbles textinput defaults

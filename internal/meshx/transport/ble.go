@@ -61,24 +61,78 @@ const bleReadBuf = 512
 // to rediscover it, then connect, discover the service, and pin
 // the three characteristics (fromRadio, toRadio, fromNum) for the
 // Run loop.
+//
+// The scan-then-connect dance around tinygo-bluetooth v0.15.0 has
+// two macOS-specific footguns we route around here:
+//
+//  1. StopScan mid-handshake evicts the peripheral from
+//     CoreBluetooth's internal cache, so a subsequent Connect
+//     against the same Address resolves no peripheral and returns
+//     a silent (zeroDevice, nil). We keep the scan running until
+//     Connect returns, then stop.
+//  2. That same silent-success path, if not caught, flows into
+//     DiscoverServices which calls a method on a nil CBPeripheral
+//     and segfaults. We detect Device == zero and convert to a
+//     real error before it can panic downstream.
 func DialBLE(addr string) (Client, error) {
 	adapter := bluetooth.DefaultAdapter
 	if err := adapter.Enable(); err != nil {
 		return nil, fmt.Errorf("enable bluetooth adapter: %w — is Bluetooth on?", err)
 	}
 
-	// Scan to rediscover the peripheral. macOS's CoreBluetooth
-	// requires a live scan result before Connect; we can't just
-	// pass a saved UUID string. 8s is generous — typical Meshtastic
-	// radios advertise every ~200ms.
-	found, err := bleScanFor(adapter, addr, bleScanTimeout)
-	if err != nil {
-		return nil, err
+	// Start a scan and wait for the target advertisement. DELIBERATELY
+	// do not StopScan inside the callback — keep the scanner live
+	// through Connect so CoreBluetooth retains the peripheral's cache
+	// entry. See the function doc for why.
+	foundCh := make(chan bluetooth.ScanResult, 1)
+	scanErrCh := make(chan error, 1)
+	go func() {
+		scanErrCh <- adapter.Scan(func(a *bluetooth.Adapter, res bluetooth.ScanResult) {
+			if res.Address.String() != addr {
+				return
+			}
+			select {
+			case foundCh <- res:
+			default:
+			}
+		})
+	}()
+
+	var found bluetooth.ScanResult
+	select {
+	case found = <-foundCh:
+	case <-time.After(bleScanTimeout):
+		_ = adapter.StopScan()
+		<-scanErrCh
+		return nil, fmt.Errorf(
+			"ble: device %s not found within %s — is it powered on and in range?",
+			addr, bleScanTimeout,
+		)
 	}
 
 	device, err := adapter.Connect(found.Address, bluetooth.ConnectionParams{})
+	// Stop the scanner now that Connect has returned. Safe to call
+	// even if Connect errored — idempotent in tinygo-bluetooth.
+	_ = adapter.StopScan()
+	<-scanErrCh
 	if err != nil {
 		return nil, fmt.Errorf("connect %s: %w", addr, err)
+	}
+	// Guard against tinygo-bluetooth v0.15.0's silent-success path:
+	// Connect can return (Device{}, nil) on macOS when CoreBluetooth
+	// rejects the connection (peripheral cache miss, or the central
+	// delegate reported didFailToConnect). Calling DiscoverServices
+	// on that zero Device derefs a nil CBPeripheral and segfaults
+	// inside the library. Detect here and emit an actionable error.
+	if found.Address.String() == "" || device.Address == (bluetooth.Address{}) {
+		return nil, fmt.Errorf(
+			"connect %s: CoreBluetooth did not establish a peripheral handle. "+
+				"Usual causes: another client (phone app, nRF Connect) currently "+
+				"holds the radio's BLE link; the peripheral was advertising but "+
+				"rejected pairing; the OS cache needs a refresh. Try: disconnect "+
+				"other BLE clients, re-run `meshx ble scan`, then connect again.",
+			addr,
+		)
 	}
 
 	// Discover the Meshtastic service. Passing the service UUID
@@ -169,52 +223,6 @@ func DialBLE(addr string) (Client, error) {
 	}
 
 	return c, nil
-}
-
-// bleScanFor runs a filtered scan for `addr` and returns the
-// matching ScanResult. Stops the scan and returns as soon as the
-// target is found; returns a timeout error if it never appears.
-// Kept package-internal because the CLI scan in meshx.BLEScan uses
-// a different (unfiltered, table-printing) scan flow.
-func bleScanFor(
-	adapter *bluetooth.Adapter,
-	addr string,
-	timeout time.Duration,
-) (bluetooth.ScanResult, error) {
-	var (
-		found   bluetooth.ScanResult
-		foundCh = make(chan bluetooth.ScanResult, 1)
-	)
-	// Scan callback posts to foundCh exactly once. subsequent
-	// matches (duplicate adv packets while we're stopping) drop on
-	// the floor via the default in the select.
-	scanErrCh := make(chan error, 1)
-	go func() {
-		scanErrCh <- adapter.Scan(func(a *bluetooth.Adapter, res bluetooth.ScanResult) {
-			if res.Address.String() != addr {
-				return
-			}
-			select {
-			case foundCh <- res:
-				_ = a.StopScan()
-			default:
-			}
-		})
-	}()
-	select {
-	case res := <-foundCh:
-		found = res
-		// Drain the scan goroutine.
-		<-scanErrCh
-		return found, nil
-	case <-time.After(timeout):
-		_ = adapter.StopScan()
-		<-scanErrCh
-		return bluetooth.ScanResult{}, fmt.Errorf(
-			"ble: device %s not found within %s — is it powered on and in range?",
-			addr, timeout,
-		)
-	}
 }
 
 // bleClient is the BLE transport's implementation of Client.

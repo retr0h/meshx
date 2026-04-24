@@ -1474,10 +1474,28 @@ func (m model) renderMessageRow(
 	// story about identity — the magenta peer style still flags
 	// "this one's yours" at a glance.
 	fromRaw := m.displayFrom(msg)
+	shortName := ""
 	if msg.mine {
 		fromRaw = m.myCallsign()
-	} else if strings.HasPrefix(fromRaw, "node 0x") {
-		fromRaw = "👻 " + fromRaw
+		shortName = m.myShortName()
+	} else {
+		if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx >= 0 && idx < len(m.nodes) {
+			shortName = m.nodes[idx].shortName
+		}
+		if strings.HasPrefix(fromRaw, "node 0x") {
+			fromRaw = "👻 " + fromRaw
+		}
+	}
+	// Avatar-style shortname prefix — "[SHORT] longname". Matches the
+	// official Meshtastic app convention of leading each message with
+	// a shortname badge so the community practice of addressing peers
+	// by short_name in the body ("70F8 your hop count keeps going up")
+	// is resolvable at a glance. Skip the brackets entirely when we
+	// don't have a shortname yet (ghost peer pre-NodeInfo, or our own
+	// radio before /tag has been run) so the column never carries
+	// empty [    ] chrome fighting the longname for space.
+	if shortName != "" {
+		fromRaw = "[" + shortName + "] " + fromRaw
 	}
 	// 30-cell from column — Meshtastic longnames cap at 36 bytes per
 	// the firmware; 30 display cells covers the large majority of

@@ -69,14 +69,18 @@ func (m model) View() string {
 }
 
 // renderIrssiBody — main log takes the whole width. When an overlay
-// is active (channels / nodes), it replaces the log. ESC always
-// closes the overlay and returns to the input bar.
+// is active (channels / nodes / nearby / radar), it replaces the
+// log. ESC always closes the overlay and returns to the input bar.
 func (m model) renderIrssiBody(height int) string {
 	switch m.overlay {
 	case overlayChannels:
 		return m.renderChannelsPane(m.w, height)
 	case overlayNodes:
 		return m.renderNodesPane(m.w, height)
+	case overlayNearby:
+		return m.renderNearbyPane(m.w, height)
+	case overlayRadar:
+		return m.renderRadarPane(m.w, height)
 	default:
 		return m.renderMessagesPane(m.w, height)
 	}
@@ -602,6 +606,25 @@ func nickColor(callsign string) string {
 	return nickColorPalette[int(sum)%len(nickColorPalette)]
 }
 
+// nodeNumColor is nickColor's identity-keyed sibling — hashes the
+// raw Meshtastic node num instead of the callsign. Used by /radar's
+// closest-N legend so two radios sharing a longname ("retr0h" on
+// three different HELTECs) each get a distinct palette slot; the
+// callsign-keyed nickColor would collapse them to the same hue.
+//
+// Implemented as a thin shim over nickColor keyed on the hex form
+// of num, so the same battle-tested FNV-1a + murmur avalanche that
+// distributes callsigns also distributes node nums. A handrolled
+// byte-by-byte hash kept hitting the same palette bucket on ~40%
+// of inputs; piping through nickColor with a longer seed string
+// fixes that without duplicating the mixer.
+func nodeNumColor(num uint32) string {
+	if num == 0 {
+		return mhDrained
+	}
+	return nickColor(fmt.Sprintf("node-%08x-color", num))
+}
+
 // paneHeader renders a plain bold uppercase header. Focused panes
 // already show their accent color in the double-lined border, so
 // the header itself stays neutral fg (focused) or drained (not) —
@@ -617,6 +640,13 @@ func paneHeader(text string, paneIdx int, focused bool) string {
 		s = s.Foreground(lipgloss.Color(mhDrained))
 	}
 	return s.Render(strings.ToUpper(text))
+}
+
+// paneInnerWidth returns the content-area width inner renderers
+// should target given a `width` argument from View(). One place to
+// change the math instead of hunting down `width-4` literals.
+func paneInnerWidth(width int) int {
+	return width - 4
 }
 
 func paneStyle(width, height, paneIdx int, focused bool) lipgloss.Style {
@@ -642,7 +672,11 @@ func (m model) renderChannelsPane(width, height int) string {
 	for i, c := range m.channels {
 		lines = append(
 			lines,
-			m.renderChannelRow(c, i == m.selectedCh && m.focused == paneChannels, width-4),
+			m.renderChannelRow(
+				c,
+				i == m.selectedCh && m.focused == paneChannels,
+				paneInnerWidth(width),
+			),
 		)
 	}
 	return paneStyle(width, height, paneChannels, m.focused == paneChannels).
@@ -816,6 +850,16 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 	if n.fav {
 		nameColor = mhYellow
 	}
+	// Self-marker — the logged-in radio's sigil picks up the
+	// magenta "me" color reserved in palette.go so users can
+	// spot their own tile at a glance. Name keeps its normal
+	// state-derived color so the tile reads like every other
+	// row visually; the purple `@` is the sole signal that this
+	// is you.
+	if m.myNodeNum != 0 && n.nodeNum == m.myNodeNum {
+		sigil = "@"
+		sigilColor = mhMagenta
+	}
 	// Selection highlight uses the nodes pane's own accent (magenta).
 	// Every pane's selected item takes that pane's accent so the
 	// focus indicator visually belongs to the pane it's in — avoids
@@ -966,7 +1010,7 @@ func (m model) renderMessagesPane(width, height int) string {
 			pinFirst = msg.group == 0 || i == 0 || m.messages[i-1].group != msg.group
 			pinLast = msg.group == 0 || i+1 >= len(m.messages) || m.messages[i+1].group != msg.group
 		}
-		line := m.renderMessageRow(msg, isSelected, width-4, bg, pinFirst, pinLast)
+		line := m.renderMessageRow(msg, isSelected, paneInnerWidth(width), bg, pinFirst, pinLast)
 		if faded {
 			line = dimRow(line)
 		}
@@ -1453,18 +1497,34 @@ func (m model) renderMessageRow(
 	// multi-hop reads "↝Nh". Our own outgoing messages (mine) skip
 	// the cell since "hops from me to mesh" isn't a thing we know
 	// until the packet echoes back.
-	hopCol := "      "
+	// Right-aligned metric columns so the numbers always end at
+	// the same column regardless of digit count or sign. "↝ 6h"
+	// and "↝12h" both end at the same "h" position; "9.5dB" and
+	// "-12.2dB" both end at the same "B" position. Left-padding
+	// the value rather than right-padding is the key — humans
+	// read numbers from the right edge, so aligning units is
+	// what actually lets you compare rows at a glance.
+	const hopColW = 7 // "↝%3dh" = 5 cells value + 2 trailing gap
+	const snrColW = 8 // "%6sdB" = 8 cells total
+	var hopCol string
 	switch {
 	case msg.mine:
-		// blank — our outbound packet, no RX hops to report.
+		hopCol = strings.Repeat(" ", hopColW)
 	case msg.hops > 0:
-		hopCol = fmt.Sprintf("↝%dh   ", msg.hops)
+		// "↝%3dh  " — 3-digit hop field keeps 1/10/100 flush.
+		hopCol = fmt.Sprintf("↝%3dh  ", msg.hops)
 	default:
-		hopCol = "↝ dx   "
+		// "↝  dx  " — "dx" (direct, 0 hops) lives in the same
+		// 3-cell value region as hop numbers above.
+		hopCol = "↝  dx  "
 	}
-	snrCol := "        "
+	snrCol := strings.Repeat(" ", snrColW)
 	if msg.snr != "" {
-		snrCol = fmt.Sprintf("%sdB  ", msg.snr)
+		// "%6s" right-aligns the SNR value in 6 cells, then
+		// "dB" adds 2 → 8 total. "9.5" → "   9.5dB", "-12.2" →
+		// " -12.2dB", "10.2" → "  10.2dB" — the "B" lands at the
+		// same column every time.
+		snrCol = fmt.Sprintf("%6sdB", msg.snr)
 	}
 	// statusCol — per-message delivery state co-located with the row.
 	//   "…"  pending: sent, awaiting Routing reply from the radio
@@ -1473,16 +1533,25 @@ func (m model) renderMessageRow(
 	//   " "  empty:   inbound message (no delivery state to show)
 	// Persistent across scrollback + unique per row so multiple
 	// in-flight messages each carry their own indicator.
-	statusCol := "  "
+	// One-cell status glyph. Gap to the SNR column is assembled
+	// separately below so columns stay independent — treating
+	// the gap as statusCol's problem mixes chrome into content.
+	statusCol := " "
 	switch msg.status {
 	case "pending":
-		statusCol = "… "
+		statusCol = "…"
 	case "ack":
-		statusCol = "✓ "
+		statusCol = "✓"
 	case "fail":
-		statusCol = "✗ "
+		statusCol = "✗"
 	}
-	right := hop.Render(hopCol) + hop.Render(snrCol) + func() string {
+	// Status-column gap — 1 cell of breathing room between SNR
+	// and the state glyph so "-0.5dB✓" doesn't collide. The gap
+	// is its own span on the same rowBg tint so it blends, not
+	// part of statusCol (column chrome stays separate from
+	// column content).
+	statusGap := lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
+	right := hop.Render(hopCol) + hop.Render(snrCol) + statusGap + func() string {
 		switch msg.status {
 		case "pending":
 			return tstamp.Render(statusCol) // dim drained — in flight
@@ -1515,8 +1584,19 @@ func (m model) renderMessageRow(
 	// We render the text as-is, so what you see matches what went
 	// out (a clean ham-style payload like "73" or "QTH: CN85", not
 	// meshx-internal "!grid CN85" chrome).
-	txtClamped := padOrTruncate(msg.text, textW)
-	styledTxt := text.Render(txtClamped)
+	//
+	// Multi-line messages (radios can embed \n — e.g. "End of Day
+	// Report:\nMax Power: …") lay out with the signal columns on
+	// the FIRST visual line only. Continuation lines hang under
+	// the text column so the right edge stays aligned with every
+	// other row in the log. Collapsing to one line would hide
+	// content; padding every continuation line to carry metrics
+	// looks weird (~4h floating three lines below the callsign).
+	bodyLines := strings.Split(msg.text, "\n")
+	if len(bodyLines) == 0 {
+		bodyLines = []string{""}
+	}
+	firstStyled := text.Render(padOrTruncate(bodyLines[0], textW))
 	_ = bang // kept in scope for any future command-styling use
 
 	// Build the right-hand segment with a 2-space gap — both on the
@@ -1529,9 +1609,27 @@ func (m model) renderMessageRow(
 		tstamp.Render(msg.time+"  ") +
 		senderStyle.Render(fromPadded) +
 		twoSpace +
-		styledTxt
+		firstStyled
 
 	row := left + right
+
+	// Continuation lines (line 2+) hang under the text column.
+	// Left-pad to `leftFixed` cells so they sit flush with
+	// firstStyled's left edge; span `textW + rightW` cells on the
+	// right so the tinted bg reaches the full row width — without
+	// it, wrapSelection's per-line truncation + pad would leave a
+	// ragged right edge on multi-line rows.
+	if len(bodyLines) > 1 {
+		hangIndent := gapStyle.Render(strings.Repeat(" ", leftFixed))
+		contW := textW + rightW
+		if contW < textW {
+			contW = textW
+		}
+		for _, bl := range bodyLines[1:] {
+			cont := hangIndent + text.Render(padOrTruncate(bl, contW))
+			row += "\n" + cont
+		}
+	}
 	// Append acks subline if present — indented past the accent+flag+time+from cols.
 	if msg.acks != "" {
 		indent := gapStyle.Render(strings.Repeat(" ", 2+2+7+fromW+2))
@@ -1726,9 +1824,10 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 		neutralBg = rowBg[0]
 	}
 
-	// No marker — just keep the 3-col left pad for alignment. If a rowBg
-	// was provided, force every line to the full inner width with that
-	// bg so the tint covers the whole row (no drop-off at the right).
+	// No marker — just keep the 3-col left pad for alignment. If a
+	// rowBg was provided, force every line to the full inner width
+	// with that bg so the tint covers the whole row (no drop-off
+	// at the right).
 	if !selected && !searchHit {
 		pad := strings.Repeat(" ", gutterWidth)
 		parts := strings.Split(content, "\n")
@@ -1770,9 +1869,9 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 		bg = "#0e2618" // dim neon-green background for a subtle row pop
 	}
 
-	// Width + MaxWidth clamp to exactly innerW so the bg tint covers the
-	// whole row — no more, no less. Prevents terminal auto-wrap from
-	// punching holes in the highlight block.
+	// Width + MaxWidth clamp to exactly innerW so the bg tint covers
+	// the whole row — no more, no less. Prevents terminal auto-wrap
+	// from punching holes in the highlight block.
 	lineStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(bg)).
 		Foreground(lipgloss.Color(mhFG)).

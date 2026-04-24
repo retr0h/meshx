@@ -135,8 +135,19 @@ func (m *model) openOverlay(kind overlayKind) {
 	switch kind {
 	case overlayChannels:
 		m.focused = paneChannels
-	case overlayNodes:
+	case overlayNodes, overlayNearby, overlayRadar:
+		// /nearby + /radar are peer-oriented surfaces — keep focus
+		// on the nodes pane so j/k stepping lands where the user
+		// expects, and `w` / `t` / `p` nav quick-keys resolve
+		// against the highlighted peer in either view.
 		m.focused = paneNodes
+		// Reset the cursor when we switch BETWEEN peer-surface
+		// overlays. Each one renders a different slice (/nodes =
+		// all peers by sortedNodes; /nearby /radar = GPS-fix
+		// subset by distance), so a selectedNd carried over from
+		// /nodes would land on an arbitrary / out-of-range row
+		// in the new overlay.
+		m.selectedNd = 0
 	}
 }
 
@@ -562,17 +573,64 @@ func (m model) selectedSender() string {
 		}
 		return msg.from
 	case paneNodes:
-		sorted := m.sortedNodes()
-		if m.selectedNd >= len(sorted) {
+		// The displayed slice depends on which overlay is open —
+		// /nearby sorts by distance, /radar's "closest list" uses
+		// the same order. /nodes uses the user-toggled nodeSort
+		// (heard / name / state). Without overlay-aware resolution
+		// here, j/k on /nearby walks the rendered rows but `w` /
+		// `p` / `t` / `r` would look up `m.selectedNd` in a
+		// totally different slice and target the wrong peer.
+		sel, ok := m.selectedNodeItem()
+		if !ok {
 			return ""
 		}
-		sel := sorted[m.selectedNd]
 		if sel.nodeNum != 0 && m.isCallsignAmbiguous(sel.callsign) {
 			return fmt.Sprintf("!%08x", sel.nodeNum)
 		}
 		return sel.callsign
 	}
 	return ""
+}
+
+// selectedNodeItem returns the nodeItem under the cursor in the
+// currently-focused peer surface. Dispatches by overlay so /nodes,
+// /nearby, and /radar's legend all resolve `m.selectedNd` against
+// the slice they actually render. Returns (nil, false) when the
+// slice is empty or the index is out of range.
+//
+// Without this indirection, any nav quick-key (w / p / t / r) that
+// calls selectedSender in a non-/nodes overlay would index into the
+// default /nodes sort and target an arbitrary peer — that was the
+// "whois shows the wrong user" bug reported on /nearby.
+func (m model) selectedNodeItem() (*nodeItem, bool) {
+	switch m.overlay {
+	case overlayNearby:
+		// /nearby renders nearbyRoster (self prepended + sorted
+		// plots). selection must use the same slice so `w` / `p`
+		// / `t` / `r` target the highlighted row.
+		roster := m.nearbyRoster()
+		if m.selectedNd < 0 || m.selectedNd >= len(roster) {
+			return nil, false
+		}
+		return roster[m.selectedNd].node, true
+	case overlayRadar:
+		// /radar's selection tracks the "closest peers" legend —
+		// same distance-sorted plots slice (without self, which
+		// is drawn at canvas centre).
+		plots := m.collectPeerPlots()
+		sortPlotsByDistance(plots)
+		if m.selectedNd < 0 || m.selectedNd >= len(plots) {
+			return nil, false
+		}
+		return plots[m.selectedNd].node, true
+	default:
+		sorted := m.sortedNodes()
+		if m.selectedNd < 0 || m.selectedNd >= len(sorted) {
+			return nil, false
+		}
+		sel := sorted[m.selectedNd]
+		return &sel, true
+	}
 }
 
 // isCallsignAmbiguous reports whether two or more nodes in m.nodes
@@ -655,7 +713,24 @@ func (m *model) moveSelection(delta int) {
 		}
 		m.selectedMsg = m.nextMsgIndexSkipGroups(delta)
 	case paneNodes:
-		m.selectedNd = clamp(m.selectedNd+delta, 0, len(m.nodes)-1)
+		// The visible slice depends on the active overlay. /nodes
+		// shows every node; /nearby renders self-prepended roster;
+		// /radar uses the peer-only plot list. Clamping against
+		// the wrong slice lets the cursor wander past the last
+		// rendered row — user-visible as "j stops highlighting
+		// anything" for the middle of the list.
+		maxIdx := len(m.nodes) - 1
+		switch m.overlay {
+		case overlayNearby:
+			if count := len(m.nearbyRoster()); count > 0 {
+				maxIdx = count - 1
+			}
+		case overlayRadar:
+			if count := len(m.collectPeerPlots()); count > 0 {
+				maxIdx = count - 1
+			}
+		}
+		m.selectedNd = clamp(m.selectedNd+delta, 0, maxIdx)
 	}
 }
 
@@ -710,6 +785,16 @@ func abs(n int) int {
 func (m *model) moveSelectionGrid(dx, dy int) {
 	if m.focused != paneNodes {
 		// Linear list: combine the two axes into one step.
+		m.moveSelection(dx + dy)
+		return
+	}
+	// /nearby and /radar are single-column lists that SHARE the
+	// paneNodes focus but don't use the 2D users-grid layout. A
+	// `j` press on those overlays should step one row, not
+	// `cols` rows like /nodes' bracketed grid needs. Route them
+	// through the linear mover which already has the correct
+	// overlay-aware bounds clamp.
+	if m.overlay == overlayNearby || m.overlay == overlayRadar {
 		m.moveSelection(dx + dy)
 		return
 	}
@@ -809,9 +894,12 @@ func (m model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+x", "ctrl+c":
 		return m, tea.Quit
 	case "q", "esc", "?", "enter":
-		m.mode = modeNav
+		// Return to the typing bar rather than nav mode —
+		// ESC-from-help should land the user back where they
+		// type, not drop them into scrollback selection. Matches
+		// how the overlay-close helper treats /channels /nodes.
 		m.helpScroll = 0
-		return m, nil
+		return m, m.closeOverlayToInput()
 	case "j", "down":
 		m.helpScroll++
 	case "k", "up":

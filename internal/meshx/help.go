@@ -147,6 +147,14 @@ var helpEntries = map[string]helpEntry{
 		usage:   "/nodes",
 		summary: "open the nodes overlay — BitchX-style bracketed grid of every known peer",
 	},
+	"nearby": {
+		usage:   "/nearby",
+		summary: "distance-sorted roster of peers with a GPS fix — closest first, with a bar chart, bearing, and compass abbreviation. Requires your own GPS fix.",
+	},
+	"radar": {
+		usage:   "/radar",
+		summary: "polar scope centered on your QTH — peers plotted by bearing and distance; ● direct-RF, · multi-hop, @ self. Concentric rings scale to the farthest peer. Requires your own GPS fix.",
+	},
 	"join": {
 		usage:   "/join <channel>",
 		summary: "switch the active channel by name",

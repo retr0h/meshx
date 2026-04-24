@@ -234,13 +234,33 @@ func (m model) nickUniverse(word string) []matchItem {
 		return matchItem{display: display, insert: insert}
 	}
 
+	// Match on callsign (longname) AND shortName so the typical
+	// Meshtastic addressing convention — "70F8 your hop count keeps…"
+	// where 70F8 is the recipient's short_name — completes with Tab.
+	// Both names route through toMatch() so the inserted text is the
+	// right disambiguated form regardless of which field the user
+	// typed a prefix of.
 	var prefixHits, substrHits []matchItem
+	seen := make(map[uint32]bool, len(m.nodes))
+	add := func(n nodeItem, bucket *[]matchItem) {
+		if n.nodeNum != 0 && seen[n.nodeNum] {
+			return
+		}
+		if n.nodeNum != 0 {
+			seen[n.nodeNum] = true
+		}
+		*bucket = append(*bucket, toMatch(n))
+	}
 	for _, n := range m.nodes {
 		switch {
 		case strings.HasPrefix(n.callsign, stem):
-			prefixHits = append(prefixHits, toMatch(n))
+			add(n, &prefixHits)
+		case n.shortName != "" && strings.HasPrefix(n.shortName, stem):
+			add(n, &prefixHits)
 		case strings.Contains(n.callsign, stem):
-			substrHits = append(substrHits, toMatch(n))
+			add(n, &substrHits)
+		case n.shortName != "" && strings.Contains(n.shortName, stem):
+			add(n, &substrHits)
 		}
 	}
 	// Hex-id completion — if the stem looks like a hex prefix

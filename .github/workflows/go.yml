@@ -16,7 +16,11 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: stable
+      - name: Install just
+        uses: extractions/setup-just@v4
+      - name: Fetch shared justfiles
+        run: just fetch
       - name: Build
         run: go build -o meshx .
-      - name: Test
-        run: go test -v ./...
+      - name: Test (fmt + lint + race tests)
+        run: just test

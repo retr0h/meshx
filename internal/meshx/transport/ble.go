@@ -87,7 +87,7 @@ func DialBLE(addr string) (Client, error) {
 	foundCh := make(chan bluetooth.ScanResult, 1)
 	scanErrCh := make(chan error, 1)
 	go func() {
-		scanErrCh <- adapter.Scan(func(a *bluetooth.Adapter, res bluetooth.ScanResult) {
+		scanErrCh <- adapter.Scan(func(_ *bluetooth.Adapter, res bluetooth.ScanResult) {
 			if res.Address.String() != addr {
 				return
 			}
@@ -126,11 +126,12 @@ func DialBLE(addr string) (Client, error) {
 	// inside the library. Detect here and emit an actionable error.
 	if found.Address.String() == "" || device.Address == (bluetooth.Address{}) {
 		return nil, fmt.Errorf(
-			"connect %s: CoreBluetooth did not establish a peripheral handle. "+
-				"Usual causes: another client (phone app, nRF Connect) currently "+
-				"holds the radio's BLE link; the peripheral was advertising but "+
-				"rejected pairing; the OS cache needs a refresh. Try: disconnect "+
-				"other BLE clients, re-run `meshx ble scan`, then connect again.",
+			"connect %s: CoreBluetooth did not establish a peripheral handle "+
+				"(usual causes: another client such as the phone app or "+
+				"nRF Connect currently holds the radio's BLE link; the "+
+				"peripheral was advertising but rejected pairing; the OS "+
+				"cache needs a refresh — try disconnecting other BLE "+
+				"clients, re-running `meshx ble scan`, then connect again)",
 			addr,
 		)
 	}

@@ -352,21 +352,60 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// Forward the keypress to the textinput, then enforce the
-	// Meshtastic wire-level byte cap. textinput.CharLimit counts
-	// runes, not bytes — on ASCII that's the same, but a single
-	// emoji is 4 bytes, so a rune-based limit silently lets the user
-	// compose messages the firmware will truncate on TX. Revert to
-	// the pre-keypress value when the new one would exceed the byte
-	// budget so the user can't physically type past the limit.
+	// Meshtastic wire-level byte cap on the BODY portion only. The
+	// "/verb " and optional "<target> " prefix is meshx chrome, not
+	// wire bytes — counting them would force users to write a shorter
+	// reply than the firmware actually supports. wirePayloadBytes
+	// strips the command prefix so the cap reflects what'll actually
+	// hit the LoRa link.
 	prev := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	if len(m.input.Value()) > meshtasticMaxTextBytes {
+	if wirePayloadBytes(m.input.Value()) > meshtasticMaxTextBytes {
 		m.input.SetValue(prev)
 		m.input.SetCursor(len(prev))
 		m.flash = fmt.Sprintf("message at %d-byte cap (Meshtastic payload limit)", meshtasticMaxTextBytes)
 	}
 	return m, cmd
+}
+
+// wirePayloadBytes returns the byte length of the portion of `input`
+// that would end up in Data.payload on the wire. For plain chat the
+// whole line is payload. For /commands the verb + any target arg is
+// meshx-internal chrome that doesn't go over the air; only the body
+// (when the verb has one) counts. Local-only verbs (/help, /clear,
+// /nodes, …) produce no payload at all and return 0.
+//
+// Intentionally simple: recognizes the verbs that *let the user
+// author the body*. Verbs that auto-generate a body (/cqr, /rs,
+// /73, /qsl, /sked, /qrz …) aren't listed here because whatever
+// the user types after them isn't what gets transmitted — the
+// dispatcher builds the body from templates.
+func wirePayloadBytes(input string) int {
+	if !strings.HasPrefix(input, "/") {
+		return len(input)
+	}
+	rest := strings.TrimPrefix(input, "/")
+	verb, rest, _ := strings.Cut(rest, " ")
+	switch strings.ToLower(verb) {
+	case "reply", "r", "msg":
+		// /reply <target> <body>  /msg <target> <body>
+		// The verb + target are chrome; body is the remainder.
+		_, body, hasBody := strings.Cut(rest, " ")
+		if !hasBody {
+			return 0
+		}
+		return len(body)
+	case "cq", "qth":
+		// /cq [tail]  /qth [text] — the arg IS the body.
+		return len(rest)
+	default:
+		// Any other /verb — either produces no wire payload (local
+		// overlays, local config) or has an auto-generated body the
+		// user can't size. Treat as 0 for the counter; sendBang's
+		// own body is always comfortably under the cap.
+		return 0
+	}
 }
 
 // updateNav — scrollback / overlay selection mode. j/k walks the

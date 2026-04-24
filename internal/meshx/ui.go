@@ -155,7 +155,12 @@ func (m model) renderChannelStatus() string {
 		// never gets pushed off-screen by long input text. Ramps
 		// through five colors as the composition approaches the wire
 		// cap so pressure is visible before you hit it.
-		n := len(m.input.Value())
+		//
+		// Counts BODY bytes only via wirePayloadBytes — the verb + any
+		// target arg is meshx chrome that doesn't cost budget.
+		// `/reply bubbingtenny2k ` reads 0/228 until the user starts
+		// typing the actual reply body.
+		n := wirePayloadBytes(m.input.Value())
 		pct := float64(n) / float64(meshtasticMaxTextBytes)
 		counterTxt := fmt.Sprintf("%d/%d", n, meshtasticMaxTextBytes)
 		counterStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))

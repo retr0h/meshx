@@ -834,6 +834,26 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// mesh are nodes, not users. We dropped the /users and
 		// /names IRC aliases to keep the vocabulary consistent.
 		m.openOverlay(overlayNodes)
+	case "nearby":
+		// Distance-sorted roster of peers with a GPS fix — "who
+		// can I talk to directly" at a glance. Requires our own
+		// position + each peer's position, so the view gets
+		// sparser the more peers haven't beaconed yet.
+		if m.myLatitude == 0 && m.myLongitude == 0 {
+			m.flash = "/nearby: no GPS fix on self — can't compute distances"
+			return nil
+		}
+		m.openOverlay(overlayNearby)
+	case "radar":
+		// Polar scope. Same position-data requirement as /nearby.
+		// Repaints on every tick so fresh Position packets appear
+		// live; if your radio just booted and peers haven't
+		// broadcast position yet, the scope will be thin.
+		if m.myLatitude == 0 && m.myLongitude == 0 {
+			m.flash = "/radar: no GPS fix on self — can't compute bearings"
+			return nil
+		}
+		m.openOverlay(overlayRadar)
 	case "channel":
 		if rest == "list" || rest == "" {
 			m.openOverlay(overlayChannels)

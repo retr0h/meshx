@@ -183,6 +183,8 @@ mode with no argument.
 | ------------------------ | --------------------------------------------------------------- |
 | `/channels`              | open channels overlay                                           |
 | `/nodes`                 | open nodes overlay (BitchX-style bracketed grid)                |
+| `/nearby`                | distance-sorted roster of peers with a GPS fix (closest first)  |
+| `/radar`                 | polar scope — peers plotted by bearing + distance around you    |
 | `/join <channel>`        | switch to named channel                                         |
 | `/channel list`          | same as `/channels`                                             |
 | `/search <pattern>`      | run a search and jump to first hit (aliases: `/find`)           |

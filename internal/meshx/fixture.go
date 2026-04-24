@@ -229,6 +229,16 @@ func DefaultDemo() *Demo {
 				text: "anyone in the east valley?", hops: 4, snr: "-9.1",
 				packetID: 7010,
 			},
+			// Multi-line canary — real radios embed \n in telemetry
+			// reports (like solar-node end-of-day summaries). Keeps
+			// the hanging-indent layout honest when we re-render
+			// demo mode after touching renderMessageRow.
+			{
+				time: "14:17", from: "mmca solar test", fromNum: 0x5a00aa03,
+				text: "End of Day Report:\nMax Power: 1375.2576 mW at Pot setting: 133, Voltage: 6.0160 V, Current: 228.6000 mA\nWas the battery fully charged during the day? Yes",
+				hops: 4, snr: "-3.5",
+				status: "ack",
+			},
 			{
 				time: "14:18", from: "MeshLab - plrmsh.io", fromNum: 0x5a00aa02,
 				text: "6 🐰", hops: 2, snr: "5.5", replyID: 7010,

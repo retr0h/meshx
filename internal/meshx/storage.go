@@ -390,6 +390,10 @@ func loadMessages(db *sql.DB, channel string, limit int) ([]messageItem, error) 
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 		msg.mine = mine != 0
+		// Historic rows may have been written before sanitizeMessageText
+		// landed in applyTextMessage. Clean on read so old end-of-day
+		// reports don't smear the pane border on replay.
+		msg.text = sanitizeMessageText(msg.text)
 		out = append(out, msg)
 	}
 	if err := rows.Err(); err != nil {

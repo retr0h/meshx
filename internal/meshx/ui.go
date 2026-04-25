@@ -957,8 +957,10 @@ func (m model) renderMessagesPane(width, height int) string {
 	// Ctrl+F / Ctrl+U, drop the viewport back so the selected row
 	// stays visible — otherwise nav feels broken because moving
 	// selectedMsg doesn't seem to move anything on screen.
-	startIdx := tailStartList(m.messages, rowsFree)
-	if m.selectedMsg < startIdx {
+	naturalStart := tailStartList(m.messages, rowsFree)
+	startIdx := naturalStart
+	scrollback := m.selectedMsg < naturalStart
+	if scrollback {
 		startIdx = m.selectedMsg - rowsFree/3
 		if startIdx < 0 {
 			startIdx = 0
@@ -1070,13 +1072,24 @@ func (m model) renderMessagesPane(width, height int) string {
 		}
 		return n
 	}
-	// Overflow trim — drop the oldest message rows (keeping
-	// header + separator + any trailing banner) until visual rows
-	// ≤ rowsFree. Catches reply-threaded rows that tailStartList
-	// undercounted, and any other multi-line render the row
-	// budgeter can't predict.
-	for visualRows(lines) > rowsFree && len(lines) > 2 {
-		lines = append(lines[:2:2], lines[3:]...)
+	// Overflow trim — different ends depending on which way the
+	// viewport is anchored. When tail-pinned (the default, no
+	// scrollback active) we drop the OLDEST rows so the newest stay
+	// flush with the input bar. When the user has scrolled above
+	// the tail with j/k / PgUp, the freshly-grown slice runs from
+	// `startIdx` past the cursor toward the (now off-screen) tail;
+	// trimming oldest there would yank the slice straight back to
+	// the tail and visually undo the scroll. Trim from the END in
+	// that case so the cursor + earlier-context rows stay on
+	// screen and the (irrelevant) newer rows are what gets clipped.
+	if scrollback {
+		for visualRows(lines) > rowsFree && len(lines) > 2 {
+			lines = lines[:len(lines)-1]
+		}
+	} else {
+		for visualRows(lines) > rowsFree && len(lines) > 2 {
+			lines = append(lines[:2:2], lines[3:]...)
+		}
 	}
 	if pad := rowsFree - visualRows(lines); pad > 0 {
 		rebuilt := make([]string, 0, len(lines)+pad)

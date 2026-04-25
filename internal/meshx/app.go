@@ -51,6 +51,92 @@ const clientTag = "meshx (github.com/retr0h/meshx)"
 // the official Meshtastic Android / iOS apps' input limit.
 const meshtasticMaxTextBytes = 228
 
+// reconnectState is the persistent banner backing the "radio dropped
+// — retry N/M in Ns" status while the pump cycles through its backoff
+// schedule. Lives on the model so each noticeTickMsg can recompute the
+// remaining-time portion without losing the original attempt count or
+// error. readyAt is when the pump's backoff sleep is expected to end
+// (the next dial attempt fires) — we display the diff against now.
+type reconnectState struct {
+	// initial is true for the very first connect at app startup —
+	// renders as "connecting" instead of "reconnecting" and skips
+	// the attempt counter (no retries have happened yet). Cleared
+	// the moment the pump actually emits its first
+	// radioReconnectingMsg or the radio sends its first frame.
+	initial bool
+	attempt int
+	err     error
+	readyAt time.Time
+}
+
+// reconnectFlashText renders the current reconnect banner.
+// Pump retries forever, so the previous "retry 3/∞" fraction read as
+// truncation to users — replaced with prose: a leading "reconnecting"
+// label, an attempt counter, a live countdown (or "dialing now" when
+// the backoff has elapsed and a redial is in flight), and the last
+// error trimmed to a digestible length so the line fits a typical
+// terminal width without lipgloss eating its tail. Refreshed every
+// noticeTickMsg so the countdown ticks live.
+const reconnectErrMaxLen = 64
+
+func (m model) reconnectFlashText() string {
+	if m.reconnect == nil {
+		return ""
+	}
+	r := m.reconnect
+	remaining := time.Until(r.readyAt).Truncate(time.Second)
+	tail := fmt.Sprintf("next try in %s", remaining)
+	if remaining <= 0 {
+		tail = "dialing now"
+	}
+	if r.initial {
+		// Startup banner. No attempts have failed yet, and we don't
+		// know whether the pump is still inside its first
+		// transport.Dial (e.g. BLE scan, max 8s) or has moved into
+		// runSession and is waiting on the radio's NodeDB dump — so
+		// we deliberately don't say "dialing now" (which would be a
+		// lie post-Dial) or show a countdown (no retry timer is
+		// running). Just a single, honest "connecting…" until either
+		// the first dial fails (banner flips to the retry form via
+		// radioReconnectingMsg) or ConfigComplete arrives (banner
+		// clears via clearReconnectBanner).
+		return "connecting…"
+	}
+	errText := ""
+	if r.err != nil {
+		errText = " · " + truncateForFlash(r.err.Error(), reconnectErrMaxLen)
+	}
+	return fmt.Sprintf(
+		"reconnecting · attempt %d · %s%s",
+		r.attempt, tail, errText,
+	)
+}
+
+// truncateForFlash clips a long error message to `n` runes, appending
+// `…` when it had to cut. Operates on runes (not bytes) so unicode
+// (the BLE error contains an em-dash) doesn't get sliced mid-codepoint.
+func truncateForFlash(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
+}
+
+// clearReconnectBanner drops the persistent reconnect status — call
+// this whenever something proves the radio is back (any inbound frame
+// that updates model state). Idempotent: zero-cost when there's no
+// banner active. Also clears the flash slot itself so the status row
+// goes blank rather than freezing on the last "retry N/M" line.
+func (m *model) clearReconnectBanner() {
+	if m.reconnect == nil {
+		return
+	}
+	m.reconnect = nil
+	m.flash = ""
+	m.flashSeen = ""
+}
+
 // flashTTL is how long a flash message lingers in the status row
 // after it stops changing. 5s is enough to read a typical line
 // ("ack received", "search: 12 matches") without sticking past
@@ -305,6 +391,18 @@ type model struct {
 	peerEnv       map[uint32]peerEnvMetrics
 
 	flash string
+	// reconnect is non-nil while the pump is in its retry loop. Each
+	// radioReconnectingMsg refreshes the struct; noticeTickMsg uses it
+	// to repaint the flash with a live "in Ns" countdown so the user
+	// can watch the backoff clock tick instead of staring at a frozen
+	// "in 30s" for half a minute. Cleared the moment a radio frame
+	// proves we're back (radioMyInfoMsg or radioConfigCompleteMsg) or
+	// the pump gives up (radioErrorMsg). While set, the flash
+	// auto-clear is bypassed — the user explicitly wants persistent
+	// status during a retry storm, otherwise the message disappears
+	// after 5s and looks like meshx forgot it was reconnecting.
+	reconnect *reconnectState
+
 	// flashSeen / flashSeenAt drive the auto-clear timer for flash.
 	// 109 distinct sites set m.flash; refactoring all of them through
 	// a setter would be churn for nothing. Instead, the noticeTick
@@ -784,6 +882,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode != modeNav {
 			m.reapExpiredNotices()
 		}
+		// Reconnect banner refresh: while the pump is in its retry
+		// loop, repaint the flash every tick so the "in Ns"
+		// countdown actually counts down. Also re-stamps flashSeenAt
+		// so the auto-clear below treats it as fresh — important
+		// because a 30s backoff would otherwise blow past flashTTL
+		// silently. The banner clears the moment a radio frame
+		// proves the link is back (radioMyInfoMsg / ConfigComplete).
+		if m.reconnect != nil {
+			m.flash = m.reconnectFlashText()
+			m.flashSeen = m.flash
+			m.flashSeenAt = time.Now()
+			return m, noticeTickCmd()
+		}
 		// Flash auto-clear: if the flash text hasn't changed in
 		// flashTTL, drop it. Stamp flashSeenAt when we first see a
 		// new value so the timer restarts from when the user last
@@ -806,12 +917,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flash = "internal error: program ref missing"
 			return m, nil
 		}
-		p, err := startPump(msg.dest, globalProgramRef)
-		if err != nil {
-			m.flash = fmt.Sprintf("radio error: %v", err)
-			return m, nil
+		// Park a "connecting" banner BEFORE starting the pump so the
+		// status row reads "connecting · dialing now" the instant the
+		// app is up — instead of going blank during the 8-second BLE
+		// scan that the first dial does. The pump's reconnect path
+		// will overwrite this with the full "reconnecting · attempt
+		// N · …" banner if the first dial fails; the first radio
+		// frame clears it.
+		m.reconnect = &reconnectState{
+			initial: true,
+			readyAt: time.Now(),
 		}
-		m.pump = p
+		m.flash = m.reconnectFlashText()
+		m.flashSeen = m.flash
+		m.flashSeenAt = time.Now()
+		m.pump = startPump(msg.dest, globalProgramRef)
 		return m, nil
 
 	case pumpAttachedMsg:
@@ -820,6 +940,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioMyInfoMsg:
 		m.myNodeNum = msg.nodeNum
+		// DELIBERATELY don't clear the reconnect banner here. MyInfo is
+		// the FIRST frame of the handshake, not the last — if the link
+		// drops between MyInfo and ConfigComplete (BLE sessions
+		// regularly do), clearing here would hide the banner while
+		// `m.connected` stayed false, leaving the top bar's "●
+		// connecting" dot with no in-band flash explaining why. We
+		// wait for ConfigComplete; until then the user sees the same
+		// banner that drove the reconnect.
 		return m, nil
 
 	case radioNodeInfoMsg:
@@ -903,6 +1031,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioConfigCompleteMsg:
 		m.connected = true
+		// Definitive end of the handshake — NodeDB and config dump
+		// have all arrived, the user can see live state. Drop the
+		// reconnect banner now and not before; MyInfo isn't strong
+		// enough on its own (see comment in the radioMyInfoMsg case).
+		m.clearReconnectBanner()
 		// If the user issued /sync and we snapshotted a ghost count,
 		// emit a completion systemLine with the delta so they see
 		// what the re-dump actually changed. syncPendingGhosts > 0
@@ -942,7 +1075,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = "radio disconnected"
 		return m, nil
 
+	case radioReconnectingMsg:
+		// Transient drop — pump is going to retry. Flip the connected
+		// flag so the top status bar shows "connecting" and stash a
+		// reconnectState so noticeTickMsg can repaint the countdown
+		// every second. The banner is sticky (auto-clear is bypassed
+		// while m.reconnect != nil) so the user can watch the retry
+		// counter climb instead of seeing a 5s flash and then nothing
+		// for the rest of a 30s backoff.
+		m.connected = false
+		m.reconnect = &reconnectState{
+			attempt: msg.attempt,
+			err:     msg.err,
+			readyAt: time.Now().Add(msg.after),
+		}
+		m.flash = m.reconnectFlashText()
+		m.flashSeen = m.flash
+		m.flashSeenAt = time.Now()
+		return m, nil
+
 	case radioErrorMsg:
+		// Pump exhausted its retry budget. Drop the reconnect banner
+		// — there's nothing more happening — and switch to a regular
+		// (auto-clearing) flash carrying the final error.
+		m.connected = false
+		m.reconnect = nil
 		m.flash = fmt.Sprintf("radio error: %v", msg.err)
 		return m, nil
 

@@ -170,9 +170,44 @@ func (m model) renderNearbyPane(width, height int) string {
 
 	// Scale the per-row bar to the farthest peer so the widest
 	// bar fills. Cap the bar to 24 cells — anything wider and the
-	// layout breaks on narrow terminals.
+	// layout breaks on narrow terminals. Bar scaling uses the full
+	// list (not the visible window) so distances stay comparable as
+	// the user scrolls.
 	maxKm := plots[len(plots)-1].distKm
 	const barMax = 24
+
+	// Pane height accounting:
+	//   border (2) + Padding(1,1) → 4 lines reserved by paneStyle
+	//   header + count             → 1 line
+	//   blank separator            → 1 line
+	// Anything left is the row budget for plot entries. Without this
+	// budget, a list longer than the pane overflows lipgloss's Height
+	// — the whole UI grows past m.h, the terminal scrolls everything
+	// up, and the user is left looking at the bottom of the list with
+	// the top (and the cursor on the "(you)" anchor row) scrolled off
+	// the top of the screen. That's the "scrolls to the bottom" bug.
+	rowsAvailable := height - 4 - 2
+	if rowsAvailable < 1 {
+		rowsAvailable = 1
+	}
+	// Pick a window of `rowsAvailable` plots that contains
+	// m.selectedNd. Default to the head of the list (closest peers
+	// first) so a freshly-opened /nearby starts at the top — the
+	// usual case. Slide down only if the cursor moves out of view.
+	startIdx := 0
+	if len(plots) > rowsAvailable {
+		if m.selectedNd >= rowsAvailable {
+			startIdx = m.selectedNd - rowsAvailable + 1
+		}
+		if maxStart := len(plots) - rowsAvailable; startIdx > maxStart {
+			startIdx = maxStart
+		}
+	}
+	endIdx := startIdx + rowsAvailable
+	if endIdx > len(plots) {
+		endIdx = len(plots)
+	}
+	visible := plots[startIdx:endIdx]
 
 	// Render styling — matches /nodes (renderUserCell) so callsigns
 	// carry the same meaning across surfaces: sigil + color by
@@ -187,8 +222,9 @@ func (m model) renderNearbyPane(width, height int) string {
 	// at the top of each row when selected so EVERY inner span
 	// picks up the selection tint, matching how renderNoticeRow /
 	// renderMessageRow solved the same issue.
-	for i, p := range plots {
-		isSel := i == m.selectedNd && m.focused == paneNodes
+	for i, p := range visible {
+		actualIdx := i + startIdx
+		isSel := actualIdx == m.selectedNd && m.focused == paneNodes
 		rowBg := rowBgOdd
 		if isSel {
 			rowBg = selectionRowBg

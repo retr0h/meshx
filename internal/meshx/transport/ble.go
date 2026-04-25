@@ -38,14 +38,14 @@ import (
 // for the wrong reason. Enable once per process, cache the result.
 var (
 	bleEnableOnce sync.Once
-	bleEnableErr  error
+	errBLEEnable  error
 )
 
 func enableBLEAdapterOnce(adapter *bluetooth.Adapter) error {
 	bleEnableOnce.Do(func() {
-		bleEnableErr = adapter.Enable()
+		errBLEEnable = adapter.Enable()
 	})
-	return bleEnableErr
+	return errBLEEnable
 }
 
 // Meshtastic BLE GATT layout. These UUIDs are defined in the

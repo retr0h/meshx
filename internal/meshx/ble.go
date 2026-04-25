@@ -262,18 +262,49 @@ func BLEScan(out io.Writer) error {
 	return nil
 }
 
-// BLEPair registers a Bluetooth device in the local ble_devices
-// table so it shows up in `meshx ble list` and can be targeted by
-// `meshx ble connect`. The OS-level pairing / bonding dialog still
-// has to be accepted separately (the platform handles it on first
-// Connect — macOS pops a system prompt, Linux goes through BlueZ's
-// agent) before the TUI can actually exchange data.
+// BLEPair pairs a Bluetooth device with meshx by:
 //
-// Metadata (longname / shortname / hardware) is left empty and
-// filled in lazily: the first time the user runs `meshx ble
-// connect <uuid>` successfully, the live session's upsertNode
-// populates those fields from the radio's MyNodeInfo stream.
+//  1. Opening a brief encrypted GATT connection via transport.DialBLE.
+//     On macOS this is what triggers CoreBluetooth's PIN-prompt
+//     dialog; on Linux/BlueZ the agent fires here too. The radio
+//     responds with the PIN on its OLED, the user enters it in
+//     the OS prompt, and the bond is established at the OS level.
+//  2. Closing the connection cleanly so the TUI's later `connect`
+//     can re-open the link without a stale handle.
+//  3. Saving the UUID to the local ble_devices table so the radio
+//     shows up in `meshx ble list` and is targetable by
+//     `meshx ble connect <uuid>` / `meshx ble fav`.
+//
+// If step 1 fails — radio out of range, another client holds the
+// link, OS-level pairing was rejected — the local row is NOT saved.
+// That means a successful `meshx ble pair` is a positive signal:
+// "you are bonded and reachable." Previously this was just a local
+// INSERT with no real bonding, which left users wondering why no
+// PIN dialog appeared.
+//
+// Metadata (longname / shortname / hardware) is still left empty
+// and filled in lazily on the first full `connect` session — the
+// pair-time link is closed before MyNodeInfo / NodeInfo packets
+// have been drained.
 func BLEPair(out io.Writer, _ io.Reader, uuid string) error {
+	_, _ = fmt.Fprintf(out, "pairing %s …\n", uuid)
+	_, _ = fmt.Fprintln(
+		out,
+		"  if your OS pops a Bluetooth pair prompt, enter the PIN shown on the radio.",
+	)
+
+	client, err := transport.DialBLE(uuid)
+	if err != nil {
+		return fmt.Errorf("pair: %w", err)
+	}
+	// Close the bonding-only connection cleanly so the OS releases
+	// the peripheral handle. `meshx ble connect` will re-open it
+	// against the now-bonded link, and characteristic reads no
+	// longer trip the PIN prompt.
+	if cerr := client.Close(); cerr != nil {
+		_, _ = fmt.Fprintf(out, "warning: close after pair returned %v (bond likely fine)\n", cerr)
+	}
+
 	db, err := openSharedStorage()
 	if err != nil {
 		return err
@@ -282,15 +313,12 @@ func BLEPair(out io.Writer, _ io.Reader, uuid string) error {
 	if err := saveBLEDevice(db, bleDevice{UUID: uuid}); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "saved %s to ~/.meshx/meshx.db\n", uuid)
+
+	_, _ = fmt.Fprintf(out, "paired with %s, saved to ~/.meshx/meshx.db\n", uuid)
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "next steps:")
-	_, _ = fmt.Fprintln(out, "  - accept the OS Bluetooth pairing prompt if one hasn't fired yet")
-	_, _ = fmt.Fprintln(out, "  - `meshx ble connect "+uuid+"` to open the TUI")
-	_, _ = fmt.Fprintln(
-		out,
-		"  - `meshx ble fav "+uuid+"` to make bare `meshx` auto-connect here",
-	)
+	_, _ = fmt.Fprintf(out, "  - `meshx ble connect %s` to open the TUI\n", uuid)
+	_, _ = fmt.Fprintf(out, "  - `meshx ble fav %s` to make bare `meshx` auto-connect here\n", uuid)
 	return nil
 }
 

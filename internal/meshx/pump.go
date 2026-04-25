@@ -210,12 +210,27 @@ type (
 	// log populated with the node list received so far.
 	radioConfigCompleteMsg struct{}
 
-	// radioErrorMsg carries a fatal transport error. The UI shows it
-	// and the app exits cleanly.
+	// radioErrorMsg carries a fatal transport error — emitted only
+	// after the pump has exhausted its reconnect attempts. By the time
+	// the UI sees one of these the connection is gone for good and the
+	// user needs to restart.
 	radioErrorMsg struct{ err error }
 
+	// radioReconnectingMsg fires after a transport error when the pump
+	// is going to retry. The UI surfaces it as a flash so a transient
+	// BLE / serial drop reads as "we noticed, retrying" instead of a
+	// silent hang followed by a stale error.
+	radioReconnectingMsg struct {
+		attempt int
+		max     int
+		after   time.Duration
+		err     error
+	}
+
 	// radioDisconnectedMsg fires when the stream ends without error —
-	// the radio was unplugged or rebooted cleanly.
+	// the radio was unplugged or rebooted cleanly. The pump treats this
+	// as terminal (no retry) on the assumption the user pulled the plug
+	// deliberately.
 	radioDisconnectedMsg struct{}
 )
 
@@ -223,19 +238,60 @@ type (
 // runtime. One goroutine reads FromRadio frames and publishes them
 // as tea.Msg via program.Send(); another drains outboundToRadio and
 // writes them to the device.
+//
+// The pump owns the reconnect policy. When `client.Run` returns an
+// error the pump closes the dead client, sleeps with exponential
+// backoff, re-dials `dest`, and resumes pumping — all transparent
+// to the model. If a session manages to receive at least one frame
+// the attempt counter resets, so a long-stable connection that
+// hiccups gets a fresh budget.
 type pump struct {
 	client  transport.Client
 	program *tea.Program
+
+	// Destination string from the original Dial — re-used by the
+	// reconnect loop. Stash it so the pump doesn't need to plumb the
+	// dest back through the model.
+	dest string
 
 	// Our own node num, learned from MyNodeInfo. Used to filter
 	// outbound-echo MeshPackets.
 	myNum uint32
 
 	// Outbound ToRadio envelopes — model code enqueues to send.
+	// Survives across reconnects: the channel itself is stable while
+	// the underlying transport.Client gets swapped out.
 	outbound chan *pb.ToRadio
 
 	// Cancellation for the running goroutines.
 	cancel context.CancelFunc
+}
+
+// Reconnect policy. 8 attempts with backoff 1s,2s,4s,8s,16s,30s,30s,30s
+// — about two minutes before giving up. Tuned for BLE on macOS, which
+// drops the link surprisingly often when the radio is mid-room or in a
+// drawer; serial / TCP basically never need more than the first try.
+const (
+	maxReconnectAttempts = 8
+	minReconnectBackoff  = 1 * time.Second
+	maxReconnectBackoff  = 30 * time.Second
+)
+
+// reconnectBackoff returns the delay before the Nth retry. attempt is
+// 1-indexed (the first retry uses attempt=1 → 1s).
+func reconnectBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	// Cap the shift so 1<<(attempt-1) can't overflow on absurd inputs.
+	if attempt > 30 {
+		attempt = 30
+	}
+	d := minReconnectBackoff * time.Duration(1<<(attempt-1))
+	if d > maxReconnectBackoff || d <= 0 {
+		d = maxReconnectBackoff
+	}
+	return d
 }
 
 // startPump opens a transport to the given destination, spawns the
@@ -254,6 +310,7 @@ func startPump(dest string, program *tea.Program) (*pump, error) {
 	p := &pump{
 		client:   client,
 		program:  program,
+		dest:     dest,
 		outbound: make(chan *pb.ToRadio, 16),
 		cancel:   cancel,
 	}
@@ -308,19 +365,112 @@ func (p *pump) run(ctx context.Context) {
 		_, _ = fmt.Fprintf(dbg, "[%s] %s\n", time.Now().Format("15:04:05.000"), line)
 	}
 
-	dbgf("pump.run start")
+	dbgf("pump.run start dest=%s", p.dest)
 
+	attempt := 0
+	for {
+		if ctx.Err() != nil {
+			dbgf("ctx done before next session — exiting")
+			return
+		}
+
+		// Re-dial if we're between sessions. First time through, the
+		// client supplied by startPump is already live so we skip.
+		var sessErr error
+		if p.client == nil {
+			dbgf("re-dial attempt %d", attempt+1)
+			client, derr := transport.Dial(p.dest)
+			if derr != nil {
+				dbgf("re-dial failed: %v", derr)
+				sessErr = derr
+			} else {
+				p.client = client
+			}
+		}
+
+		if sessErr == nil && p.client != nil {
+			established, err := p.runSession(ctx, dbgf)
+			if ctx.Err() != nil {
+				dbgf("ctx done after session — exiting")
+				return
+			}
+			// A session that produced any inbound frames counts as a
+			// successful connect — reset the budget so a long-running
+			// link that hiccups gets a fresh 8 attempts.
+			if established {
+				attempt = 0
+			}
+			_ = p.client.Close()
+			p.client = nil
+
+			if err == nil {
+				// Clean disconnect — radio rebooted or got unplugged.
+				// Don't auto-redial; the user probably did this on
+				// purpose and the pump goroutine should exit.
+				dbgf("clean disconnect — not retrying")
+				p.program.Send(radioDisconnectedMsg{})
+				return
+			}
+			sessErr = err
+		}
+
+		// Either dial or session failed. Bump attempt and either back
+		// off + retry or give up.
+		attempt++
+		if attempt > maxReconnectAttempts {
+			dbgf("giving up after %d attempts: %v", attempt-1, sessErr)
+			p.program.Send(radioErrorMsg{
+				err: fmt.Errorf(
+					"transport: %w (gave up after %d retries)",
+					sessErr, attempt-1,
+				),
+			})
+			return
+		}
+		backoff := reconnectBackoff(attempt)
+		dbgf("retry %d/%d in %s after: %v", attempt, maxReconnectAttempts, backoff, sessErr)
+		p.program.Send(radioReconnectingMsg{
+			attempt: attempt,
+			max:     maxReconnectAttempts,
+			after:   backoff,
+			err:     sessErr,
+		})
+		select {
+		case <-ctx.Done():
+			dbgf("ctx done during backoff — exiting")
+			return
+		case <-time.After(backoff):
+		}
+	}
+}
+
+// runSession drives one connection's lifetime: kick off the transport
+// reader, request the config dump, and forward translated frames to
+// Bubble Tea until the transport drops or ctx cancels. Returns
+// `established=true` when at least one inbound frame arrived (so the
+// caller can reset its retry budget) and the underlying error from
+// transport.Run if any.
+func (p *pump) runSession(
+	ctx context.Context,
+	dbgf func(string, ...any),
+) (bool, error) {
 	inbound := make(chan *pb.FromRadio, 64)
 
-	// Kick off the transport read+write goroutines.
+	// Each session runs under a child ctx so cancelling it (e.g. when
+	// runSession returns early on ctx.Done) yanks transport.Run out of
+	// any blocking read without affecting the parent.
+	sessCtx, sessCancel := context.WithCancel(ctx)
+	defer sessCancel()
+
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- p.client.Run(ctx, inbound, p.outbound)
+		runErr <- p.client.Run(sessCtx, inbound, p.outbound)
 	}()
 	dbgf("transport.Run goroutine started")
 
 	// Fire the config handshake — prompts the radio to dump its NodeDB,
-	// channels, configs, and ConfigComplete.
+	// channels, configs, and ConfigComplete. We do this on every
+	// (re)connect; the model's dedup logic absorbs the replay.
 	nonce := transport.SendWantConfig(p.outbound)
 	dbgf("SendWantConfig nonce=0x%08x", nonce)
 
@@ -328,17 +478,15 @@ func (p *pump) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			dbgf("ctx.Done — exiting")
-			return
+			dbgf("ctx.Done in session")
+			return totalIn > 0, nil
 		case err := <-runErr:
 			if err != nil {
 				dbgf("transport.Run returned error: %v", err)
-				p.program.Send(radioErrorMsg{err: fmt.Errorf("transport: %w", err)})
-			} else {
-				dbgf("transport.Run returned cleanly (radio disconnect?)")
-				p.program.Send(radioDisconnectedMsg{})
+				return totalIn > 0, err
 			}
-			return
+			dbgf("transport.Run returned cleanly (radio disconnect?)")
+			return totalIn > 0, nil
 		case msg := <-inbound:
 			if msg == nil {
 				dbgf("inbound nil — skipping")

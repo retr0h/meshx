@@ -942,7 +942,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = "radio disconnected"
 		return m, nil
 
+	case radioReconnectingMsg:
+		// Transient drop — pump is going to retry. Flip the connected
+		// flag so the top status bar shows "connecting" and flash a
+		// loud-but-temporary message so the user doesn't think a stuck
+		// session is silently dead.
+		m.connected = false
+		m.flash = fmt.Sprintf(
+			"radio dropped (%v) — retry %d/%d in %s",
+			msg.err, msg.attempt, msg.max, msg.after.Truncate(time.Second),
+		)
+		return m, nil
+
 	case radioErrorMsg:
+		m.connected = false
 		m.flash = fmt.Sprintf("radio error: %v", msg.err)
 		return m, nil
 

@@ -3,6 +3,7 @@ module github.com/retr0h/meshx
 go 1.25.7
 
 require (
+	github.com/caarlos0/go-version v0.2.2
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0

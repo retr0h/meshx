@@ -299,33 +299,29 @@ func reconnectBackoff(attempt int) time.Duration {
 	return d
 }
 
-// startPump opens a transport to the given destination, spawns the
-// pump goroutines, and returns a handle. The caller hands the
-// returned pump to the model via an option so the UI can enqueue
-// outbound messages.
-//
-// Call p.Stop() to tear down.
-func startPump(dest string, program *tea.Program) (*pump, error) {
-	client, err := transport.Dial(dest)
-	if err != nil {
-		return nil, err
-	}
+// startPump spins up a pump goroutine and returns the handle
+// immediately. Dialing happens inside the goroutine — that way an
+// 8-second BLE scan at startup doesn't block the Bubble Tea Update
+// loop, and a doomed dest (radio off, bad UUID) flows through the
+// same indefinite-retry path as a mid-session drop. Call p.Stop()
+// to tear down.
+func startPump(dest string, program *tea.Program) *pump {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	p := &pump{
-		client:   client,
+		// client is intentionally nil; the run loop's "if p.client
+		// == nil" branch performs the first dial. That keeps initial
+		// connect and reconnect on the same code path.
+		client:   nil,
 		program:  program,
 		dest:     dest,
 		outbound: make(chan *pb.ToRadio, 16),
 		cancel:   cancel,
 	}
 
-	// Bubble Tea isn't up yet when cmd.Execute calls this. We stash
-	// the program pointer so the goroutine can start publishing as
-	// soon as the Bubble Tea loop begins.
 	go p.run(ctx)
 
-	return p, nil
+	return p
 }
 
 func (p *pump) Stop() {

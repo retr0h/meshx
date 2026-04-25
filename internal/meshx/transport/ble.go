@@ -23,12 +23,30 @@ package transport
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 	"google.golang.org/protobuf/proto"
 	"tinygo.org/x/bluetooth"
 )
+
+// adapter.Enable() on tinygo-bluetooth v0.15.0 is non-idempotent on
+// macOS — a second call from the same process returns "already calling
+// Enable function" and aborts. The pump's reconnect loop redials on
+// every transport drop, so without this guard every retry would fail
+// for the wrong reason. Enable once per process, cache the result.
+var (
+	bleEnableOnce sync.Once
+	bleEnableErr  error
+)
+
+func enableBLEAdapterOnce(adapter *bluetooth.Adapter) error {
+	bleEnableOnce.Do(func() {
+		bleEnableErr = adapter.Enable()
+	})
+	return bleEnableErr
+}
 
 // Meshtastic BLE GATT layout. These UUIDs are defined in the
 // Meshtastic firmware's BluetoothPhoneAPI and never change across
@@ -76,7 +94,7 @@ const bleReadBuf = 512
 //     real error before it can panic downstream.
 func DialBLE(addr string) (Client, error) {
 	adapter := bluetooth.DefaultAdapter
-	if err := adapter.Enable(); err != nil {
+	if err := enableBLEAdapterOnce(adapter); err != nil {
 		return nil, fmt.Errorf("enable bluetooth adapter: %w — is Bluetooth on?", err)
 	}
 

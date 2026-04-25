@@ -51,6 +51,14 @@ const clientTag = "meshx (github.com/retr0h/meshx)"
 // the official Meshtastic Android / iOS apps' input limit.
 const meshtasticMaxTextBytes = 228
 
+// flashTTL is how long a flash message lingers in the status row
+// after it stops changing. 5s is enough to read a typical line
+// ("ack received", "search: 12 matches") without sticking past
+// the user's attention; errors and reject messages also auto-fade
+// rather than camping there forever. Drives the auto-clear path
+// in the noticeTick handler.
+const flashTTL = 5 * time.Second
+
 // Mode constants — mutt-style modal UI. Normal is the default
 // three-pane view; command drops you into a `:` prompt at the bottom;
 // insert takes over the middle pane with a compose editor.
@@ -297,6 +305,14 @@ type model struct {
 	peerEnv       map[uint32]peerEnvMetrics
 
 	flash string
+	// flashSeen / flashSeenAt drive the auto-clear timer for flash.
+	// 109 distinct sites set m.flash; refactoring all of them through
+	// a setter would be churn for nothing. Instead, the noticeTick
+	// handler observes flash on each tick — if the value hasn't
+	// changed for flashTTL, it clears. flashSeen captures the last
+	// observed text, flashSeenAt stamps when that observation began.
+	flashSeen   string
+	flashSeenAt time.Time
 }
 
 type peerPosition struct {
@@ -767,6 +783,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// modeNav, so while nav'd everything visually holds still.
 		if m.mode != modeNav {
 			m.reapExpiredNotices()
+		}
+		// Flash auto-clear: if the flash text hasn't changed in
+		// flashTTL, drop it. Stamp flashSeenAt when we first see a
+		// new value so the timer restarts from when the user last
+		// got new info, not from app start. Without this, transient
+		// status messages ("ack received", "/tag rejected: …") sit
+		// in the status row forever until something else overwrites
+		// them — which often never happens.
+		if m.flash != m.flashSeen {
+			m.flashSeen = m.flash
+			m.flashSeenAt = time.Now()
+		} else if m.flash != "" && time.Since(m.flashSeenAt) > flashTTL {
+			m.flash = ""
+			m.flashSeen = ""
 		}
 		return m, noticeTickCmd()
 

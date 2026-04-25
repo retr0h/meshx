@@ -210,19 +210,20 @@ type (
 	// log populated with the node list received so far.
 	radioConfigCompleteMsg struct{}
 
-	// radioErrorMsg carries a fatal transport error — emitted only
-	// after the pump has exhausted its reconnect attempts. By the time
-	// the UI sees one of these the connection is gone for good and the
-	// user needs to restart.
+	// radioErrorMsg carries a fatal transport error. With the
+	// indefinite-retry policy the pump never emits one of these on
+	// its own — kept on the type set for future use (transport errors
+	// the pump explicitly classifies as unrecoverable, e.g. the dest
+	// string can't be parsed).
 	radioErrorMsg struct{ err error }
 
-	// radioReconnectingMsg fires after a transport error when the pump
-	// is going to retry. The UI surfaces it as a flash so a transient
-	// BLE / serial drop reads as "we noticed, retrying" instead of a
+	// radioReconnectingMsg fires after a transport error while the
+	// pump is in its retry loop. The UI parks a persistent banner
+	// (model.reconnect) keyed off this so a transient BLE / serial
+	// drop reads as "we noticed, retrying every Ns" instead of a
 	// silent hang followed by a stale error.
 	radioReconnectingMsg struct {
 		attempt int
-		max     int
 		after   time.Duration
 		err     error
 	}
@@ -267,14 +268,18 @@ type pump struct {
 	cancel context.CancelFunc
 }
 
-// Reconnect policy. 8 attempts with backoff 1s,2s,4s,8s,16s,30s,30s,30s
-// — about two minutes before giving up. Tuned for BLE on macOS, which
-// drops the link surprisingly often when the radio is mid-room or in a
-// drawer; serial / TCP basically never need more than the first try.
+// Reconnect policy: truncated exponential backoff with no jitter,
+// retried indefinitely. Schedule is 1s,2s,4s,8s,16s,30s,30s,30s,…
+// (every step beyond 30s stays at 30s). The pump only stops on ctx
+// cancellation (Ctrl+X / process exit) or a clean transport-side
+// disconnect. Real-world BLE re-pair (radio in a drawer, walked out
+// of range, OS Bluetooth hiccup) routinely takes more than two
+// minutes, and the user told us they'd rather see "retry 47/∞ in
+// 30s" forever than have meshx silently give up. Jitter is a no-op
+// here — single client, single radio, no thundering-herd risk.
 const (
-	maxReconnectAttempts = 8
-	minReconnectBackoff  = 1 * time.Second
-	maxReconnectBackoff  = 30 * time.Second
+	minReconnectBackoff = 1 * time.Second
+	maxReconnectBackoff = 30 * time.Second
 )
 
 // reconnectBackoff returns the delay before the Nth retry. attempt is
@@ -414,24 +419,14 @@ func (p *pump) run(ctx context.Context) {
 			sessErr = err
 		}
 
-		// Either dial or session failed. Bump attempt and either back
-		// off + retry or give up.
+		// Either dial or session failed. Bump attempt, sleep, and
+		// loop. We never give up — the only exits from this loop are
+		// ctx cancel (user quit) or clean disconnect (radio rebooted).
 		attempt++
-		if attempt > maxReconnectAttempts {
-			dbgf("giving up after %d attempts: %v", attempt-1, sessErr)
-			p.program.Send(radioErrorMsg{
-				err: fmt.Errorf(
-					"transport: %w (gave up after %d retries)",
-					sessErr, attempt-1,
-				),
-			})
-			return
-		}
 		backoff := reconnectBackoff(attempt)
-		dbgf("retry %d/%d in %s after: %v", attempt, maxReconnectAttempts, backoff, sessErr)
+		dbgf("retry %d in %s after: %v", attempt, backoff, sessErr)
 		p.program.Send(radioReconnectingMsg{
 			attempt: attempt,
-			max:     maxReconnectAttempts,
 			after:   backoff,
 			err:     sessErr,
 		})

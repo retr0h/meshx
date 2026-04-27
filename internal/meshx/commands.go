@@ -707,17 +707,34 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 
 		// Ghost peer — we have their node num from text packets but
-		// have never received their NodeInfo, so longname / shortname
-		// / hw are all unknown. Surface that plainly rather than
-		// pretending a partial whois is a whole one.
-		ghost := strings.HasPrefix(n.callsign, "node 0x")
+		// have never received their NodeInfo, so the longname is just
+		// the placeholder hex form and hw / fw / position are all
+		// unknown. Surface that up front rather than pretending a
+		// partial whois is a whole one. Detection now goes through
+		// the live unresolved flag (since the callsign string for a
+		// ghost is the same "node 0x..." form a fully resolved peer
+		// could also legitimately have).
+		ghost := n.unresolved
 
 		var lines []string
+		// Identity block — long, short, hex — at the top of every
+		// whois so the user can correlate however the peer was
+		// referred to in chat. For resolved peers the long name is
+		// whatever they advertised; for ghosts it's the hex placeholder
+		// (we deliberately don't synthesize "Meshtastic <hex>").
+		lines = append(lines, fmt.Sprintf("name:   %s", n.callsign))
+		if n.shortName != "" {
+			lines = append(lines, fmt.Sprintf("short:  %s", n.shortName))
+		}
+		if nodeNum != 0 {
+			lines = append(lines, fmt.Sprintf("id:     0x%x", nodeNum))
+		}
+		lines = append(lines, "")
 		if ghost {
 			lines = append(lines,
 				"👻 no NodeInfo received for this peer",
 				"  we've heard text packets from them but never their",
-				"  User broadcast, so longname / shortname / hw are",
+				"  User broadcast, so longname / hw / fw / position are",
 				"  unknown. Their NodeInfo may arrive in the next",
 				"  ~15 min, or try /sync to force a NodeDB re-dump.",
 				"",

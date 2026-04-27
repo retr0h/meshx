@@ -1364,15 +1364,16 @@ func (m model) renderMessageRow(
 	// each peer picks a stable color from the accent palette. Turns
 	// a cyan-wall log into something you can skim by hue; each
 	// conversation reads as a distinct thread at a glance. Ghost
-	// peers ("node 0x…" placeholders whose NodeInfo never arrived)
-	// render drained instead so they don't compete visually with
-	// resolved names. Hash the RESOLVED name (via displayFrom),
-	// not the raw msg.from — otherwise a ghost that later resolved
-	// still gets drained because its stored from-string still
-	// starts with "node 0x".
+	// peers (synthesized "Meshtastic <last4hex>" placeholders whose
+	// NodeInfo never arrived) render drained instead so they don't
+	// compete visually with resolved names. Detection goes through
+	// the live nodeItem.unresolved flag rather than string-matching
+	// the callsign — the firmware-default longname is a real value
+	// other clients display, so we can't tell from the string alone
+	// whether it's been confirmed.
 	resolvedName := m.displayFrom(msg)
 	peerColor := nickColor(resolvedName)
-	if strings.HasPrefix(resolvedName, "node 0x") {
+	if m.senderUnresolved(msg) {
 		peerColor = mhDrained
 	}
 	peer := lipgloss.NewStyle().
@@ -1411,7 +1412,7 @@ func (m model) renderMessageRow(
 	//    to the same hash bucket the peer name renders in, so the
 	//    tick and the callsign pick the same color.
 	senderAccentColor := nickColor(resolvedName)
-	if strings.HasPrefix(resolvedName, "node 0x") {
+	if m.senderUnresolved(msg) {
 		senderAccentColor = mhDrained
 	}
 	if msg.mine {
@@ -1510,10 +1511,19 @@ func (m model) renderMessageRow(
 		fromRaw = m.myCallsign()
 		shortName = m.myShortName()
 	} else {
-		if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx >= 0 && idx < len(m.nodes) {
+		// Both resolved and unresolved peers get the [shortname]
+		// badge — for resolved peers it's whatever they advertised
+		// in their User packet, for ghosts it's the last-4-hex
+		// (computed from the node number, same value every other
+		// Meshtastic client renders for that node). Unresolved
+		// peers additionally get the 👻 marker + drained styling
+		// so the row reads "[c7f7] 👻 node 0x273cc7f7" — badge for
+		// recognition, hex for honesty about the longname.
+		if idx, ok := m.nodesByNum[msg.fromNum]; ok &&
+			idx >= 0 && idx < len(m.nodes) {
 			shortName = m.nodes[idx].shortName
 		}
-		if strings.HasPrefix(fromRaw, "node 0x") {
+		if m.senderUnresolved(msg) {
 			fromRaw = "👻 " + fromRaw
 		}
 	}
@@ -1758,6 +1768,22 @@ func (m model) findMessageByPacketID(id uint32) *messageItem {
 // upgrade to the real callsign as soon as we learn it. Without
 // this the first BLE session's outbound history would stay stuck
 // on the placeholder forever.
+// senderUnresolved reports whether the message's sender is a peer
+// we've only synthesized a firmware-default callsign for (no real
+// NodeInfo has arrived). Used by the row renderer to dim the FROM
+// column + accent tick and prepend the 👻 marker. Own messages and
+// rows with no fromNum (demo seeds, system rows) are never flagged.
+func (m model) senderUnresolved(msg messageItem) bool {
+	if msg.mine || msg.fromNum == 0 {
+		return false
+	}
+	idx, ok := m.nodesByNum[msg.fromNum]
+	if !ok || idx < 0 || idx >= len(m.nodes) {
+		return false
+	}
+	return m.nodes[idx].unresolved
+}
+
 func (m model) displayFrom(msg messageItem) string {
 	if msg.mine {
 		if cs := m.myCallsign(); cs != "" && cs != "—" {
@@ -1773,7 +1799,12 @@ func (m model) displayFrom(msg messageItem) string {
 			return cs
 		}
 	}
-	return msg.from
+	// Belt-and-suspenders for any path that bypassed ghost backfill
+	// (race, future code) — synthesize the firmware default from
+	// fromNum so the row never shows the legacy "node 0x<hex>"
+	// string we used to bake into the SQLite from column.
+	long, _ := defaultCallsign(msg.fromNum)
+	return long
 }
 
 // truncateRunes clamps s to at most n display runes, appending …

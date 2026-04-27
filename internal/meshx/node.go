@@ -49,10 +49,17 @@ type nodeItem struct {
 	// completion and /whois can disambiguate multiple radios that
 	// share a longname — three "retr0h" radios all have the same
 	// callsign but different nodeNums.
-	nodeNum   uint32
-	state     string // "online", "offline", "failed", "muted"
-	fav       bool
-	lastHeard string // display string like "2m", "14:02", "3h"; fallback
+	nodeNum uint32
+	// unresolved is true when callsign + shortName were synthesized
+	// from the firmware default ("Meshtastic <last-4-hex>" /
+	// "<last-4-hex>") because no NodeInfo / User packet has arrived
+	// for this peer. Drives the 👻 prefix + drained styling on chat
+	// rows and gates the "identified <newname> (was <old>)" system
+	// line that fires when a real NodeInfo finally lands.
+	unresolved bool
+	state      string // "online", "offline", "failed", "muted"
+	fav        bool
+	lastHeard  string // display string like "2m", "14:02", "3h"; fallback
 	// when lastHeardAt is zero (demo fixtures, rows that haven't
 	// been updated since the timestamp-based migration).
 	lastHeardAt time.Time // absolute time of the most recent packet
@@ -71,6 +78,32 @@ type nodeItem struct {
 	lastHops int    // 0 = direct, 1+ via intermediate mesh nodes
 	hwModel  string // HardwareModel protobuf value — e.g. "T-Beam v1.1"
 	firmware string // firmware_version — e.g. "2.3.4"
+}
+
+// defaultCallsign returns the placeholder identity for a node we
+// have no NodeInfo for.
+//
+//   - shortName is the last 4 hex digits of the node number
+//     (lowercase). Every Meshtastic radio computes this same value
+//     locally — it's a property of the node number, not a claim
+//     about the user — which is why iOS / Android / meshtasticd all
+//     show "c7f7" for the same peer. Putting it in the [shortname]
+//     badge lets the user tab-complete against the same identifier
+//     they hear other operators use over the air.
+//
+//   - longName stays "node 0x<hex>" — the full node ID. We
+//     deliberately do NOT synthesize "Meshtastic <shortname>" here,
+//     even though the firmware seeds that string when the owner
+//     field is unset. We don't actually know if this peer kept the
+//     factory default; claiming "Meshtastic c7f7" as their
+//     longname would put a name in their mouth they may not have
+//     chosen. The hex form is honest about what we know (just the
+//     node ID) and is consistent with how /whois used to label the
+//     row before we synthesized anything.
+func defaultCallsign(nodeNum uint32) (longName, shortName string) {
+	shortName = fmt.Sprintf("%04x", nodeNum&0xFFFF)
+	longName = fmt.Sprintf("node 0x%x", nodeNum)
+	return
 }
 
 // sortMode controls the nodes-overlay grid order. Cycled by the `s`

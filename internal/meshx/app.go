@@ -669,10 +669,19 @@ func newModel(demo *Demo, dest string) model {
 					}
 					// Ghost-peer replay — every historical message
 					// with a fromNum we haven't seen in m.nodes gets
-					// a placeholder so /whois / /cqr / /rs / /ping
-					// can target it by id without waiting for a
-					// fresh live packet. The entry is upgraded in
-					// place once NodeInfo arrives during handshake.
+					// a synthesized firmware-default entry so /whois
+					// / /cqr / /rs / /ping can target it by shortname
+					// or hex without waiting for a fresh live packet.
+					// Using defaultCallsign rather than msg.from keeps
+					// the row consistent with how live applyTextMessage
+					// ingest now ghost-creates peers — single source
+					// of truth, and historical rows that were saved
+					// with the legacy "node 0x<hex>" string resolve
+					// to the same "[c7f7] Meshtastic c7f7" form every
+					// other Meshtastic client renders. Marked
+					// unresolved so the UI dims them and the
+					// "identified" notification fires when real
+					// NodeInfo finally lands.
 					for _, msg := range past {
 						if msg.fromNum == 0 {
 							continue
@@ -680,13 +689,16 @@ func newModel(demo *Demo, dest string) model {
 						if _, ok := m.nodesByNum[msg.fromNum]; ok {
 							continue
 						}
+						long, short := defaultCallsign(msg.fromNum)
 						m.nodes = append(m.nodes, nodeItem{
-							callsign:  msg.from,
-							nodeNum:   msg.fromNum,
-							state:     "offline",
-							lastHeard: msg.time,
-							lastSNR:   msg.snr,
-							lastHops:  msg.hops,
+							callsign:   long,
+							shortName:  short,
+							nodeNum:    msg.fromNum,
+							unresolved: true,
+							state:      "offline",
+							lastHeard:  msg.time,
+							lastSNR:    msg.snr,
+							lastHops:   msg.hops,
 						})
 						m.nodesByNum[msg.fromNum] = len(m.nodes) - 1
 					}

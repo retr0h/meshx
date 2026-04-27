@@ -55,13 +55,26 @@ func sanitizeMessageText(s string) string {
 // upsertNode inserts a NodeInfo arrival or updates the existing row
 // by node num. Uses nodesByNum for O(1) lookup. Falls back to
 // short/long name for display text, and chooses state from lastHeard.
+//
+// When BOTH names are empty the NodeInfo is effectively
+// content-free — usually a peer the radio has only heard via mesh
+// forwarding without ever decoding a User packet. Synthesize the
+// firmware-default ("Meshtastic <last-4-hex>" / "<last-4-hex>") so
+// the row matches what every other Meshtastic client renders for
+// the same node and flag it unresolved so the UI can dim it + the
+// "identified" notification can fire later when a real User packet
+// finally lands.
 func (m *model) upsertNode(msg radioNodeInfoMsg) {
+	unresolved := false
+	if msg.longName == "" && msg.shortName == "" {
+		long, short := defaultCallsign(msg.nodeNum)
+		msg.longName = long
+		msg.shortName = short
+		unresolved = true
+	}
 	callsign := msg.longName
 	if callsign == "" {
 		callsign = msg.shortName
-	}
-	if callsign == "" {
-		callsign = fmt.Sprintf("node 0x%x", msg.nodeNum)
 	}
 
 	// Derive state from lastHeard age.
@@ -86,6 +99,7 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 		callsign:    callsign,
 		shortName:   msg.shortName,
 		nodeNum:     msg.nodeNum,
+		unresolved:  unresolved,
 		state:       state,
 		lastHeard:   lastHeard,
 		lastHeardAt: msg.lastHeardAt,
@@ -115,20 +129,19 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 		if m.nodes[idx].lastHeardAt.After(item.lastHeardAt) {
 			item.lastHeardAt = m.nodes[idx].lastHeardAt
 		}
-		prev := m.nodes[idx].callsign
+		wasUnresolved := m.nodes[idx].unresolved
+		prevCallsign := m.nodes[idx].callsign
 		m.nodes[idx] = item
 		// Ghost upgrade notification — when a peer that was
-		// previously showing as the "node 0x<hex>" placeholder
-		// (because NodeInfo hadn't arrived yet) just got
-		// resolved to a real callsign, drop a grey inline
-		// system line in the log so the user sees the name
-		// flip happen. Skipped when the callsign didn't
-		// actually change (re-applied same NodeInfo) or when
-		// we're still stuck on the placeholder (NodeInfo
-		// lacked both long and short names).
-		placeholder := fmt.Sprintf("node 0x%x", msg.nodeNum)
-		if prev == placeholder && item.callsign != placeholder && prev != item.callsign {
-			m.systemLine(fmt.Sprintf("identified %s (was %s)", item.callsign, placeholder))
+		// previously a synthesized firmware-default placeholder
+		// (because NodeInfo hadn't arrived yet) just got resolved
+		// to a real User packet, drop a grey inline system line in
+		// the log so the user sees the name flip happen. Skipped
+		// when we're still on a default (NodeInfo lacked both
+		// names) or when the callsign didn't actually change
+		// (re-applied same NodeInfo).
+		if wasUnresolved && !item.unresolved && prevCallsign != item.callsign {
+			m.systemLine(fmt.Sprintf("identified %s (was %s)", item.callsign, prevCallsign))
 		}
 		return
 	}
@@ -169,7 +182,12 @@ func (m *model) applyChannel(msg radioChannelMsg) {
 // Resolves fromNum to a callsign via the NodeDB; unread count bumps
 // on the destination channel when it's not the active one.
 func (m *model) applyTextMessage(msg radioTextMsg) {
-	from := fmt.Sprintf("node 0x%x", msg.fromNum)
+	// Default ghost identity from the firmware's last-4-hex
+	// convention so the FROM column matches what other Meshtastic
+	// clients display for the same peer (iOS shows "c7f7", we
+	// shouldn't be the outlier showing "node 0x273cc7f7").
+	defaultLong, _ := defaultCallsign(msg.fromNum)
+	from := defaultLong
 	if idx, ok := m.nodesByNum[msg.fromNum]; ok {
 		from = m.nodes[idx].callsign
 		// Live RF contact — stamp lastHeardAt + refresh signal
@@ -190,20 +208,27 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		}
 	} else if msg.fromNum != 0 {
 		// We've heard a text packet from a peer whose NodeInfo we
-		// haven't received yet — ghost them into m.nodes so
-		// /cqr, /rs, /whois, /ping can find them by id or
+		// haven't received yet — ghost them into m.nodes so /cqr,
+		// /rs, /whois, /ping can find them by id, hex, or shortname
 		// substring. The entry gets upgraded by upsertNode the
 		// moment a real NodeInfo arrives (nodesByNum index is
-		// stable so all references stay valid).
+		// stable so all references stay valid). Synthesize the
+		// firmware-default callsigns up front so the row already
+		// reads the same way every other Meshtastic client renders
+		// the peer.
+		long, short := defaultCallsign(msg.fromNum)
 		m.nodes = append(m.nodes, nodeItem{
-			callsign:    from,
+			callsign:    long,
+			shortName:   short,
 			nodeNum:     msg.fromNum,
+			unresolved:  true,
 			lastHeardAt: time.Now(),
 			lastSNR:     msg.snr,
 			lastRSSI:    msg.rssi,
 			lastHops:    msg.hops,
 		})
 		m.nodesByNum[msg.fromNum] = len(m.nodes) - 1
+		from = long
 	}
 	mine := msg.fromNum == m.myNodeNum
 

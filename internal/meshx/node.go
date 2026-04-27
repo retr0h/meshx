@@ -49,10 +49,17 @@ type nodeItem struct {
 	// completion and /whois can disambiguate multiple radios that
 	// share a longname — three "retr0h" radios all have the same
 	// callsign but different nodeNums.
-	nodeNum   uint32
-	state     string // "online", "offline", "failed", "muted"
-	fav       bool
-	lastHeard string // display string like "2m", "14:02", "3h"; fallback
+	nodeNum uint32
+	// unresolved is true when callsign + shortName were synthesized
+	// from the firmware default ("Meshtastic <last-4-hex>" /
+	// "<last-4-hex>") because no NodeInfo / User packet has arrived
+	// for this peer. Drives the 👻 prefix + drained styling on chat
+	// rows and gates the "identified <newname> (was <old>)" system
+	// line that fires when a real NodeInfo finally lands.
+	unresolved bool
+	state      string // "online", "offline", "failed", "muted"
+	fav        bool
+	lastHeard  string // display string like "2m", "14:02", "3h"; fallback
 	// when lastHeardAt is zero (demo fixtures, rows that haven't
 	// been updated since the timestamp-based migration).
 	lastHeardAt time.Time // absolute time of the most recent packet
@@ -71,6 +78,22 @@ type nodeItem struct {
 	lastHops int    // 0 = direct, 1+ via intermediate mesh nodes
 	hwModel  string // HardwareModel protobuf value — e.g. "T-Beam v1.1"
 	firmware string // firmware_version — e.g. "2.3.4"
+}
+
+// defaultCallsign returns the firmware-default longname / shortname
+// for a node we have no NodeInfo for. Matches what every Meshtastic
+// radio populates locally when the user hasn't set a custom owner —
+// shortname is the last 4 hex digits of the node number (lowercase,
+// matches the on-wire firmware convention) and longname is
+// "Meshtastic <shortname>". The whole ecosystem (iOS app, Android
+// app, meshtasticd, the firmware itself) renders this same string,
+// so synthesizing it locally for ghost peers means our display lines
+// up with what other clients show for the same node — no more
+// `node 0x273cc7f7` while everyone else sees `c7f7`.
+func defaultCallsign(nodeNum uint32) (longName, shortName string) {
+	shortName = fmt.Sprintf("%04x", nodeNum&0xFFFF)
+	longName = "Meshtastic " + shortName
+	return
 }
 
 // sortMode controls the nodes-overlay grid order. Cycled by the `s`

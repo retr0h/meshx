@@ -80,19 +80,29 @@ type nodeItem struct {
 	firmware string // firmware_version — e.g. "2.3.4"
 }
 
-// defaultCallsign returns the firmware-default longname / shortname
-// for a node we have no NodeInfo for. Matches what every Meshtastic
-// radio populates locally when the user hasn't set a custom owner —
-// shortname is the last 4 hex digits of the node number (lowercase,
-// matches the on-wire firmware convention) and longname is
-// "Meshtastic <shortname>". The whole ecosystem (iOS app, Android
-// app, meshtasticd, the firmware itself) renders this same string,
-// so synthesizing it locally for ghost peers means our display lines
-// up with what other clients show for the same node — no more
-// `node 0x273cc7f7` while everyone else sees `c7f7`.
+// defaultCallsign returns the placeholder identity for a node we
+// have no NodeInfo for.
+//
+//   - shortName is the last 4 hex digits of the node number
+//     (lowercase). Every Meshtastic radio computes this same value
+//     locally — it's a property of the node number, not a claim
+//     about the user — which is why iOS / Android / meshtasticd all
+//     show "c7f7" for the same peer. Putting it in the [shortname]
+//     badge lets the user tab-complete against the same identifier
+//     they hear other operators use over the air.
+//
+//   - longName stays "node 0x<hex>" — the full node ID. We
+//     deliberately do NOT synthesize "Meshtastic <shortname>" here,
+//     even though the firmware seeds that string when the owner
+//     field is unset. We don't actually know if this peer kept the
+//     factory default; claiming "Meshtastic c7f7" as their
+//     longname would put a name in their mouth they may not have
+//     chosen. The hex form is honest about what we know (just the
+//     node ID) and is consistent with how /whois used to label the
+//     row before we synthesized anything.
 func defaultCallsign(nodeNum uint32) (longName, shortName string) {
 	shortName = fmt.Sprintf("%04x", nodeNum&0xFFFF)
-	longName = "Meshtastic " + shortName
+	longName = fmt.Sprintf("node 0x%x", nodeNum)
 	return
 }
 

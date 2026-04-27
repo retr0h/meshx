@@ -1511,7 +1511,16 @@ func (m model) renderMessageRow(
 		fromRaw = m.myCallsign()
 		shortName = m.myShortName()
 	} else {
-		if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx >= 0 && idx < len(m.nodes) {
+		// Both resolved and unresolved peers get the [shortname]
+		// badge — for resolved peers it's whatever they advertised
+		// in their User packet, for ghosts it's the last-4-hex
+		// (computed from the node number, same value every other
+		// Meshtastic client renders for that node). Unresolved
+		// peers additionally get the 👻 marker + drained styling
+		// so the row reads "[c7f7] 👻 node 0x273cc7f7" — badge for
+		// recognition, hex for honesty about the longname.
+		if idx, ok := m.nodesByNum[msg.fromNum]; ok &&
+			idx >= 0 && idx < len(m.nodes) {
 			shortName = m.nodes[idx].shortName
 		}
 		if m.senderUnresolved(msg) {

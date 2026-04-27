@@ -144,6 +144,33 @@ func (m model) collectPeerPlots() []peerPlot {
 // pipeline; j/k walks step through peers in order.
 func (m model) renderNearbyPane(width, height int) string {
 	header := paneHeader("NEARBY", paneNodes, m.focused == paneNodes)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
+
+	// No self-fix — distances + bearings are meaningless without an
+	// origin point. Explain the situation in-pane rather than
+	// flashing-and-bailing at command time, which made /nearby look
+	// broken when the user's radio hadn't broadcast a Position
+	// packet yet (cold-boot, GPS off in firmware, indoor with no
+	// sky view, etc.).
+	if m.myLatitude == 0 && m.myLongitude == 0 {
+		count := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(mhDrained)).
+			Render("  (waiting for own GPS fix)")
+		lines := make([]string, 0, 9)
+		lines = append(lines,
+			header+count,
+			"",
+			dim.Render("   no GPS fix on this radio yet — /nearby needs your own"),
+			dim.Render("   position to compute distances + bearings to peers."),
+			"",
+			dim.Render("   options:"),
+			dim.Render("     • wait for your radio to acquire a fix (outdoor + sky view)"),
+			dim.Render("     • check position.* in your radio config (Meshtastic app/CLI)"),
+			dim.Render("     • try /sync to force a NodeDB re-dump"),
+		)
+		return paneStyle(width, height, paneNodes, m.focused == paneNodes).
+			Render(strings.Join(lines, "\n"))
+	}
 
 	plots := m.nearbyRoster()
 
@@ -159,7 +186,6 @@ func (m model) renderNearbyPane(width, height int) string {
 	lines = append(lines, header+count, "")
 
 	if len(plots) == 0 {
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
 		lines = append(lines,
 			dim.Render("   no peers with a GPS fix yet — positions land as"),
 			dim.Render("   Meshtastic Position packets arrive (periodic)."),
@@ -361,10 +387,27 @@ func (m model) renderNearbyPane(width, height int) string {
 // scope still reads as a directory of "who's close."
 func (m model) renderRadarPane(width, height int) string {
 	header := paneHeader("RADAR", paneNodes, m.focused == paneNodes)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
+
+	// No self-fix — there's no centre to plot peers around. Same
+	// in-pane explainer /nearby uses for the same reason.
+	if m.myLatitude == 0 && m.myLongitude == 0 {
+		lines := []string{
+			header, "",
+			dim.Render("   no GPS fix on this radio yet — /radar needs your own"),
+			dim.Render("   position to plot peers around you."),
+			"",
+			dim.Render("   options:"),
+			dim.Render("     • wait for your radio to acquire a fix (outdoor + sky view)"),
+			dim.Render("     • check position.* in your radio config (Meshtastic app/CLI)"),
+			dim.Render("     • try /sync to force a NodeDB re-dump"),
+		}
+		return paneStyle(width, height, paneNodes, m.focused == paneNodes).
+			Render(strings.Join(lines, "\n"))
+	}
 
 	plots := m.collectPeerPlots()
 	if len(plots) == 0 {
-		dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
 		lines := []string{
 			header, "",
 			dim.Render("   no peers with a GPS fix yet — waiting for"),
@@ -480,7 +523,10 @@ func (m model) renderRadarPane(width, height int) string {
 	}
 
 	// Legend — ring scale + top 5 closest by name with bearing.
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	// Re-bind dim here without italic: the function-scope dim is
+	// italicized for the no-fix explainer, but the legend reads
+	// cleaner upright. (Shadows the outer dim deliberately.)
+	dim = lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	keyDim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
 	legend := []string{
 		"",

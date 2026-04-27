@@ -867,23 +867,16 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.openOverlay(overlayNodes)
 	case "nearby":
 		// Distance-sorted roster of peers with a GPS fix — "who
-		// can I talk to directly" at a glance. Requires our own
-		// position + each peer's position, so the view gets
-		// sparser the more peers haven't beaconed yet.
-		if m.myLatitude == 0 && m.myLongitude == 0 {
-			m.flash = "/nearby: no GPS fix on self — can't compute distances"
-			return nil
-		}
+		// can I talk to directly" at a glance. The renderer handles
+		// the no-self-fix case with an in-pane explainer so the
+		// overlay always opens; refusing here with a transient
+		// flash made the command look broken when the user's own
+		// radio hadn't broadcast a Position packet yet.
 		m.openOverlay(overlayNearby)
 	case "radar":
-		// Polar scope. Same position-data requirement as /nearby.
-		// Repaints on every tick so fresh Position packets appear
-		// live; if your radio just booted and peers haven't
-		// broadcast position yet, the scope will be thin.
-		if m.myLatitude == 0 && m.myLongitude == 0 {
-			m.flash = "/radar: no GPS fix on self — can't compute bearings"
-			return nil
-		}
+		// Polar scope. Same in-pane explainer as /nearby for the
+		// no-self-fix case — always open, show why if data is
+		// missing.
 		m.openOverlay(overlayRadar)
 	case "channel":
 		if rest == "list" || rest == "" {

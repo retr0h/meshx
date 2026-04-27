@@ -459,6 +459,29 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "i", "q":
 		// Close any active overlay and land on the input bar.
 		return m, m.closeOverlayToInput()
+	// Channel hop is a global action — bind Alt+digit in nav mode
+	// too so the keys don't silently no-op when the user is reading
+	// /help or has an overlay open. Reuses the same closeOverlayToInput
+	// path /channels selection takes so the post-switch state matches
+	// (input bar focused, cursor blinking).
+	case "alt+1":
+		m.switchChannelByIndex(0)
+		return m, m.closeOverlayToInput()
+	case "alt+2":
+		m.switchChannelByIndex(1)
+		return m, m.closeOverlayToInput()
+	case "alt+3":
+		m.switchChannelByIndex(2)
+		return m, m.closeOverlayToInput()
+	case "alt+4":
+		m.switchChannelByIndex(3)
+		return m, m.closeOverlayToInput()
+	case "ctrl+n":
+		m.cycleChannel(+1)
+		return m, m.closeOverlayToInput()
+	case "ctrl+p":
+		m.cycleChannel(-1)
+		return m, m.closeOverlayToInput()
 	case "j", "down":
 		m.moveSelectionGrid(0, +1)
 	case "k", "up":
@@ -485,7 +508,13 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.moveSelectionGrid(0, -1)
 		}
 	case "enter", " ":
-		m.activate()
+		// activate may return a tea.Cmd (textinput.Focus) when the
+		// channels overlay just landed the user back on the input
+		// bar — pass it through so the cursor blink chain stays
+		// alive in the new mode.
+		if cmd := m.activate(); cmd != nil {
+			return m, cmd
+		}
 	case "/":
 		m.mode = modeSearch
 		m.searchInput.SetValue("")

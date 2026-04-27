@@ -264,7 +264,7 @@ func (m *model) actOnSelectedNode(fn func(*nodeItem)) {
 //   - channels: switch the messages pane to that channel
 //   - nodes:    show whois / node info flash
 //   - messages: expand selected message (hop, SNR, RSSI, hex id)
-func (m *model) activate() {
+func (m *model) activate() tea.Cmd {
 	switch m.focused {
 	case paneChannels:
 		if m.selectedCh < len(m.channels) {
@@ -272,8 +272,15 @@ func (m *model) activate() {
 			m.currentChannel = c.name
 			m.channels[m.selectedCh].unread = 0
 			m.flash = fmt.Sprintf("switched to %s", c.name)
-			// Auto-jump focus to messages pane, mutt-style.
-			m.focused = paneMessages
+			// Land on the input bar in the new channel — same as
+			// /join. Without this the user is stuck in nav mode on
+			// the (now-closed) channels overlay and has to ESC to
+			// type. Reuses closeOverlayToInput so overlay state,
+			// focused pane, mode flag, and textinput.Focus() all
+			// flip together — matches every other "we just acted on
+			// the user's selection, now hand them back the keyboard"
+			// transition (revealMessages, etc.).
+			return m.closeOverlayToInput()
 		}
 	case paneNodes:
 		sorted := m.sortedNodes()
@@ -313,6 +320,7 @@ func (m *model) activate() {
 			}
 		}
 	}
+	return nil
 }
 
 func ackWord(status string) string {

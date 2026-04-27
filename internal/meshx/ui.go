@@ -101,9 +101,11 @@ func (m model) renderChannelStatus() string {
 	activeTab := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhPink)).
 		Bold(true)
-	activeBracket := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhPink)).
-		Bold(true)
+	// Brackets render as muted chrome so the inner channel index +
+	// name carry the visual weight — same treatment the [INPUT] /
+	// [NAV] mode tag uses on the right side of this row. Reads as
+	// "[1:#default]" with grey brackets framing a hot-pink label.
+	activeBracket := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	other := lipgloss.NewStyle().Foreground(lipgloss.Color(mhLavender))
 	otherIdx := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	unread := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
@@ -139,15 +141,33 @@ func (m model) renderChannelStatus() string {
 	}
 	mid := strings.Join(tabs, " ")
 
+	// Mode tag — brackets stay in the muted label color so they read
+	// as chrome, but the inner word swaps color per mode so a glance
+	// at the bottom-right tells you whether typing will work.
+	// Specifically: NAV / SEARCH render in yellow because "you tried
+	// to type and nothing happened" is the most common confusion
+	// point for new users (afreeland reported this), and the
+	// attention-grabbing color makes the mode visible without having
+	// to read the word.
 	modeTag := "INPUT"
+	modeTagColor := meshGreen
 	switch m.mode {
 	case modeNav:
 		modeTag = "NAV"
+		modeTagColor = mhYellow
 	case modeSearch:
 		modeTag = "SEARCH"
+		modeTagColor = mhYellow
 	case modeHelp:
 		modeTag = "HELP"
+		modeTagColor = mhCyan
 	}
+	modeTagStyled := label.Render("[") +
+		lipgloss.NewStyle().
+			Foreground(lipgloss.Color(modeTagColor)).
+			Bold(true).
+			Render(modeTag) +
+		label.Render("]")
 	var right string
 	if m.mode == modeInput {
 		// Byte counter lives in the mode badge while composing — the
@@ -178,10 +198,9 @@ func (m model) renderChannelStatus() string {
 			counterStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color(mhFG))
 		}
-		right = counterStyle.Render(counterTxt) + " " +
-			label.Render("["+modeTag+"]")
+		right = counterStyle.Render(counterTxt) + " " + modeTagStyled
 	} else {
-		right = label.Render("[" + modeTag + "]")
+		right = modeTagStyled
 	}
 	if m.flash != "" {
 		// Flash color depends on kind — errors / hints in dim lavender,
@@ -230,7 +249,12 @@ func (m model) renderInputRow() string {
 	// The byte counter lives in the [INPUT] badge on the top status
 	// row so it stays visible regardless of composition length;
 	// nothing here on the right.
-	prefix := green.Render("["+m.currentChannel+"] ") + amber.Render("› ")
+	// Same bracket treatment the channel tabs + mode tag use — grey
+	// brackets framing the colored content. Channel name stays
+	// mesh-green so the input prompt reads "where you're typing"
+	// at a glance.
+	prefix := dim.Render("[") + green.Render(m.currentChannel) +
+		dim.Render("] ") + amber.Render("› ")
 	return " " + prefix + m.input.View()
 }
 

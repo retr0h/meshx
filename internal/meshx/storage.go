@@ -403,8 +403,11 @@ func loadMessages(db *sql.DB, channel string, limit int) ([]messageItem, error) 
 		msg.mine = mine != 0
 		// Historic rows may have been written before sanitizeMessageText
 		// landed in applyTextMessage. Clean on read so old end-of-day
-		// reports don't smear the pane border on replay.
-		msg.text = sanitizeMessageText(msg.text)
+		// reports don't smear the pane border on replay AND so the
+		// corruption flag gets stamped onto historic rows that have
+		// invalid bytes baked into SQLite — they pick up the ⚠ marker
+		// + dim styling on next launch without any migration.
+		msg.text, msg.corrupted = sanitizeMessageText(msg.text)
 		out = append(out, msg)
 	}
 	if err := rows.Err(); err != nil {

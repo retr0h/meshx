@@ -243,6 +243,15 @@ type messageItem struct {
 	// for "me" / system lines / demo seeds.
 	fromNum uint32
 
+	// corrupted — true when sanitizeMessageText replaced bad bytes
+	// or dropped non-printable runes from the body. Drives the ⚠
+	// marker + dim italic styling on the row so the user knows the
+	// content isn't trustworthy without throwing away the salvageable
+	// printable bits. Not persisted — recomputed from msg.text on
+	// every replay so a future sanitizer change automatically
+	// re-evaluates historic rows.
+	corrupted bool
+
 	// style — notice-row styling knob set by the m.notice() writer.
 	// nil for chat rows; non-nil for every `-!-` entry (storage,
 	// whois, splash banner, future error/success pulses). Lets the

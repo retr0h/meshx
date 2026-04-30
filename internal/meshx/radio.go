@@ -36,20 +36,100 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
-// sanitizeMessageText normalizes line endings in peer-originated text.
-// Real-radio payloads (e.g. solar-node end-of-day reports) ship CRLF;
-// a lone \r left on a continuation line ships to the terminal as
-// carriage-return and snaps the cursor back to column 0, smearing
-// the next row's left pane border into the message body. Called at
-// the ingress boundary (applyTextMessage) and on replay from SQLite
-// (loadMessages) so historic rows written before this fix get
-// sanitized on read.
+// sanitizeMessageText scrubs peer-originated text so one bad packet
+// can't wreck the message-pane layout for every row that follows.
+//
+// Two distinct hazards we cleanse:
+//
+//  1. **CR / CRLF.** Real-radio payloads (e.g. solar-node end-of-day
+//     reports) ship CRLF; a lone \r left on a continuation line
+//     ships to the terminal as a carriage-return and snaps the
+//     cursor back to column 0, smearing the next row's left pane
+//     border into the message body. Normalize CRLF → \n, drop
+//     bare \r.
+//
+//  2. **Invalid UTF-8 / non-printable bytes.** A buggy firmware
+//     can drop a byte mid-codepoint, or a custom app can misuse
+//     the TEXT_MESSAGE_APP port to ship binary, or an RF bit-flip
+//     can corrupt the payload. Go's UTF-8 decoder substitutes
+//     U+FFFD ("replacement character", renders as ◆ / ?) and
+//     terminals' width-measurement of those runes drifts from
+//     go-runewidth's, which makes the right-aligned stats column
+//     wrap to its own line, knocks pane-height accounting off by
+//     one for every row below, and cascades into duplicated input
+//     prompts + jumbled splash art. Replace U+FFFD with `?` and
+//     drop any other non-printable rune (keeping \n).
+//
+// Called at the ingress boundary (applyTextMessage) and on replay
+// from SQLite (loadMessages) so historic rows written before this
+// fix get cleaned on read. Returns the cleaned text and a boolean
+// reporting whether any sanitization beyond CRLF normalization
+// actually had to happen — caller stores the flag on the message
+// so the renderer can tag the row with a ⚠ marker + dim styling
+// (corrupted text we can partially read is more useful than
+// silently-cleaned text the user has no reason to distrust).
 var messageTextSanitizer = strings.NewReplacer("\r\n", "\n", "\r", "")
 
-func sanitizeMessageText(s string) string {
-	return messageTextSanitizer.Replace(s)
+// okMessageRune is the allow-list for sanitizeMessageText. The only
+// runes we actively reject are control characters (Cc) other than
+// newline — NUL, BEL, ESC, etc. — which can scramble the terminal.
+// EVERYTHING else passes: letters, marks, symbols, format chars
+// (ZWJ U+200D, variation selectors U+FE0F, BOM), surrogate-paired
+// emoji, the lot. Modern emoji ZWJ sequences like 🙋🏼‍♂️ decompose
+// into base + skin tone + ZWJ + sign + VS16; a stricter filter
+// shreds them apart and falsely tags the row corrupted. The actual
+// layout hazard is invalid UTF-8 (handled by the utf8.RuneError
+// case in the caller), not exotic-but-valid Unicode.
+func okMessageRune(r rune) bool {
+	if r == '\n' {
+		return true
+	}
+	return !unicode.Is(unicode.Cc, r)
+}
+
+func sanitizeMessageText(s string) (string, bool) {
+	s = messageTextSanitizer.Replace(s)
+	// Fast path: well-behaved UTF-8 with no control bytes goes
+	// straight through. Saves an allocation on the common case
+	// (every legitimate chat message).
+	if utf8.ValidString(s) && !strings.ContainsRune(s, utf8.RuneError) {
+		clean := true
+		for _, r := range s {
+			if !okMessageRune(r) {
+				clean = false
+				break
+			}
+		}
+		if clean {
+			return s, false
+		}
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	corrupted := false
+	for _, r := range s {
+		switch {
+		case r == utf8.RuneError:
+			// Invalid UTF-8 OR explicit U+FFFD — both decode to the
+			// same rune. Substitute with `?` so the user sees there
+			// was a byte here without the layout-breaking ambiguous
+			// width.
+			b.WriteByte('?')
+			corrupted = true
+		case okMessageRune(r):
+			b.WriteRune(r)
+		default:
+			// Drop the rune. Control chars (NUL, ESC, BEL, etc.),
+			// surrogates, and other non-printable runes have no place
+			// in a chat message and only ever break things downstream.
+			corrupted = true
+		}
+	}
+	return b.String(), corrupted
 }
 
 // upsertNode inserts a NodeInfo arrival or updates the existing row
@@ -232,18 +312,20 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 	}
 	mine := msg.fromNum == m.myNodeNum
 
+	cleanText, corrupted := sanitizeMessageText(msg.text)
 	item := messageItem{
-		time:     msg.at.Format("15:04"),
-		from:     from,
-		mine:     mine,
-		text:     sanitizeMessageText(msg.text),
-		status:   "ack",
-		hops:     msg.hops,
-		snr:      msg.snr,
-		packetID: msg.packetID,
-		replyID:  msg.replyID,
-		fromNum:  msg.fromNum,
-		sentAt:   msg.at,
+		time:      msg.at.Format("15:04"),
+		from:      from,
+		mine:      mine,
+		text:      cleanText,
+		corrupted: corrupted,
+		status:    "ack",
+		hops:      msg.hops,
+		snr:       msg.snr,
+		packetID:  msg.packetID,
+		replyID:   msg.replyID,
+		fromNum:   msg.fromNum,
+		sentAt:    msg.at,
 	}
 
 	// Dedupe replays from the radio's RAM queue. When we reconnect

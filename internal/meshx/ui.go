@@ -1681,7 +1681,22 @@ func (m model) renderMessageRow(
 	if len(bodyLines) == 0 {
 		bodyLines = []string{""}
 	}
-	firstStyled := text.Render(padOrTruncate(bodyLines[0], textW))
+	// Corrupted bodies — sanitizeMessageText replaced bad bytes with
+	// '?' and dropped non-printable runes, so the text is still
+	// readable but no longer trustworthy. Re-style the row in dim
+	// lavender italic and prepend a ⚠ marker on the first line so
+	// the user immediately sees "this row had garbage in it" without
+	// us having to throw away the salvageable printable chars.
+	bodyText := text
+	firstLine := bodyLines[0]
+	if msg.corrupted {
+		bodyText = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(mhLavender)).
+			Background(lipgloss.Color(rowBg)).
+			Italic(true)
+		firstLine = "⚠ " + firstLine
+	}
+	firstStyled := bodyText.Render(padOrTruncate(firstLine, textW))
 	_ = bang // kept in scope for any future command-styling use
 
 	// Build the right-hand segment with a 2-space gap — both on the
@@ -1715,7 +1730,7 @@ func (m model) renderMessageRow(
 			contW = textW
 		}
 		for _, bl := range bodyLines[1:] {
-			cont := accent + hangIndent + text.Render(padOrTruncate(bl, contW))
+			cont := accent + hangIndent + bodyText.Render(padOrTruncate(bl, contW))
 			row += "\n" + cont
 		}
 	}

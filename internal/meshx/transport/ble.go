@@ -48,6 +48,46 @@ func enableBLEAdapterOnce(adapter *bluetooth.Adapter) error {
 	return errBLEEnable
 }
 
+// scannedAddrs caches the bluetooth.Address (which carries the
+// CBPeripheral pointer on macOS) of every UUID we've successfully
+// scanned in this process. The cache lets in-process redials skip
+// the 8-second scan: tinygo-bluetooth's adapter.Connect accepts an
+// Address directly, and CoreBluetooth keeps the peripheral handle
+// valid across Disconnect → reConnect as long as the central
+// manager is the same.
+//
+// Why this matters: macOS CoreBluetooth deduplicates advertisement
+// callbacks for already-known peripherals on the SAME central, so
+// after the first Disconnect the next Scan often never re-fires
+// the callback for the same UUID — even though the radio is
+// advertising and an entirely fresh process (different central)
+// would find it instantly. Skipping the scan entirely on redial
+// avoids the deadlock. Falls through to the scan path if the
+// cached Connect fails (peripheral genuinely gone).
+var (
+	scannedAddrsMu sync.Mutex
+	scannedAddrs   = map[string]bluetooth.Address{}
+)
+
+func cacheScannedAddr(uuid string, addr bluetooth.Address) {
+	scannedAddrsMu.Lock()
+	defer scannedAddrsMu.Unlock()
+	scannedAddrs[uuid] = addr
+}
+
+func loadScannedAddr(uuid string) (bluetooth.Address, bool) {
+	scannedAddrsMu.Lock()
+	defer scannedAddrsMu.Unlock()
+	addr, ok := scannedAddrs[uuid]
+	return addr, ok
+}
+
+func forgetScannedAddr(uuid string) {
+	scannedAddrsMu.Lock()
+	defer scannedAddrsMu.Unlock()
+	delete(scannedAddrs, uuid)
+}
+
 // Meshtastic BLE GATT layout. These UUIDs are defined in the
 // Meshtastic firmware's BluetoothPhoneAPI and never change across
 // firmware versions, so hard-coding is fine (and the alternative —
@@ -98,10 +138,45 @@ func DialBLE(addr string) (Client, error) {
 		return nil, fmt.Errorf("enable bluetooth adapter: %w — is Bluetooth on?", err)
 	}
 
-	// Start a scan and wait for the target advertisement. DELIBERATELY
-	// do not StopScan inside the callback — keep the scanner live
-	// through Connect so CoreBluetooth retains the peripheral's cache
-	// entry. See the function doc for why.
+	// Fast path: if we've already scanned this UUID once in this
+	// process, try connecting directly. macOS CoreBluetooth keeps
+	// the CBPeripheral handle valid across Disconnect → reConnect
+	// on the same central, so a redial after a session drop hits
+	// here and skips the 8-second scan that would otherwise time
+	// out (CoreBluetooth dedupes advertisement callbacks for
+	// already-known peripherals on the same central — the very bug
+	// that made restart-meshx work but in-process retry not).
+	if cachedAddr, ok := loadScannedAddr(addr); ok {
+		if c, err := connectAndWire(adapter, cachedAddr, addr); err == nil {
+			return c, nil
+		}
+		// Cached peripheral didn't connect — peripheral genuinely
+		// gone (radio rebooted, OS cache evicted), or cached handle
+		// is stale. Drop the cache and fall through to a fresh scan.
+		forgetScannedAddr(addr)
+	}
+
+	// Slow path: scan for the target advertisement.
+	found, scanErr := scanForDevice(adapter, addr)
+	if scanErr != nil {
+		return nil, scanErr
+	}
+
+	c, err := connectAndWire(adapter, found.Address, addr)
+	if err != nil {
+		return nil, err
+	}
+	cacheScannedAddr(addr, found.Address)
+	return c, nil
+}
+
+// scanForDevice runs a bounded BLE scan for the target UUID.
+// DELIBERATELY does not StopScan inside the callback — keeps the
+// scanner live through the eventual Connect call so CoreBluetooth
+// retains the peripheral's cache entry. The caller stops the scan
+// after Connect returns. Returns the matching ScanResult or an
+// error after bleScanTimeout.
+func scanForDevice(adapter *bluetooth.Adapter, addr string) (bluetooth.ScanResult, error) {
 	foundCh := make(chan bluetooth.ScanResult, 1)
 	scanErrCh := make(chan error, 1)
 	go func() {
@@ -116,23 +191,40 @@ func DialBLE(addr string) (Client, error) {
 		})
 	}()
 
-	var found bluetooth.ScanResult
 	select {
-	case found = <-foundCh:
+	case found := <-foundCh:
+		// Caller will Connect + StopScan. We DON'T stop here so the
+		// CBPeripheral cache entry survives into the Connect call.
+		// scanErrCh will drain when caller eventually stops.
+		go func() {
+			<-scanErrCh
+		}()
+		return found, nil
 	case <-time.After(bleScanTimeout):
 		_ = adapter.StopScan()
 		<-scanErrCh
-		return nil, fmt.Errorf(
+		return bluetooth.ScanResult{}, fmt.Errorf(
 			"ble: device %s not found within %s — is it powered on and in range?",
 			addr, bleScanTimeout,
 		)
 	}
+}
 
-	device, err := adapter.Connect(found.Address, bluetooth.ConnectionParams{})
-	// Stop the scanner now that Connect has returned. Safe to call
-	// even if Connect errored — idempotent in tinygo-bluetooth.
+// connectAndWire is the post-Address half of DialBLE — Connect plus
+// the GATT discovery that builds a fully-wired bleClient. Shared by
+// the cached-peripheral fast path and the post-scan slow path. On
+// error, leaves no resources held: any Connect that succeeded is
+// Disconnected before the error returns.
+func connectAndWire(
+	adapter *bluetooth.Adapter,
+	bleAddr bluetooth.Address,
+	addr string,
+) (*bleClient, error) {
+	device, err := adapter.Connect(bleAddr, bluetooth.ConnectionParams{})
+	// Stop any scanner that may still be running from the slow path —
+	// idempotent on tinygo-bluetooth so safe to call even when the
+	// fast path didn't start one.
 	_ = adapter.StopScan()
-	<-scanErrCh
 	if err != nil {
 		return nil, fmt.Errorf("connect %s: %w", addr, err)
 	}
@@ -142,7 +234,7 @@ func DialBLE(addr string) (Client, error) {
 	// delegate reported didFailToConnect). Calling DiscoverServices
 	// on that zero Device derefs a nil CBPeripheral and segfaults
 	// inside the library. Detect here and emit an actionable error.
-	if found.Address.String() == "" || device.Address == (bluetooth.Address{}) {
+	if bleAddr.String() == "" || device.Address == (bluetooth.Address{}) {
 		return nil, fmt.Errorf(
 			"connect %s: CoreBluetooth did not establish a peripheral handle "+
 				"(usual causes: another client such as the phone app or "+

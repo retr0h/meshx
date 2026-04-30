@@ -106,6 +106,18 @@ const (
 // ~200ms), short enough that a dead device fails fast.
 const bleScanTimeout = 8 * time.Second
 
+// bleConnectTimeout bounds adapter.Connect, which tinygo-bluetooth
+// v0.15.0 does NOT bound itself on macOS — it parks on an
+// NSCondition waiting for didConnectPeripheral / didFailToConnect
+// from the central delegate. After the laptop sleeps and wakes,
+// CoreBluetooth invalidates cached CBPeripheral handles but never
+// fires either callback, so without an outer timeout the cached
+// fast path wedges Dial forever (the reconnect banner sticks at
+// "attempt 1 · dialing now"). 15s is generous enough for a healthy
+// connect (typically <1s) but lets a stale handle fail fast so the
+// outer loop can drop the cache and re-scan.
+const bleConnectTimeout = 15 * time.Second
+
 // bleReadBuf is the FromRadio scratch buffer. Meshtastic's recommended
 // MTU is 517 bytes; the BLE spec caps a single read at the negotiated
 // MTU minus 1 (the ATT response header). 512 leaves a little slack
@@ -220,7 +232,39 @@ func connectAndWire(
 	bleAddr bluetooth.Address,
 	addr string,
 ) (*bleClient, error) {
-	device, err := adapter.Connect(bleAddr, bluetooth.ConnectionParams{})
+	// adapter.Connect blocks on a CoreBluetooth delegate callback
+	// that never fires when the cached peripheral handle is stale
+	// (post-sleep, post-radio-reboot). Wrap in a goroutine + select
+	// so a stuck call returns control to the caller after
+	// bleConnectTimeout instead of wedging the whole reconnect loop.
+	// The goroutine itself may leak if Connect truly never returns —
+	// acceptable: the OS will eventually deliver some callback (or
+	// the process exits), and the caller has already moved on to a
+	// fresh scan.
+	type connectResult struct {
+		device bluetooth.Device
+		err    error
+	}
+	resultCh := make(chan connectResult, 1)
+	go func() {
+		d, e := adapter.Connect(bleAddr, bluetooth.ConnectionParams{})
+		resultCh <- connectResult{device: d, err: e}
+	}()
+	var device bluetooth.Device
+	var err error
+	select {
+	case res := <-resultCh:
+		device, err = res.device, res.err
+	case <-time.After(bleConnectTimeout):
+		_ = adapter.StopScan()
+		return nil, fmt.Errorf(
+			"connect %s: CoreBluetooth did not respond within %s "+
+				"(usual cause: cached peripheral handle invalidated by "+
+				"OS sleep/wake; the next attempt will drop the cache and "+
+				"re-scan)",
+			addr, bleConnectTimeout,
+		)
+	}
 	// Stop any scanner that may still be running from the slow path —
 	// idempotent on tinygo-bluetooth so safe to call even when the
 	// fast path didn't start one.

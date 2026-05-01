@@ -36,16 +36,55 @@ import (
 // Enable function" and aborts. The pump's reconnect loop redials on
 // every transport drop, so without this guard every retry would fail
 // for the wrong reason. Enable once per process, cache the result.
+// bleEnableState is a re-armable Enable gate. We can't use sync.Once
+// here anymore: ResetBLE deliberately tears down the adapter so the
+// next DialBLE has to rebuild it, and sync.Once won't fire its
+// closure twice. Instead, mutex + bool: enabled goes false in
+// ResetBLE, true after a successful Enable.
 var (
-	bleEnableOnce sync.Once
-	errBLEEnable  error
+	bleEnableMu sync.Mutex
+	bleEnabled  bool
 )
 
 func enableBLEAdapterOnce(adapter *bluetooth.Adapter) error {
-	bleEnableOnce.Do(func() {
-		errBLEEnable = adapter.Enable()
-	})
-	return errBLEEnable
+	bleEnableMu.Lock()
+	defer bleEnableMu.Unlock()
+	if bleEnabled {
+		return nil
+	}
+	if err := adapter.Enable(); err != nil {
+		return err
+	}
+	bleEnabled = true
+	return nil
+}
+
+// ResetBLE tears down the underlying tinygo-bluetooth adapter and
+// clears the per-process peripheral cache so the next DialBLE
+// rebuilds CoreBluetooth state from scratch. Use as the recovery
+// hammer when ordinary reconnect attempts wedge — typically after
+// a long OS sleep where cached CBPeripheral handles are
+// invalidated silently AND the central's advertisement-dedup
+// table refuses to re-discover known peripherals on a fresh scan.
+// A fresh CBCentralManager has an empty dedup table, so the
+// subsequent scan finds the radio normally.
+//
+// Caller MUST guarantee no Scan / Connect / Read / Write is in
+// flight on this adapter when ResetBLE is invoked. The reconnect
+// loop in pump.go satisfies this naturally: it only calls Reset
+// after the previous session goroutine has exited and before
+// kicking off the next Dial.
+func ResetBLE() error {
+	if err := bluetooth.DefaultAdapter.Reset(); err != nil {
+		return err
+	}
+	bleEnableMu.Lock()
+	bleEnabled = false
+	bleEnableMu.Unlock()
+	scannedAddrsMu.Lock()
+	scannedAddrs = map[string]bluetooth.Address{}
+	scannedAddrsMu.Unlock()
+	return nil
 }
 
 // scannedAddrs caches the bluetooth.Address (which carries the

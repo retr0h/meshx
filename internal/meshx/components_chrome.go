@@ -169,8 +169,107 @@ func (topDivider) Render(box Box) string {
 	return style.Render(bar)
 }
 
+// channelTabCell renders one channel tab in the bottom chanRow:
+// active tabs are bracketed in pink; inactive in dim lavender. An
+// unread > 0 emits a yellow `(N)` badge (orange `(N!)` for private
+// channels — encrypted DMs and secret rooms get a louder cue).
+func channelTabCell(name string, idx int, active, private bool, unread int) string {
+	activeTab := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
+	activeBracket := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	other := lipgloss.NewStyle().Foreground(lipgloss.Color(mhLavender))
+	otherIdx := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	unreadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
+	alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
+
+	marker := ""
+	if unread > 0 {
+		if private {
+			marker = " " + alertStyle.Render(fmt.Sprintf("(%d!)", unread))
+		} else {
+			marker = " " + unreadStyle.Render(fmt.Sprintf("(%d)", unread))
+		}
+	}
+	idxStr := fmt.Sprintf("%d:", idx+1)
+	if active {
+		return activeBracket.Render("[") +
+			activeTab.Render(idxStr+name) + marker +
+			activeBracket.Render("]")
+	}
+	return " " + otherIdx.Render(idxStr) + other.Render(name) + marker + " "
+}
+
+// modeTagCell renders the `[INPUT]` / `[NAV]` / `[SEARCH]` / `[HELP]`
+// mode badge at the right edge of the chanRow. Color tracks mode:
+// mesh-green when typing, yellow when navigating/searching, cyan
+// when help is open. Bracketed in dim drained either way.
+func modeTagCell(mode mode) string {
+	label := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	tag := "INPUT"
+	color := meshGreen
+	switch mode {
+	case modeNav:
+		tag = "NAV"
+		color = mhYellow
+	case modeSearch:
+		tag = "SEARCH"
+		color = mhYellow
+	case modeHelp:
+		tag = "HELP"
+		color = mhCyan
+	}
+	return label.Render("[") +
+		lipgloss.NewStyle().
+			Foreground(lipgloss.Color(color)).
+			Bold(true).
+			Render(tag) +
+		label.Render("]")
+}
+
+// byteCounterCell renders the live N/228 wire-byte counter. Color
+// ramps from drained → fg → yellow → orange → pink as the message
+// approaches the Meshtastic 228-byte text-payload cap, so the user
+// sees they're about to be truncated before they hit Enter.
+func byteCounterCell(used, capBytes int) string {
+	pct := float64(used) / float64(capBytes)
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	switch {
+	case used >= capBytes:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
+	case pct >= 0.9:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
+	case pct >= 0.75:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
+	case pct >= 0.5:
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color(mhFG))
+	}
+	return style.Render(fmt.Sprintf("%d/%d", used, capBytes))
+}
+
+// flashBannerCell renders the optional transient `m.flash` message
+// emitted by /command dispatch. Affirmative messages (acks, hints)
+// render in mesh-green; rejection-style messages ("unknown",
+// "usage:", "use ", "no ") render in dim italic so the user reads
+// them as advisory rather than success.
+func flashBannerCell(flash string) string {
+	if flash == "" {
+		return ""
+	}
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color(mhGreen))
+	lower := strings.ToLower(flash)
+	if strings.HasPrefix(lower, "unknown") ||
+		strings.HasPrefix(lower, "usage") ||
+		strings.HasPrefix(lower, "use ") ||
+		strings.HasPrefix(lower, "no ") {
+		style = lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
+	}
+	return style.Render(flash)
+}
+
 // channelTabsRow is the bottom status row showing channel tabs +
-// optional flash banner + sync indicator + byte counter + mode tag.
+// optional flash banner + byte counter + mode tag. The Render
+// method just composes the per-cell builders into a Row — the
+// per-segment styling logic lives in the *Cell helpers above so
+// each piece is independently testable + reusable.
 type channelTabsRow struct {
 	m model
 }
@@ -178,109 +277,37 @@ type channelTabsRow struct {
 // Render produces the chanRow at exactly box.Width × 1.
 func (c channelTabsRow) Render(box Box) string {
 	m := c.m
-	label := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	activeTab := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhPink)).
-		Bold(true)
-	activeBracket := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	other := lipgloss.NewStyle().Foreground(lipgloss.Color(mhLavender))
-	otherIdx := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	unread := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
-	alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
 
-	// Channel tabs.
+	// Left side: channel tabs (one per known channel; pre-sync
+	// placeholder when the radio's ChannelInfo packet hasn't landed).
 	var tabs []string
 	for i, ch := range m.channels {
-		marker := ""
-		if ch.unread > 0 {
-			if ch.private {
-				marker = " " + alertStyle.Render(fmt.Sprintf("(%d!)", ch.unread))
-			} else {
-				marker = " " + unread.Render(fmt.Sprintf("(%d)", ch.unread))
-			}
-		}
-		idx := fmt.Sprintf("%d:", i+1)
-		if ch.name == m.currentChannel {
-			tab := activeBracket.Render("[") +
-				activeTab.Render(idx+ch.name) + marker +
-				activeBracket.Render("]")
-			tabs = append(tabs, tab)
-		} else {
-			tab := " " + otherIdx.Render(idx) + other.Render(ch.name) + marker + " "
-			tabs = append(tabs, tab)
-		}
+		tabs = append(tabs, channelTabCell(
+			ch.name, i, ch.name == m.currentChannel, ch.private, ch.unread,
+		))
 	}
-	// Pre-sync placeholder.
 	if len(tabs) == 0 {
-		tab := activeBracket.Render("[") +
-			activeTab.Render("1:#default") +
-			activeBracket.Render("]")
-		tabs = append(tabs, tab)
+		tabs = append(tabs, channelTabCell("#default", 0, true, false, 0))
 	}
 	tabsStr := strings.Join(tabs, " ")
 
-	// Mode tag.
-	modeTag := "INPUT"
-	modeTagColor := meshGreen
-	switch m.mode {
-	case modeNav:
-		modeTag = "NAV"
-		modeTagColor = mhYellow
-	case modeSearch:
-		modeTag = "SEARCH"
-		modeTagColor = mhYellow
-	case modeHelp:
-		modeTag = "HELP"
-		modeTagColor = mhCyan
-	}
-	modeTagStyled := label.Render("[") +
-		lipgloss.NewStyle().
-			Foreground(lipgloss.Color(modeTagColor)).
-			Bold(true).
-			Render(modeTag) +
-		label.Render("]")
-
-	// Right-side composite: byte counter (in input mode) + mode tag,
-	// optionally prefixed by flash banner.
+	// Right side: flash banner (optional) + byte counter (input mode
+	// only) + mode tag (always). Composed as one styled string so the
+	// flex-pad cell can split the leftover width evenly.
+	modeTag := modeTagCell(m.mode)
 	var right string
 	if m.mode == modeInput {
-		n := wirePayloadBytes(m.input.Value())
-		pct := float64(n) / float64(meshtasticMaxTextBytes)
-		counterTxt := fmt.Sprintf("%d/%d", n, meshtasticMaxTextBytes)
-		counterStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-		switch {
-		case n >= meshtasticMaxTextBytes:
-			counterStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhPink)).Bold(true)
-		case pct >= 0.9:
-			counterStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhOrange)).Bold(true)
-		case pct >= 0.75:
-			counterStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhYellow)).Bold(true)
-		case pct >= 0.5:
-			counterStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhFG))
-		}
-		right = counterStyle.Render(counterTxt) + " " + modeTagStyled
+		right = byteCounterCell(
+			wirePayloadBytes(m.input.Value()),
+			meshtasticMaxTextBytes,
+		) + " " + modeTag
 	} else {
-		right = modeTagStyled
+		right = modeTag
 	}
-	if m.flash != "" {
-		flashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhGreen))
-		lower := strings.ToLower(m.flash)
-		if strings.HasPrefix(lower, "unknown") ||
-			strings.HasPrefix(lower, "usage") ||
-			strings.HasPrefix(lower, "use ") ||
-			strings.HasPrefix(lower, "no ") {
-			flashStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
-		}
-		right = flashStyle.Render(m.flash) + "  " + right
+	if flash := flashBannerCell(m.flash); flash != "" {
+		right = flash + "  " + right
 	}
 
-	// Three-cell layout: leading "    " + tabs (fixed) + flex spacer
-	// + right (fixed) + trailing space. Row truncates if overall too
-	// wide for box; pads with the flex spacer if too narrow.
 	tabsW := cells(tabsStr)
 	rightW := cells(right)
 	row := Row{Cells: []Cell{
@@ -291,11 +318,51 @@ func (c channelTabsRow) Render(box Box) string {
 	return row.Render(Box{Width: box.Width, Height: 1})
 }
 
-// inputBar renders the bottom input row: the always-on textinput in
-// modeInput, the search prompt in modeSearch, the nav-mode hint in
-// modeNav. The textinput's Width is sized FROM the box budget rather
-// than statically — this is the architectural fix for pending-wrap:
-// no row will ever target the very last column.
+// inputPromptCell renders the `[chan] › ` chrome prefix that
+// prefixes the always-on textinput in modeInput. Channel name in
+// mesh-green, brackets dim, the irssi-style `›` prompt arrow in
+// amber so the cursor's about-to-type position pops visually.
+func inputPromptCell(channel string) string {
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	green := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
+	amber := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
+	if channel == "" {
+		channel = "#default"
+	}
+	return dim.Render("[") + green.Render(channel) +
+		dim.Render("] ") + amber.Render("› ")
+}
+
+// searchPromptCell renders the modeSearch prompt: amber `/ ` lead,
+// the textinput, and a trailing dim hint string. The textinput is
+// passed in pre-rendered because it's a stateful bubbles view that
+// the parent owns; this Component just stitches the chrome around
+// it.
+func searchPromptCell(searchInput string) string {
+	amber := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	return " " + amber.Render("/ ") + searchInput +
+		"  " + dim.Render("ESC cancel · Enter match")
+}
+
+// navHintCell renders the dim modeNav hint strip ("NAV · j/k · r
+// reply · …") that replaces the input prompt while the user is
+// walking the scrollback. Single-line, dim drained throughout so
+// it reads as a passive cheatsheet, not active chrome.
+func navHintCell() string {
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	return " " + dim.Render(
+		"NAV · j/k · r reply · R resend · w whois · t trace · p ping · "+
+			"P pin · * star · ESC back to input · / search · ? help",
+	)
+}
+
+// inputBar renders the bottom input row. Composed from the
+// per-mode cell builders above: searchPromptCell in modeSearch,
+// navHintCell in modeNav, inputPromptCell + textinput in modeInput.
+// The textinput's Width is sized FROM the box budget so no row
+// ever targets the very last column — the architectural fix for
+// the pending-wrap bug class.
 type inputBar struct {
 	m model
 }
@@ -303,56 +370,35 @@ type inputBar struct {
 // Render fills box with one input row.
 func (i inputBar) Render(box Box) string {
 	m := i.m
-	amber := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
-	green := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 
 	if m.mode == modeSearch {
-		left := " " + amber.Render("/ ") + m.searchInput.View() +
-			"  " + dim.Render("ESC cancel · Enter match")
 		return Row{Cells: []Cell{
-			{Content: left, Width: -1},
+			{Content: searchPromptCell(m.searchInput.View()), Width: -1},
 		}}.Render(Box{Width: box.Width, Height: 1})
 	}
 	if m.mode == modeNav {
-		hint := " " + dim.Render(
-			"NAV · j/k · r reply · R resend · w whois · t trace · p ping · "+
-				"P pin · * star · ESC back to input · / search · ? help",
-		)
 		return Row{Cells: []Cell{
-			{Content: hint, Width: -1},
+			{Content: navHintCell(), Width: -1},
 		}}.Render(Box{Width: box.Width, Height: 1})
 	}
 
-	// Input mode: " [chan] › " prefix followed by the textinput. The
-	// textinput's Width is computed from box, leaving the leading
-	// space + prefix consumed and never overflowing.
-	chName := m.currentChannel
-	if chName == "" {
-		chName = "#default"
-	}
-	prefix := dim.Render("[") + green.Render(chName) +
-		dim.Render("] ") + amber.Render("› ")
-	leading := " "
-	prefixW := cells(prefix)
-	leadingW := cells(leading)
-	// bubbles/textinput.View() has an off-by-one: when the value is
-	// non-empty it returns Width+1 visible cells (the cursor block is
-	// emitted at the position AFTER the typed text rather than over
-	// it). If we set m.input.Width = tiW directly the row overflows
-	// by 1 cell on every keystroke, padCells's truncate kicks in, and
-	// the "…" tail clobbers the styled prefix back to plain white. So
-	// we shave 1 cell off the textinput budget when there's content.
+	// Input mode: " " + `[chan] › ` prefix + textinput. The textinput
+	// Width is computed from box.Width minus chrome so it never
+	// overflows. cursorPad = 1 reserves 1 cell for bubbles/textinput's
+	// off-by-one cursor: when the value is non-empty it returns
+	// Width+1 visible cells (cursor block emitted AFTER the typed
+	// text, not over it).
+	prefix := inputPromptCell(m.currentChannel)
+	const leading = " "
 	const cursorPad = 1
-	tiW := box.Width - leadingW - prefixW - cursorPad
+	tiW := box.Width - cells(leading) - cells(prefix) - cursorPad
 	if tiW < 1 {
 		tiW = 1
 	}
 	m.input.Width = tiW
-	row := Row{Cells: []Cell{
+	return Row{Cells: []Cell{
 		{Content: leading + prefix + m.input.View(), Width: -1},
-	}}
-	return row.Render(Box{Width: box.Width, Height: 1})
+	}}.Render(Box{Width: box.Width, Height: 1})
 }
 
 // cells is a thin local shorthand that funnels every measurement

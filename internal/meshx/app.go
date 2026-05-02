@@ -778,7 +778,9 @@ func newModel(demo *Demo, dest string) model {
 		// newest entry in the log — sits right at the bottom above
 		// the input bar on launch just like every other recent
 		// message, and scrolls UP naturally as fresh chat arrives.
-		m.noticeCard(splashAsNotices(chosenSplash)...)
+		// Pass the cached self callsign so the splash tagline reads
+		// "as <callsign>" instead of a hardcoded credit.
+		m.noticeCard(splashAsNotices(chosenSplash, m.myCallsign())...)
 		return m
 	}
 
@@ -790,8 +792,15 @@ func newModel(demo *Demo, dest string) model {
 	m.nodes = append([]nodeItem(nil), demo.Nodes...)
 	m.messages = append([]messageItem(nil), demo.Messages...)
 	// Splash notices land at the tail so the BitchX greeter is the
-	// newest entry in the log — same behaviour as live mode.
-	m.noticeCard(splashAsNotices(chosenSplash)...)
+	// newest entry in the log — same behaviour as live mode. In
+	// demo mode the "me" callsign is set up below from demo.NodeNum;
+	// pass the demo's first-row callsign so the splash tagline
+	// renders against the demo identity.
+	demoCallsign := ""
+	if len(demo.Nodes) > 0 {
+		demoCallsign = demo.Nodes[0].callsign
+	}
+	m.noticeCard(splashAsNotices(chosenSplash, demoCallsign)...)
 	if len(demo.Channels) > 0 {
 		m.currentChannel = demo.Channels[0].name
 	}

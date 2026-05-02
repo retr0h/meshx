@@ -445,18 +445,10 @@ func (m model) renderRadarPane(width, height int) string {
 	}.Render(Box{Width: canvasW, Height: rows})
 
 	// Legend — ring scale + top 5 closest by name with bearing.
+	// All styling lives in components_radar.go (radarLegendCell +
+	// radarPeerLine); this orchestrator only picks the data.
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	keyDim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
-	legend := []string{
-		"",
-		fmt.Sprintf("  %s  outer ring = %.1f km  ·  %s direct-RF  %s multi-hop  %s me",
-			keyDim.Render("scale:"),
-			maxKm,
-			lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true).Render("●"),
-			lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan)).Render("·"),
-			lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta)).Bold(true).Render("@"),
-		),
-	}
+	legend := []string{"", radarLegendCell(maxKm)}
 	n := len(plots)
 	if n > 5 {
 		n = 5
@@ -465,10 +457,10 @@ func (m model) renderRadarPane(width, height int) string {
 		legend = append(legend, dim.Render("  closest:"))
 		for i := 0; i < n; i++ {
 			p := plots[i]
-			legend = append(legend,
-				fmt.Sprintf("    %s  %s %3.0f°  %.1f km",
-					padOrTruncate(p.node.callsign, 22),
-					compassAbbr(p.bearing), p.bearing, p.distKm))
+			legend = append(legend, radarPeerLine(
+				p.node.callsign, compassAbbr(p.bearing),
+				p.bearing, p.distKm,
+			))
 		}
 	}
 

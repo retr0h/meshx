@@ -155,7 +155,7 @@ func pickSplash() splashVariant {
 // m.noticeCard; that's the same single-entrypoint discipline every
 // other `-!-` writer follows and keeps splash out of the "rogue
 // m.messages = append" smell.
-func splashAsNotices(v splashVariant) []noticeRow {
+func splashAsNotices(v splashVariant, callsign string) []noticeRow {
 	// Normalize row widths to the variant's widest row so every line
 	// centers at the same column. Hand-drawn block-art tends to
 	// drift a cell or two row-to-row (slab-classic had row 0 at 35
@@ -199,19 +199,11 @@ func splashAsNotices(v splashVariant) []noticeRow {
 	// Blank separator between logo and tagline.
 	out = append(out, noticeRow{text: "", style: noticeStyle{}})
 
-	// Tagline — cyan brand, drained punctuation, magenta handle,
-	// bracketed with the mesh-green ░▒▓█▓▒░ spark. Pre-styled body
-	// passed as-is; the renderer doesn't wrap it in sys.Render since
-	// center means the style split stays visible.
-	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
-	magenta := lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta))
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	spark := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Render("░▒▓█▓▒░")
-	tagline := spark + " " +
-		cyan.Render("Meshtastic") + dim.Render(" messenger  ·  by ") +
-		magenta.Render("retr0h") + " " + spark
+	// Tagline — composed from the splashTaglineCell() Component
+	// which owns the gradient + per-token coloring (mesh-green
+	// spark, cyan brand, dim punctuation, magenta handle).
 	out = append(out, noticeRow{
-		text:  tagline,
+		text:  splashTaglineCell(callsign),
 		style: noticeStyle{center: true},
 	})
 

@@ -71,6 +71,56 @@ func paneEmptyMessage(lines ...string) string {
 	return strings.Join(out, "\n")
 }
 
+// splashTaglineCell renders the BitchX-style tagline that hangs
+// under the splash banner: `░▒▓█▓▒░ Meshtastic messenger  ·  as
+// <callsign> ░▒▓█▓▒░` — or just `░▒▓█▓▒░ Meshtastic messenger
+// ░▒▓█▓▒░` when callsign is empty (fresh boot, no cached self).
+// Sparks bracket the brand in mesh-green, product name in cyan,
+// connector in dim drained, callsign in magenta.
+func splashTaglineCell(callsign string) string {
+	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
+	magenta := lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta))
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	spark := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(meshGreen)).
+		Render("░▒▓█▓▒░")
+	if callsign == "" {
+		return spark + " " + cyan.Render("Meshtastic") +
+			dim.Render(" messenger") + " " + spark
+	}
+	return spark + " " +
+		cyan.Render("Meshtastic") + dim.Render(" messenger  ·  as ") +
+		magenta.Render(callsign) + " " + spark
+}
+
+// Selectable wraps a pre-rendered row string with the selection
+// chrome (gutter pad, optional ██ cursor / │ search-hit marker,
+// row bg tint) used by every list pane. The Inner string is one
+// or more lines (separator '\n'); each line gets the same chrome
+// treatment so multi-line message rows read as a single
+// continuous selection.
+//
+// This is a Component-style wrapper around wrapSelection: pass it
+// the row Inner + flags, get the decorated rectangle back. Used
+// where callers want the React-style "compose Components" idiom
+// instead of the function-call form.
+type Selectable struct {
+	Inner     string
+	Selected  bool
+	SearchHit bool
+	RowBg     string
+}
+
+// Render fills box with the selection-decorated row. Box.Width is
+// taken as the row's full width; Box.Height is informational only
+// (Inner already determines the row count).
+func (s Selectable) Render(box Box) string {
+	if s.RowBg == "" {
+		return wrapSelection(s.Inner, s.Selected, s.SearchHit, box.Width)
+	}
+	return wrapSelection(s.Inner, s.Selected, s.SearchHit, box.Width, s.RowBg)
+}
+
 // channelRowLine renders one /channels overlay row at exactly
 // contentW cells. The row is a flex-body Component with the channel
 // name + optional unread badge stitched as cells; pre-styled so the

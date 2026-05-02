@@ -94,13 +94,19 @@ const (
 // the moment its Render output doesn't match the requested Box.
 const alignAssertEnv = "MESHX_LAYOUT_ASSERT"
 
+// layoutAssertEnabled is read once at process start. renderAndCheck is
+// on the per-frame hot path (every pane, every keystroke), so resolving
+// the env var via os.Getenv on each call is a real allocation cost for
+// the assertion-off case that's the production default.
+var layoutAssertEnabled = os.Getenv(alignAssertEnv) == "1"
+
 // renderAndCheck invokes a Component.Render and, in assert mode,
 // validates the output matches the requested Box exactly. Used by
 // composition primitives so a buggy child surfaces with a clear
 // message at the parent's call site.
 func renderAndCheck(c Component, box Box) string {
 	out := c.Render(box)
-	if os.Getenv(alignAssertEnv) != "1" {
+	if !layoutAssertEnabled {
 		return out
 	}
 	if box.Empty() {
@@ -459,6 +465,122 @@ type ComponentFunc func(box Box) string
 // closure. Lets a function literal stand in anywhere a Component is
 // expected — same pattern as net/http's HandlerFunc.
 func (f ComponentFunc) Render(box Box) string { return f(box) }
+
+// Viewport is a scrollable single-pane window over a slice of pre-
+// styled lines. Given a list of Lines, a Scroll offset (0-based), and
+// the rest of the layout (Reserved rows for chrome, optional Footer
+// shown beneath the viewport content), Render returns a block of
+// exactly Box.Height lines × Box.Width cells that displays
+// Lines[clamped(Scroll) : clamped(Scroll)+visible] padded out.
+//
+// The clamp is one-way: Scroll is silently pulled back into range if
+// it exceeds the content. The caller (model state) doesn't need to
+// know the visible-row count; it just bumps Scroll and the Component
+// figures out the math from its Box.
+//
+// Reserved tells the Component how many rows of its Box are already
+// committed to non-content chrome (like a "line N/M" indicator
+// appended to the output). The visible-row budget is Box.Height -
+// Reserved. Set Reserved to len(Footer) when wiring the helper:
+// helpPane uses Reserved=2 (a blank row + a one-line scroll indicator).
+//
+// Footer is rendered AFTER the viewport content and BEFORE any final
+// blank padding rows. Each Footer line is padded to Box.Width via
+// padCells, so callers can hand pre-styled chrome (italic dim, etc.)
+// without knowing the box dimensions.
+type Viewport struct {
+	Lines    []string
+	Scroll   int
+	Reserved int
+	Footer   []string
+}
+
+// Render fills box with the visible window of Lines plus Footer.
+// Output has exactly box.Height lines, each exactly box.Width cells
+// per ansiCells. Blank rows are appended below if the visible content
+// + Footer don't fill the box.
+func (v Viewport) Render(box Box) string {
+	if box.Empty() {
+		return ""
+	}
+	visible := box.Height - v.Reserved
+	if visible < 1 {
+		visible = 1
+	}
+	scroll := v.Scroll
+	maxScroll := len(v.Lines) - visible
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	end := scroll + visible
+	if end > len(v.Lines) {
+		end = len(v.Lines)
+	}
+
+	out := make([]string, 0, box.Height)
+	for i := scroll; i < end; i++ {
+		out = append(out, padCells(v.Lines[i], box.Width))
+	}
+	// Pad the visible-content region with blank rows so the footer
+	// always sits at its declared offset (Box.Height - Reserved + 1)
+	// rather than floating up against the last content line.
+	for i := end - scroll; i < visible; i++ {
+		out = append(out, strings.Repeat(" ", box.Width))
+	}
+	for _, fl := range v.Footer {
+		out = append(out, padCells(fl, box.Width))
+	}
+	for len(out) < box.Height {
+		out = append(out, strings.Repeat(" ", box.Width))
+	}
+	if len(out) > box.Height {
+		out = out[:box.Height]
+	}
+	return strings.Join(out, "\n")
+}
+
+// RawBlock wraps a pre-rendered multi-line string and Renders it sized
+// to a Box. Each line is right-padded to Box.Width via padCells
+// (keycap-aware) and the block is padded out to Box.Height with blank
+// rows. Lines wider than Box.Width are truncated with an ellipsis.
+//
+// This is the bridge between legacy string-emitting renderers and the
+// Component layout tree: until every pane is a real composed Component
+// tree, the orchestrators (renderChannelsPane / renderMessagesPane /
+// etc.) emit pre-formed strings and wrap them in RawBlock at the
+// pane → Bordered seam. Replaces the previous fitToBox function and
+// the inline ComponentFunc{strings.Split + padCells + strings.Repeat}
+// adapters that lived in renderBorderedPane and renderHelpView — same
+// behavior, one canonical implementation.
+type RawBlock struct {
+	Content string
+}
+
+// Render satisfies Component for RawBlock. Empty box short-circuits
+// to "" so an off-screen pane doesn't allocate. Lines are split on
+// '\n'; missing lines are filled with all-space rows so the output
+// always meets the box.Height contract.
+func (r RawBlock) Render(box Box) string {
+	if box.Empty() {
+		return ""
+	}
+	lines := strings.Split(r.Content, "\n")
+	out := make([]string, box.Height)
+	for i := 0; i < box.Height; i++ {
+		if i < len(lines) {
+			out[i] = padCells(lines[i], box.Width)
+		} else {
+			out[i] = strings.Repeat(" ", box.Width)
+		}
+	}
+	return strings.Join(out, "\n")
+}
 
 // Centered horizontally centers a single-line or multi-line content
 // block within its parent's Box. Each line of Content is measured

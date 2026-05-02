@@ -130,32 +130,125 @@ func splashTaglineCell(callsign string) string {
 		magenta.Render(callsign) + " " + spark
 }
 
-// Selectable wraps a pre-rendered row string with the selection
-// chrome (gutter pad, optional ██ cursor / │ search-hit marker,
-// row bg tint) used by every list pane. The Inner string is one
-// or more lines (separator '\n'); each line gets the same chrome
-// treatment so multi-line message rows read as a single
-// continuous selection.
-//
-// This is a Component-style wrapper around wrapSelection: pass it
-// the row Inner + flags, get the decorated rectangle back. Used
-// where callers want the React-style "compose Components" idiom
-// instead of the function-call form.
-type Selectable struct {
-	Inner     string
-	Selected  bool
-	SearchHit bool
-	RowBg     string
+// gutterWidth is the left margin reserved for the selection
+// indicator — 2-cell block + 1-cell gap. Matches tlock's double-cell
+// "pixel" sizing so the selected row reads as chunky 8-bit, not a
+// thin vertical line.
+const gutterWidth = 3
+
+// dimRow strips ANSI styling from a pre-rendered row and re-applies
+// a single dim color, so non-matching rows fade into the background
+// when a node filter is active. The matching rows stay fully colored
+// — so the filtered set reads as a "highlighted path" through the
+// feed that j/k navigates.
+func dimRow(s string) string {
+	// Drop existing SGR escapes.
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			end := i + 2
+			for end < len(s) && s[end] != 'm' {
+				end++
+			}
+			if end < len(s) {
+				end++
+			}
+			i = end
+			continue
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Faint(true).
+		Render(b.String())
 }
 
-// Render fills box with the selection-decorated row. Box.Width is
-// taken as the row's full width; Box.Height is informational only
-// (Inner already determines the row count).
-func (s Selectable) Render(box Box) string {
-	if s.RowBg == "" {
-		return wrapSelection(s.Inner, s.Selected, s.SearchHit, box.Width)
+// wrapSelection applies the 8-bit block-highlight style to the whole
+// row. Three mutually-exclusive states:
+//
+//   - selected:    thick mesh-green ██ gutter + drained bg tint (cursor)
+//   - searchHit:   thin mesh-green │  gutter + dim-green bg tint (match)
+//   - neither:     empty gutter so widths stay aligned
+//
+// Selection wins over a hit when both are true.
+//
+// Optional rowBg — when non-empty, the neutral (no marker) row also
+// fills to full width with that bg color so the row reads as a solid
+// rectangle instead of a ragged left-aligned fragment. Used by the
+// message list view; left empty for channel / node rows.
+func wrapSelection(content string, selected, searchHit bool, width int, rowBg ...string) string {
+	if width <= gutterWidth {
+		width = gutterWidth + 1
 	}
-	return wrapSelection(s.Inner, s.Selected, s.SearchHit, box.Width, s.RowBg)
+	innerW := width - gutterWidth
+
+	neutralBg := ""
+	if len(rowBg) > 0 {
+		neutralBg = rowBg[0]
+	}
+
+	// No marker — just keep the 3-col left pad for alignment. If a
+	// rowBg was provided, force every line to the full inner width
+	// with that bg so the tint covers the whole row (no drop-off
+	// at the right).
+	if !selected && !searchHit {
+		pad := strings.Repeat(" ", gutterWidth)
+		parts := strings.Split(content, "\n")
+		for i, p := range parts {
+			cur := ansiCells(p)
+			line := p
+			if cur > innerW {
+				line = padCells(p, innerW)
+			} else if cur < innerW && neutralBg != "" {
+				tail := strings.Repeat(" ", innerW-cur)
+				tail = lipgloss.NewStyle().
+					Background(lipgloss.Color(neutralBg)).
+					Render(tail)
+				line = p + tail
+			} else if cur < innerW {
+				line = p + strings.Repeat(" ", innerW-cur)
+			}
+			parts[i] = pad + line
+		}
+		return strings.Join(parts, "\n")
+	}
+
+	// Selection (cursor) style wins over search-hit when both apply.
+	var gutter string
+	var bg string
+	if selected {
+		gutter = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(meshGreen)).
+			Bold(true).
+			Render("██") + " "
+		bg = selectionRowBg
+	} else {
+		gutter = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(meshGreen)).
+			Bold(true).
+			Render("│ ") + " "
+		bg = searchHitRowBg // dim neon-green background for a subtle row pop
+	}
+
+	// Bg tint covers the whole row — no more, no less. We pad to
+	// exactly innerW cells via padCells (keycap-aware) BEFORE handing
+	// to lipgloss, so the lipgloss style only paints; it does not
+	// resize. Going through Width()+MaxWidth() instead lets lipgloss's
+	// runewidth-based measurement undercount keycap emoji and overpad
+	// the row by 1 cell, which lands the right ║ frame outside the
+	// column on rows whose body contains a keycap.
+	lineStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color(bg)).
+		Foreground(lipgloss.Color(mhFG))
+
+	parts := strings.Split(content, "\n")
+	for i, p := range parts {
+		parts[i] = gutter + lineStyle.Render(padCells(p, innerW))
+	}
+	return strings.Join(parts, "\n")
 }
 
 // channelRowLine renders one /channels overlay row at exactly
@@ -302,6 +395,66 @@ func peerRowLine(
 		{Content: dim.Render(bearing), Width: -1, PadStyle: bg},
 	}
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
+}
+
+// searchHitRowBg is the deep-green tint applied to rows whose
+// content matches the active /search filter — same hex used by
+// /nodes (renderUserCell), /nearby, and the messages pane so a hit
+// reads with one consistent visual signal across every list. Picked
+// to be distinct from selectionRowBg (#2a4a5a) so a row that is BOTH
+// selected AND a hit still picks one obvious state — selection wins.
+const searchHitRowBg = "#0e2618"
+
+// distanceBarCell renders the per-row distance bar used by /nearby:
+// `filled` filled cells of `▓` in mesh-green plus `barMax-filled`
+// empty cells of `░` in dim drained, all on rowBg so the bar stays
+// painted through the zebra stripe. Returns a single styled string
+// of exactly barMax cells per ansiCells.
+//
+//	▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░       (filled=9, barMax=24)
+//
+// Bar colors are fixed (mesh-green / drained) regardless of peer
+// state — the bar is a distance ruler, not a state indicator; node
+// state colors live in nodePresentationFor.
+func distanceBarCell(filled, barMax int, rowBg string) string {
+	bgCol := lipgloss.Color(rowBg)
+	filledStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(meshGreen)).
+		Background(bgCol)
+	emptyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Background(bgCol)
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > barMax {
+		filled = barMax
+	}
+	return filledStyle.Render(strings.Repeat("▓", filled)) +
+		emptyStyle.Render(strings.Repeat("░", barMax-filled))
+}
+
+// distanceBarUnknownCell renders the bar for the "(you)" / no-distance
+// case — a flat row of `·` in dim drained so the row reads as "no
+// distance to plot" rather than "zero distance" (which would imply
+// you're directly on top of the antenna).
+func distanceBarUnknownCell(barMax int, rowBg string) string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Background(lipgloss.Color(rowBg))
+	return style.Render(strings.Repeat("·", barMax))
+}
+
+// earlierCountLine renders the "… N earlier" scrollback indicator
+// shown above the messages pane when the user has scrolled back past
+// the natural tail. Dim drained italic so it reads as advisory
+// chrome, not data — same visual rhythm as paneEmptyMessage and the
+// help overlay's scroll indicator.
+func earlierCountLine(n int) string {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Italic(true).
+		Render(fmt.Sprintf("   … %d earlier", n))
 }
 
 // helpSectionLine renders a section heading inside the /help

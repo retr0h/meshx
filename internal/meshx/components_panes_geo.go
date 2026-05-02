@@ -20,13 +20,20 @@
 
 package meshx
 
-// ui_map.go — the /nearby and /radar overlay renderers.
+// components_panes_geo.go — the /nearby and /radar pane Components,
+// plus the peerPlot data prep both consume.
 //
-// Both surfaces need (bearing, distance) from our position to every
-// peer with a known fix. They share a `peerPlot` collection helper
-// so the math runs once per render; /nearby sorts by distance and
-// formats a bar chart, /radar projects onto a polar grid. Geometry
-// helpers (haversineKm, bearingDeg, compassAbbr) live in geo.go.
+// Both panes need (bearing, distance) from our position to every
+// peer with a known fix. They share a peerPlot collection helper so
+// the math runs once per render; nearbyPane sorts by distance and
+// renders a horizontal bar chart, radarPane projects onto a polar
+// grid via the radarCanvas Component. Geometry helpers (haversineKm,
+// bearingDeg, compassAbbr) live in geo.go.
+//
+// File naming follows the components_*.go convention: this is the
+// geo flavor of the pane Component layer, sibling to components_panes.go
+// (channels / nodes / messages / help) and components_radar.go (the
+// 2D rune-canvas Component the radar pane consumes).
 
 import (
 	"fmt"
@@ -137,12 +144,22 @@ func (m model) collectPeerPlots() []peerPlot {
 	return plots
 }
 
-// renderNearbyPane — distance-sorted roster. Each row has a
-// distance bar scaled to the farthest peer in the list, absolute
-// km, compass bearing, and the 8-point cardinal abbreviation.
-// Selection highlights the cursor via the shared wrapSelection
-// pipeline; j/k walks step through peers in order.
-func (m model) renderNearbyPane(width, height int) string {
+// nearbyPane is the /nearby distance-sorted peer roster — peer rows
+// under a NEARBY header, with a no-fix / no-peers placeholder when
+// GPS data isn't available. Each row carries a distance bar scaled
+// to the farthest peer, absolute km, compass bearing, and the 8-
+// point cardinal abbreviation. Selection highlights the cursor via
+// the shared wrapSelection pipeline; j/k walks step through peers
+// in order.
+type nearbyPane struct{ m model }
+
+// Render returns the bordered pane sized exactly to box. Owns the
+// no-fix / no-peers explainer paths AND the row-rendering loop —
+// peerRowLine + distanceBarCell handle per-row styling, this method
+// composes them into the bordered pane.
+func (p nearbyPane) Render(box Box) string {
+	width, height := box.Width, box.Height
+	m := p.m
 	header := paneHeaderCell("NEARBY", m.focused == paneNodes)
 
 	// No self-fix — distances + bearings are meaningless without an
@@ -251,34 +268,23 @@ func (m model) renderNearbyPane(width, height int) string {
 		if isSel {
 			rowBg = selectionRowBg
 		}
-		bgCol := lipgloss.Color(rowBg)
 		isSelf := m.myNodeNum != 0 && p.node.nodeNum == m.myNodeNum
 
 		// Distance bar + dist + bearing columns are domain rendering
-		// (numbers + scale), not peer-state styling, so they stay
-		// here. peerRowLine owns sigil + name + chrome.
-		barStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(meshGreen)).
-			Background(bgCol)
-		barDimStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mhDrained)).
-			Background(bgCol)
-
+		// (numbers + scale), not peer-state styling. distanceBarCell /
+		// distanceBarUnknownCell live in components_overlays.go;
+		// peerRowLine owns sigil + name + chrome.
 		var distStr, bearingStr, barCol string
 		if isSelf {
 			distStr = padOrTruncate("(you)", 10)
 			bearingStr = "— home QTH"
-			barCol = barDimStyle.Render(strings.Repeat("·", barMax))
+			barCol = distanceBarUnknownCell(barMax, rowBg)
 		} else {
 			filled := int(math.Round(p.distKm / maxKm * barMax))
 			if filled < 1 {
 				filled = 1
 			}
-			if filled > barMax {
-				filled = barMax
-			}
-			barCol = barStyle.Render(strings.Repeat("▓", filled)) +
-				barDimStyle.Render(strings.Repeat("░", barMax-filled))
+			barCol = distanceBarCell(filled, barMax, rowBg)
 			distStr = padOrTruncate(fmt.Sprintf("%6.1f km", p.distKm), 10)
 			bearingStr = fmt.Sprintf("%s %3.0f°", compassAbbr(p.bearing), p.bearing)
 		}
@@ -304,10 +310,10 @@ func (m model) renderNearbyPane(width, height int) string {
 	)
 }
 
-// renderRadarPane — polar scope with peers plotted by (bearing,
-// distance). You sit at the centre; north is up, east is right.
-// Ring scale is adaptive: the farthest peer sets the outer ring
-// and we draw 4 concentric rings inside that.
+// radarPane is the /radar polar scope — peers plotted by (bearing,
+// distance) on a 2D rune canvas. You sit at the centre; north is up,
+// east is right. Ring scale is adaptive: the farthest peer sets the
+// outer ring and we draw 4 concentric rings inside that.
 //
 // Glyph choice:
 //   - '@' (pink, bold) = self, dead centre
@@ -318,7 +324,16 @@ func (m model) renderNearbyPane(width, height int) string {
 // highest-priority glyph wins (self > direct-RF > multi-hop). The
 // legend at the bottom surfaces the closest few by name so a busy
 // scope still reads as a directory of "who's close."
-func (m model) renderRadarPane(width, height int) string {
+type radarPane struct{ m model }
+
+// Render returns the bordered radar canvas sized exactly to box.
+// Owns the no-fix / no-peers explainer, the canvas drawing, the
+// peer-glyph plot, and the closest-peer legend — radarCanvas
+// Component handles per-cell SGR + bold-on-anchor; this method
+// composes the canvas + legend rows.
+func (p radarPane) Render(box Box) string {
+	width, height := box.Width, box.Height
+	m := p.m
 	header := paneHeaderCell("RADAR", m.focused == paneNodes)
 
 	// No self-fix — there's no centre to plot peers around. Same

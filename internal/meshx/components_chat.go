@@ -28,6 +28,74 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Zebra stripe bgs for message rows — dense mutt-style list where
+// every message has a solid bg and adjacent messages alternate
+// shade. No blank separators between — the color alternation IS the
+// visual separator, which keeps the grid continuous from top to
+// bottom of the pane and gives the whole feed a thick, woven feel.
+//
+// Two complementary mid-charcoal shades from the tokyo-night / max
+// headroom family — never pure black. Both read as tinted gray, not
+// void, so the zebra reads as soft alternation rather than harsh
+// contrast with the pane bg. selectionRowBg is the highlight tint
+// the cursor row wears in nav mode — distinct from searchHitRowBg
+// (#0e2618) so a selected-AND-hit row still picks one obvious state.
+const (
+	rowBgEven      = "#1a1b26" // cool tokyo-night base
+	rowBgOdd       = "#24283b" // one step lighter + barely-purple
+	selectionRowBg = "#2a4a5a"
+)
+
+// zebraBg returns the bg tint for the Nth message row in display
+// order. Even rows take rowBgEven, odd rowBgOdd; the alternation IS
+// the visual separator between rows.
+func zebraBg(i int) string {
+	if i%2 == 0 {
+		return rowBgEven
+	}
+	return rowBgOdd
+}
+
+// nickColorPalette is the accent-color ring used to hash peer
+// callsigns into distinct hues — irssi/weechat convention. Avoids
+// mesh-green (brand), magenta (reserved for "me"), and any
+// drained / lavender-adjacent tones that would blend with the
+// quiet labels elsewhere. Bright-saturated hues only so the glitch
+// Max Headroom read is loud and nicks pop off the log.
+var nickColorPalette = []string{
+	mhCyan,    // #00d4ff  neon cyan
+	mhYellow,  // #e5c07b  warm amber
+	mhOrange,  // #ffb86c  sunset
+	mhPink,    // #ff6ec7  hot pink
+	"#a78bfa", // electric violet
+	"#7dd3fc", // sky blue
+	"#facc15", // acid yellow
+	"#f472b6", // bubblegum
+}
+
+// nickColor deterministically maps a callsign to one of the peer
+// accent colors via FNV-1a plus a murmur3-style avalanche mix so
+// the low bits carry enough entropy for a good modulo distribution.
+// Raw FNV-1a on short near-duplicate strings ("node 0x…") clustered
+// several peers into the same bucket; the avalanche step spreads
+// them out. Same callsign → same color every time so the eye picks
+// each peer out of the log by hue. Empty / system rows fall back
+// to drained.
+func nickColor(callsign string) string {
+	if callsign == "" {
+		return mhDrained
+	}
+	var sum uint32 = 2166136261
+	for _, r := range callsign {
+		sum ^= uint32(r)
+		sum *= 16777619
+	}
+	sum ^= sum >> 16
+	sum *= 0x85ebca6b
+	sum ^= sum >> 13
+	return nickColorPalette[int(sum)%len(nickColorPalette)]
+}
+
 // chatRowParts holds the per-cell content for a regular chat row,
 // pre-composed by `chatRowFor` so the Component itself just stitches
 // `Row{Cells:...}` and renders. Splitting compute from render makes

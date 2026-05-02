@@ -374,6 +374,17 @@ type model struct {
 	// normally — losing persistence is preferable to crashing.
 	storageAlerted bool
 
+	// programSlot holds the *tea.Program once the bubbletea runtime is
+	// up. The pump goroutine needs program.Send(), but tea.NewProgram
+	// won't return the pointer until AFTER it has captured the model
+	// value. The slot is a heap-allocated struct whose address is
+	// stable across model copies — RunRadio creates one, stashes its
+	// address here BEFORE NewProgram captures the model, then writes
+	// program into the slot. Update reads slot.p when spawning the
+	// pump. Replaces the previous package-level globalProgramRef so
+	// state is per-Run and not visible outside this file.
+	programSlot *programSlot
+
 	// Live-radio state. Zero-value is "demo mode — no transport".
 	pump        *pump          // non-nil when connected to a real radio
 	connectDest string         // "" = demo, else "/dev/cu.usbmodem2101" / tcp host
@@ -486,22 +497,31 @@ func RunRadio(dest string) error {
 			_ = m.db.Close()
 		}
 	}()
+	// Allocate the program slot BEFORE handing the model to NewProgram —
+	// tea takes the model by value, but m.programSlot is a pointer so
+	// every copy of the model (the one tea holds, the ones produced by
+	// Update) sees the same underlying struct. We fill slot.p AFTER
+	// NewProgram returns; openPumpMsg reads it via m.programSlot.p.
+	slot := &programSlot{}
+	m.programSlot = slot
 	program := tea.NewProgram(m, tea.WithAltScreen())
-
-	// We need a reference to the program inside the pump so it can
-	// call program.Send() from its goroutine. Stash it on a shared
-	// ptr that Init() fills once the loop is up.
-	globalProgramRef = program
-	defer func() { globalProgramRef = nil }()
+	slot.p = program
+	defer func() { slot.p = nil }()
 
 	_, err := program.Run()
 	return err
 }
 
-// globalProgramRef is a small hand-off slot used because tea.Program
-// doesn't expose itself to models. The pump goroutine needs program.Send.
-// Scoped to one running Bubble Tea program at a time (which is the norm).
-var globalProgramRef *tea.Program
+// programSlot is a hand-off type that lets the model surface the
+// running *tea.Program to Update without resorting to package-level
+// state. RunRadio creates one, hands its address to the model before
+// tea.NewProgram captures the value, then writes program into the
+// slot once NewProgram returns. The pump goroutine needs Send and
+// only Update calls startPump — so reads of slot.p are confined to
+// the single goroutine that runs Update.
+type programSlot struct {
+	p *tea.Program
+}
 
 // pumpAttachedMsg hands the transport pump pointer into the model so
 // outbound messages (/cq, typed text) can enqueue ToRadio envelopes.
@@ -966,7 +986,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openPumpMsg:
 		// Program is running; safe to spawn the pump now.
-		if globalProgramRef == nil {
+		if m.programSlot == nil || m.programSlot.p == nil {
 			m.flash = "internal error: program ref missing"
 			return m, nil
 		}
@@ -984,7 +1004,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = m.reconnectFlashText()
 		m.flashSeen = m.flash
 		m.flashSeenAt = time.Now()
-		m.pump = startPump(msg.dest, globalProgramRef)
+		m.pump = startPump(msg.dest, m.programSlot.p)
 		return m, nil
 
 	case pumpAttachedMsg:

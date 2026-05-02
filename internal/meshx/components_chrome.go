@@ -158,6 +158,16 @@ func (s statusBar) Render(box Box) string {
 	return row.Render(Box{Width: box.Width, Height: 1})
 }
 
+// statusSegment wraps a styled value in the `░▒▓ value ▓▒░` tmux /
+// powerline gradient chrome. `content` is already styled (fg color +
+// bold etc.); `chromeColor` tints the ░▒▓ bars themselves. Consecutive
+// segments butt directly against each other for the classic
+// stacked-gradient look: `░▒▓ call ▓▒░░▒▓ hw ▓▒░`.
+func statusSegment(content, chromeColor string) string {
+	chrome := lipgloss.NewStyle().Foreground(lipgloss.Color(chromeColor))
+	return chrome.Render("░▒▓ ") + content + chrome.Render(" ▓▒░")
+}
+
 // topDivider is the full-width double-line ruler that separates the
 // status bar from the body.
 type topDivider struct{}

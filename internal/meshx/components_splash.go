@@ -27,6 +27,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// components_splash.go — splash banner data + the splashAsNotices
+// Component-style helper that converts a splashVariant into a
+// noticeRow slice (the same shape every other `-!-` notice writer
+// emits).
+//
 // BitchX pioneered the rotating-ANSI-logo splash — running the client
 // gave you a different graffiti art banner each launch. We pay homage:
 // meshx ships several block-art MESHX variants and picks one randomly
@@ -34,8 +39,9 @@ import (
 // / magenta / amber / pink) so launches feel alive and different.
 //
 // The art itself is composed from plain-text block characters — no
-// embedded ANSI — and tinted at render time via lipgloss so the
-// palette stays unified with the rest of the UI.
+// embedded ANSI — and tinted at render time via the splashTaglineCell
+// + noticeRow Components so the palette stays unified with the rest
+// of the UI.
 
 // splashVariant is one logo design — a set of raw text rows + a color
 // chooser function that says which color each row should render in.

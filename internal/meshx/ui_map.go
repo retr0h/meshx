@@ -499,26 +499,16 @@ func (m model) renderRadarPane(width, height int) string {
 	canvas[cy][cx] = '@'
 	colors[cy][cx] = mhMagenta
 
-	// Render each row to a styled string.
-	fgStyle := lipgloss.NewStyle()
-	var body strings.Builder
-	for r := 0; r < rows; r++ {
-		body.WriteString("  ")
-		for c := 0; c < cols; c++ {
-			ch := canvas[r][c]
-			color := colors[r][c]
-			if color == "" {
-				body.WriteRune(ch)
-				continue
-			}
-			styled := fgStyle.Foreground(lipgloss.Color(color))
-			if ch == '@' || ch == '●' {
-				styled = styled.Bold(true)
-			}
-			body.WriteString(styled.Render(string(ch)))
-		}
-		body.WriteString("\n")
-	}
+	// Radar canvas → multi-line styled string via the radarCanvas
+	// Component. The Component owns the per-cell SGR + bold-on-anchor
+	// rules and the Box-sized contract; this renderer just hands it
+	// the buffer + colors and gets back a properly-padded block.
+	canvasW := cols + 2 // 2-cell lead pad
+	canvasBlock := radarCanvas{
+		Canvas:  canvas,
+		Colors:  colors,
+		LeadPad: 2,
+	}.Render(Box{Width: canvasW, Height: rows})
 
 	// Legend — ring scale + top 5 closest by name with bearing.
 	// Re-bind dim here without italic: the function-scope dim is
@@ -551,7 +541,7 @@ func (m model) renderRadarPane(width, height int) string {
 		}
 	}
 
-	bodyRows := strings.Split(body.String(), "\n")
+	bodyRows := strings.Split(canvasBlock, "\n")
 	lines := make([]string, 0, 2+len(bodyRows)+len(legend))
 	lines = append(lines, header, "")
 	lines = append(lines, bodyRows...)

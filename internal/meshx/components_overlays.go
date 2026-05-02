@@ -55,34 +55,102 @@ func channelRowLine(name string, private bool, unread int, contentW int) string 
 	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
 }
 
-// peerRowLine renders one row of the /nearby distance roster. The
-// per-cell content is pre-styled by the caller (sigil color +
-// bg-styled spans for state, fav, self markers); this Component
-// owns the cell-budget layout so a wide name or long bearing label
-// can never push the right ║ frame out of column.
+// nodePresentation is the per-node styling tuple every BitchX-style
+// peer surface (/nodes, /nearby, /radar) renders from. Centralizing
+// the switch in one place means a node tagged "online" gets the
+// same green `@` sigil + neutral name on every overlay; a "muted"
+// peer reads as lavender `⊘` everywhere; etc.
+//
+// Priority: state default → fav promotes to yellow `+` → self
+// promotes to magenta `@`. Selection bumps name to bold + the
+// nodes-pane accent (magenta).
+type nodePresentation struct {
+	Sigil        string
+	SigilColor   string
+	NameColor    string
+	BracketColor string
+	Bold         bool
+}
+
+// nodePresentationFor computes the styling for one node tile from
+// the node + flags. Lives here (not in ui.go) so every pane that
+// renders a peer cell stays in lockstep — same sigil for "online"
+// everywhere, no drift across overlays.
+func nodePresentationFor(n nodeItem, isSelf, isSelected bool) nodePresentation {
+	state := n.currentState()
+	p := nodePresentation{
+		Sigil:        " ",
+		SigilColor:   mhDrained,
+		NameColor:    mhFG,
+		BracketColor: mhDrained,
+	}
+	switch state {
+	case "online":
+		p.Sigil = "@"
+		p.SigilColor = mhGreen
+	case "muted":
+		p.Sigil = "⊘"
+		p.SigilColor = mhLavender
+		p.NameColor = mhLavender
+	case "failed":
+		p.Sigil = "✗"
+		p.SigilColor = mhPink
+		p.NameColor = mhPink
+	case "offline":
+		p.Sigil = "·"
+		p.SigilColor = mhDrained
+		p.NameColor = mhDrained
+	}
+	if n.fav {
+		p.Sigil = "+"
+		p.SigilColor = mhYellow
+		p.NameColor = mhYellow
+	}
+	if isSelf {
+		p.Sigil = "@"
+		p.SigilColor = mhMagenta
+	}
+	if isSelected {
+		p.NameColor = mhMagenta
+		p.BracketColor = mhMagenta
+		p.Bold = true
+	}
+	return p
+}
+
+// peerRowLine renders one /nearby row from the node + flags. The
+// Component owns the styling switch (via nodePresentationFor) so
+// callers pass raw flags instead of pre-styled strings — React
+// "props in, styled output out".
 //
 //	"  " (2) + sigil (1) + " " (1) + name (22) + "  " (2) +
 //	bar (barW) + "  " (2) + dist (10) + "  " (2) + "·" (1) +
 //	"  " (2) + bearing (flex)
-//
-// Setting all chrome cells to fixed widths plus a flex bearing
-// column means the row always sums to exactly contentW cells per
-// ansiCells, regardless of pane width.
 func peerRowLine(
+	n nodeItem,
+	isSelf, isSelected bool,
 	rowBg string,
-	sigil string,
-	name string,
 	bar string,
 	barW int,
 	dist string,
 	bearing string,
 	contentW int,
 ) string {
+	pres := nodePresentationFor(n, isSelf, isSelected)
 	bg := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
-	dot := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained)).
+	state := n.currentState()
+	sigil := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(pres.SigilColor)).
 		Background(lipgloss.Color(rowBg)).
-		Render("·")
+		Bold(state == "online" || n.fav || isSelf).
+		Render(pres.Sigil)
+	name := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(pres.NameColor)).
+		Background(lipgloss.Color(rowBg)).
+		Render(padOrTruncate(n.callsign, 22))
+	dim := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Background(lipgloss.Color(rowBg))
 	cells := []Cell{
 		{Content: bg.Render("  "), Width: 2},
 		{Content: sigil, Width: 1},
@@ -91,11 +159,11 @@ func peerRowLine(
 		{Content: bg.Render("  "), Width: 2},
 		{Content: bar, Width: barW},
 		{Content: bg.Render("  "), Width: 2},
-		{Content: dist, Width: 10},
+		{Content: dim.Render(dist), Width: 10},
 		{Content: bg.Render("  "), Width: 2},
-		{Content: dot, Width: 1},
+		{Content: dim.Render("·"), Width: 1},
 		{Content: bg.Render("  "), Width: 2},
-		{Content: bearing, Width: -1, PadStyle: bg},
+		{Content: dim.Render(bearing), Width: -1, PadStyle: bg},
 	}
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
@@ -124,42 +192,35 @@ func helpKVLine(key, desc string, keyW, contentW int) string {
 }
 
 // userCellLine renders one [ @callsign ] tile for the /nodes grid
-// at exactly cellW cells. Sigil + name color derive from node state
-// + fav + self per the BitchX/IRC-users convention; brackets dim by
-// default, magenta when selected. The trailing right-bracket is
-// allocated as the final fixed-width cell so the tile is always
-// exactly cellW cells regardless of name length — Row's flex slot
-// handles the truncation/padding when the display name overflows.
-//
-// Cells:
+// from the node + flags. Sigil/colors/bold all derive from
+// nodePresentationFor so /nodes and /nearby always read the same
+// for the same peer state. Display name combines shortname +
+// callsign when the peer broadcasts a Meshtastic 4-char badge.
 //
 //	"[" (1) + " " (1) + sigil (1) + " " (1) + name (flex) + " " (1) + "]" (1)
-func userCellLine(
-	sigil string,
-	sigilColor string,
-	name string,
-	bracketColor string,
-	nameColor string,
-	bold bool,
-	cellW int,
-) string {
-	bracket := lipgloss.NewStyle().Foreground(lipgloss.Color(bracketColor))
-	if bold {
+func userCellLine(n nodeItem, isSelf, isSelected bool, cellW int) string {
+	pres := nodePresentationFor(n, isSelf, isSelected)
+	bracket := lipgloss.NewStyle().Foreground(lipgloss.Color(pres.BracketColor))
+	if pres.Bold {
 		bracket = bracket.Bold(true)
 	}
 	sigilStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(sigilColor)).
+		Foreground(lipgloss.Color(pres.SigilColor)).
 		Bold(true)
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(nameColor))
-	if bold {
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(pres.NameColor))
+	if pres.Bold {
 		nameStyle = nameStyle.Bold(true)
+	}
+	display := n.callsign
+	if n.shortName != "" {
+		display = n.shortName + " " + n.callsign
 	}
 	cells := []Cell{
 		{Content: bracket.Render("["), Width: 1},
 		{Content: " ", Width: 1},
-		{Content: sigilStyle.Render(sigil), Width: 1},
+		{Content: sigilStyle.Render(pres.Sigil), Width: 1},
 		{Content: " ", Width: 1},
-		{Content: nameStyle.Render(name), Width: -1},
+		{Content: nameStyle.Render(display), Width: -1},
 		{Content: " ", Width: 1},
 		{Content: bracket.Render("]"), Width: 1},
 	}

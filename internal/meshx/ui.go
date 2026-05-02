@@ -621,85 +621,14 @@ func (m model) renderNodesPane(width, height int) string {
 	)
 }
 
-// renderUserCell renders one [ @callsign ] bracketed cell in the
-// BitchX-Users grid. Selected cells get the green highlight gutter
-// (truncated into the cell).
+// renderUserCell renders one [ @callsign ] bracketed cell via the
+// userCellLine Component, which owns the entire styling switch
+// (sigil + colors + bold) through nodePresentationFor — same source
+// of truth /nearby uses, so the BitchX users grid and the distance
+// roster always render the same peer state with the same chrome.
 func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
-	// IRC-style sigil choice:
-	sigil := " "
-	sigilColor := mhDrained
-	state := n.currentState()
-	switch state {
-	case "online":
-		sigil = "@"
-		sigilColor = mhGreen
-	case "muted":
-		sigil = "⊘"
-		sigilColor = mhLavender
-	case "failed":
-		sigil = "✗"
-		sigilColor = mhPink
-	case "offline":
-		sigil = "·"
-		sigilColor = mhDrained
-	}
-	if n.fav {
-		sigil = "+"
-		sigilColor = mhYellow
-	}
-
-	// Name stays neutral fg for online nodes — the green `@` sigil
-	// alone carries the "alive" pulse (irssi / BitchX user-list
-	// convention). Non-online states do tint the name since those
-	// ARE worth surfacing at a glance.
-	nameColor := mhFG
-	switch state {
-	case "offline":
-		nameColor = mhDrained
-	case "failed":
-		nameColor = mhPink
-	case "muted":
-		nameColor = mhLavender
-	}
-	if n.fav {
-		nameColor = mhYellow
-	}
-	// Self-marker — the logged-in radio's sigil picks up the
-	// magenta "me" color reserved in palette.go so users can
-	// spot their own tile at a glance. Name keeps its normal
-	// state-derived color so the tile reads like every other
-	// row visually; the purple `@` is the sole signal that this
-	// is you.
-	if m.myNodeNum != 0 && n.nodeNum == m.myNodeNum {
-		sigil = "@"
-		sigilColor = mhMagenta
-	}
-	// Selection highlight uses the nodes pane's own accent (magenta).
-	// Every pane's selected item takes that pane's accent so the
-	// focus indicator visually belongs to the pane it's in — avoids
-	// mesh-green sprawl across brand / input / online-sigils / this.
-	if selected {
-		nameColor = mhMagenta
-	}
-
-	bracketColor := mhDrained
-	if selected {
-		bracketColor = mhMagenta
-	}
-	// Display name: "shortname longname" when the peer broadcasts
-	// a Meshtastic 4-char shortname, longname alone otherwise.
-	// Disambiguates rows that share a longname (two "retr0h" radios
-	// with distinct shortnames) and matches the iPhone app's
-	// "shortname (!hex)" treatment — short identifier first.
-	display := n.callsign
-	if n.shortName != "" {
-		display = n.shortName + " " + n.callsign
-	}
-	cell := userCellLine(
-		sigil, sigilColor, display,
-		bracketColor, nameColor, selected, cellW,
-	)
-
+	isSelf := m.myNodeNum != 0 && n.nodeNum == m.myNodeNum
+	cell := userCellLine(n, isSelf, selected, cellW)
 	// If a search query is active and this cell's callsign matches,
 	// wrap in the same dim-green hit bg that rows use — gives users
 	// a visible "these are the matches" marker in the grid.

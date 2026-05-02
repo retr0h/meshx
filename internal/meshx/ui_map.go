@@ -258,77 +258,22 @@ func (m model) renderNearbyPane(width, height int) string {
 			rowBg = selectionRowBg
 		}
 		bgCol := lipgloss.Color(rowBg)
-
-		// Sigil + name color derived from the live state — same
-		// switch /nodes uses so a peer reads consistently across
-		// both overlays. Self is marked in magenta (the "me"
-		// color reserved in palette.go); fav beats state; self
-		// beats fav so the logged-in radio always stands out.
-		state := p.node.currentState()
-		sigil := " "
-		sigilColor := mhDrained
-		nameColor := mhFG
-		switch state {
-		case "online":
-			sigil = "@"
-			sigilColor = mhGreen
-		case "muted":
-			sigil = "⊘"
-			sigilColor = mhLavender
-			nameColor = mhLavender
-		case "failed":
-			sigil = "✗"
-			sigilColor = mhPink
-			nameColor = mhPink
-		case "offline":
-			sigil = "·"
-			sigilColor = mhDrained
-			nameColor = mhDrained
-		}
-		if p.node.fav {
-			sigil = "+"
-			sigilColor = mhYellow
-			nameColor = mhYellow
-		}
-		// Self-marker — only the sigil picks up the magenta "me"
-		// color. Name + distance columns stay on their normal
-		// state-derived styling so the row reads the same as
-		// every other peer; the purple `@` is the sole signal
-		// that this is the logged-in radio.
 		isSelf := m.myNodeNum != 0 && p.node.nodeNum == m.myNodeNum
-		if isSelf {
-			sigil = "@"
-			sigilColor = mhMagenta
-		}
-		sigilStyled := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(sigilColor)).
-			Background(bgCol).
-			Bold(state == "online" || p.node.fav || isSelf).
-			Render(sigil)
-		nameStyled := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(nameColor)).
-			Background(bgCol).
-			Render(padOrTruncate(p.node.callsign, 22))
+
+		// Distance bar + dist + bearing columns are domain rendering
+		// (numbers + scale), not peer-state styling, so they stay
+		// here. peerRowLine owns sigil + name + chrome.
 		barStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(meshGreen)).
 			Background(bgCol)
 		barDimStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(mhDrained)).
 			Background(bgCol)
-		dim := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mhDrained)).
-			Background(bgCol)
-		spacer := lipgloss.NewStyle().Background(bgCol)
 
-		// Self row: zero-distance "0.0 km · N 0°" is technically
-		// accurate but reads like a rendering bug. Use "(you)" +
-		// "— home QTH" + a dimmed-dots bar so the row declares
-		// "this is anchor, not a datapoint." Colors stay dim
-		// (not purple) — the magenta sigil already signals self.
-		var distCol, bearingCol, barCol string
+		var distStr, bearingStr, barCol string
 		if isSelf {
-			distCol = dim.Render(padOrTruncate("(you)", 10))
-			bearingCol = dim.Render("— home QTH")
+			distStr = padOrTruncate("(you)", 10)
+			bearingStr = "— home QTH"
 			barCol = barDimStyle.Render(strings.Repeat("·", barMax))
 		} else {
 			filled := int(math.Round(p.distKm / maxKm * barMax))
@@ -340,17 +285,15 @@ func (m model) renderNearbyPane(width, height int) string {
 			}
 			barCol = barStyle.Render(strings.Repeat("▓", filled)) +
 				barDimStyle.Render(strings.Repeat("░", barMax-filled))
-			distCol = dim.Render(padOrTruncate(fmt.Sprintf("%6.1f km", p.distKm), 10))
-			bearingCol = dim.Render(fmt.Sprintf("%s %3.0f°", compassAbbr(p.bearing), p.bearing))
+			distStr = padOrTruncate(fmt.Sprintf("%6.1f km", p.distKm), 10)
+			bearingStr = fmt.Sprintf("%s %3.0f°", compassAbbr(p.bearing), p.bearing)
 		}
-
 		row := peerRowLine(
-			rowBg, sigilStyled, nameStyled, barCol, barMax,
-			distCol, bearingCol,
+			*p.node, isSelf, isSel, rowBg,
+			barCol, barMax, distStr, bearingStr,
 			paneInnerWidth(width)-gutterWidth,
 		)
 		lines = append(lines, wrapSelection(row, isSel, false, paneInnerWidth(width), rowBg))
-		_ = spacer
 	}
 
 	// Clamp selection after the slice-size changes (peers come and

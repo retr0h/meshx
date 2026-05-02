@@ -544,13 +544,12 @@ func (m model) renderNodesPane(width, height int) string {
 	}
 
 	header := paneHeaderCell("NODES", m.focused == paneNodes)
-	count := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained)).
-		Render(fmt.Sprintf("  (#mesh: %d/%d · sort: %s)", online, total, m.nodeSort.label()))
-	legend := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained)).
-		Italic(true).
-		Render("legend:  @online  +pinned  ⊘muted  ✗failed  ·stale")
+	count := paneCountSuffix(fmt.Sprintf(
+		"  (#mesh: %d/%d · sort: %s)", online, total, m.nodeSort.label(),
+	))
+	legend := paneLegendLine(
+		"legend:  @online  +pinned  ⊘muted  ✗failed  ·stale",
+	)
 
 	sorted := m.sortedNodes()
 
@@ -760,7 +759,7 @@ func (m model) renderMessagesPane(width, height int) string {
 			pinFirst: pinFirst, pinLast: pinLast, faded: faded,
 			rowsInner: paneInnerWidth(width),
 		}
-		h := messageRowVisualHeight(msg)
+		h := messageRowVisualHeight(m, msg)
 		line := row.Render(Box{Width: paneInnerWidth(width), Height: h})
 		lines = append(lines, line)
 	}

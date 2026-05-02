@@ -69,14 +69,17 @@ func (r messageRow) Render(box Box) string {
 // messageItem will occupy when rendered. Mirrors the bookkeeping in
 // tailStartList / renderMessagesPane — system blocks with embedded
 // '\n' are taller, an `acks` sub-line adds 1, and `replyID` threading
-// adds the quote line above. The pane's VStack uses this to allocate
-// each row's flow-axis budget.
-func messageRowVisualHeight(msg messageItem) int {
+// adds the quote line above ONLY when the parent message is still
+// in m.messages (renderMessageRow drops the threading quote when
+// the parent has been reaped, so claiming +1 height in that case
+// would leave the messageRow Component padding a blank row above
+// — visible as a phantom gap between two unrelated messages).
+func messageRowVisualHeight(m model, msg messageItem) int {
 	h := 1 + strings.Count(msg.text, "\n")
 	if msg.acks != "" {
 		h++
 	}
-	if msg.replyID != 0 {
+	if msg.replyID != 0 && m.findMessageByPacketID(msg.replyID) != nil {
 		h++
 	}
 	return h

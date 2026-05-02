@@ -173,9 +173,9 @@ func (m model) renderNearbyPane(width, height int) string {
 	if m.myNodeNum != 0 {
 		peerCount-- // self doesn't count toward the "N with GPS fix" tally
 	}
-	count := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained)).
-		Render(fmt.Sprintf("  (%d with GPS fix — closest first)", peerCount))
+	count := paneCountSuffix(fmt.Sprintf(
+		"  (%d with GPS fix — closest first)", peerCount,
+	))
 
 	lines := make([]string, 0, 3+len(plots))
 	lines = append(lines, header+count, "")

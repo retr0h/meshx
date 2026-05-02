@@ -51,6 +51,17 @@ func paneCountSuffix(text string) string {
 		Render(text)
 }
 
+// paneLegendLine renders a dim italic legend strip used by the
+// /nodes overlay to explain the sigil glyphs ("legend:  @online
+// +pinned ⊘muted ✗failed ·stale"). Italic so it reads as a passive
+// reference, dim so it doesn't compete with the data rows.
+func paneLegendLine(text string) string {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Italic(true).
+		Render(text)
+}
+
 // paneEmptyMessage renders an empty-pane placeholder block — the
 // 3-6 line dim/italic explainers /nearby and /radar emit when the
 // user's radio has no GPS fix or no peers have broadcast positions

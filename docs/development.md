@@ -62,18 +62,33 @@ meshx/
 └── internal/meshx/
     ├── app.go                    # Bubble Tea model: state, Update, View,
     │                             # newModel, autoConnect, myCallsign …
+    ├── ui.go                     # View dispatcher, model getters, generic utils
     ├── fixture.go                # Demo struct + DefaultDemo() persona
     ├── pump.go                   # transport → tea.Msg pump (+ MESHX_DEBUG)
     ├── commands.go               # /command dispatcher + ham bangs
     ├── input.go                  # key bindings, nav mode, tab wiring
-    ├── ui.go                     # renderers, pane styles, selection highlight
+    ├── components_box.go         # Box/Component/Cell/Row + RawBlock, Viewport, Centered
+    ├── components_stack.go       # VStack, HStack, Bordered, Styled
+    ├── components_chrome.go      # statusBar / topDivider / channelTabsRow / inputBar
+    ├── components_chat.go        # chatRow* cell builders + nick/zebra colors
+    ├── components_notice.go      # noticeRow* cell builders
+    ├── components_message.go     # messageRow Component + notice/chat dispatch
+    ├── components_overlays.go    # overlay row builders + selection chrome
+    ├── components_panes.go       # channels/nodes/messages/help pane Components + frameView
+    ├── components_panes_geo.go   # nearby/radar pane Components + peerPlot data prep
+    ├── components_radar.go       # radarCanvas Component + radar legend cells
+    ├── components_splash.go      # BitchX rotating splash data + builder
     ├── notices.go                # TTL + pin + fade for `-!-` rows
     ├── storage.go                # SQLite: nodes, messages, ble_devices,
     │                             # backfills, stale-pending sweep
     ├── ble_cli.go                # `meshx ble` CLI helpers
-    ├── splash.go                 # BitchX-style rotating graffiti banner
     ├── complete.go               # Tab completion — /cmd, #chan, nicks
     ├── palette.go                # maxheadroom color constants
+    ├── node.go                   # nodeItem + state derivation
+    ├── radio.go                  # outbound packet construction
+    ├── geo.go                    # haversine / bearing / compass math
+    ├── help.go                   # /help entry data
+    ├── logger.go                 # debug log file helper
     ├── migrations/               # embedded goose SQL migrations
     └── transport/
         ├── client.go             # Client interface + Dial dispatcher
@@ -150,18 +165,28 @@ thin wrapper that resolves a name-or-uuid against `ble_devices` and delegates to
 
 ### Layout primitives — Component tree
 
-`box.go` and `stack.go` define the layout vocabulary the View() tree is built
-from. Every region of the UI is a `Component` whose `Render(box Box) string`
-returns precisely `box.Height` lines, each precisely `box.Width` cells per
-`ansiCells`. There is no upward negotiation — parents own the math, children
-fill what they're given.
+`components_box.go` and `components_stack.go` define the layout vocabulary the
+`View()` tree is built from. Every region of the UI is a `Component` whose
+`Render(box Box) string` returns precisely `box.Height` lines, each precisely
+`box.Width` cells per `ansiCells`. There is no upward negotiation — parents own
+the math, children fill what they're given.
 
 - `Box{Width, Height}` — the cell budget a Component must fill exactly.
 - `Component` — interface; one method, `Render(box Box) string`.
 - `Row` / `Cell` — single-row horizontal layout. Cells declare width (or `-1`
-  for flex); `Row.Render` truncates anything that would overflow the box and
-  pads anything short.
+  for flex), an optional `PadStyle` to tint cell-internal padding, and an
+  alignment; `Row.Render` truncates anything that would overflow the box and
+  pads anything short. `Row.FillStyle` tints the trailing flex fill so a zebra
+  row stays a solid rectangle past the last cell.
 - `Text`, `Spacer` — leaf renderers (single string filling a box, blank fill).
+- `RawBlock` — wraps a pre-rendered multi-line string and fits it into a Box;
+  the bridge between legacy string emitters and the layout tree, used by
+  `renderBorderedPane` and `frameView`.
+- `Viewport` — scrollable single-pane window over a slice of pre-styled lines
+  with optional footer chrome. Owns scroll-clamp + visible-row math; consumed by
+  `helpPane`.
+- `Centered` — pane-aware horizontal + vertical centering (each line padded
+  against the parent Box, not its own width).
 - `VStack` / `HStack` — vertical / horizontal stack of `SizedChild` with flex
   (-1) sharing.
 - `Bordered` — wraps an inner Component in a `╔═══╗` / `┌───┐` frame with
@@ -182,12 +207,20 @@ column.
 Concrete Components live in:
 
 - `components_chrome.go` — `statusBar`, `topDivider`, `channelTabsRow`,
-  `inputBar`. The frame's top + bottom rows.
-- `components_message.go` — `messageRow` enforces the per-row layout contract;
-  the legacy `renderMessageRow` is the source of truth for _content_,
-  `messageRow.Render` is the source of truth for _size_.
-- `ui.go::renderBorderedPane` — the bordered-pane wrapper (messages / channels /
-  nodes / nearby / radar) using `Bordered`.
+  `inputBar` plus per-segment cell builders.
+- `components_panes.go` — pane Components (`channelsPane`, `nodesPane`,
+  `messagesPane`, `helpPane`) plus `frameView`, `renderIrssiBody`,
+  `renderBorderedPane`, `paneAccentColor`, `paneInnerWidth`,
+  `messagesPaneRender`, `tailStartList`. Each pane Component owns its
+  implementation directly — no model-method shims.
+- `components_panes_geo.go` — `nearbyPane`, `radarPane` and the `peerPlot` data
+  prep both consume.
+- `components_message.go` — `messageRow` Component owns the notice/system/chat
+  dispatch via `noticeRowRender` / `chatRowRender` and forces every line through
+  `padCells`.
+- `components_chat.go` / `components_notice.go` / `components_overlays.go` /
+  `components_radar.go` — leaf cell builders the rows compose. Selection chrome
+  (`wrapSelection`, `gutterWidth`, `dimRow`) lives in `components_overlays.go`.
 
 The frame `View()` builds:
 
@@ -195,17 +228,20 @@ The frame `View()` builds:
 VStack:
   statusBar       (1 row)
   topDivider      (1 row)
-  body (flex)     ← renderIrssiBody → renderMessagesPane / overlays
-  Spacer          (1 row, separates body from chrome)
+  body (flex)     ← renderIrssiBody → channelsPane | nodesPane |
+                                       messagesPane | nearbyPane |
+                                       radarPane | helpPane
   channelTabsRow  (1 row)
   inputBar        (1 row)
+  Spacer          (1 row trailing — keeps cursor off the last terminal row)
 ```
 
 Set `MESHX_LAYOUT_ASSERT=1` to enable dev-mode invariant panics: every
 `Component.Render` is checked to return exactly the requested box, so a
 regression in cell-counting math surfaces as an immediate panic at the offending
-call site instead of as visible drift two rerenders later. Run the test suite
-with this flag set in CI.
+call site instead of as visible drift two rerenders later. The env lookup is
+hoisted to a package-level once-read in `components_box.go`, so the check is
+free in production. Run the test suite with this flag set in CI.
 
 ## Tab completion
 

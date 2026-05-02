@@ -37,7 +37,18 @@ import (
 //
 // Returns when ctx is cancelled, either side closes, or an I/O error
 // occurs. Errors from read and write are both surfaced; the first
-// wins.
+// wins (errCh is buffered to 2 so the loser doesn't block).
+//
+// CONCURRENCY CONTRACT: when runStream returns, the writer goroutine
+// has exited but the reader MAY still be parked inside ReadFrame —
+// I/O reads on serial ports and TCP conns can't be context-cancelled,
+// only unblocked by Close. The caller MUST invoke Client.Close() (which
+// closes the underlying io.ReadWriter) after Run returns; that pulls
+// the rug out from under ReadFrame, the reader observes io.EOF, and
+// exits. pump.run.runSession follows this pattern: every successful
+// runSession is paired with a p.client.Close() at pump.go:410, so
+// the reader always exits within one frame-read of session shutdown.
+// Without that Close, the reader goroutine leaks.
 func runStream(
 	ctx context.Context,
 	rw io.ReadWriter,

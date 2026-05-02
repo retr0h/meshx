@@ -94,13 +94,19 @@ const (
 // the moment its Render output doesn't match the requested Box.
 const alignAssertEnv = "MESHX_LAYOUT_ASSERT"
 
+// layoutAssertEnabled is read once at process start. renderAndCheck is
+// on the per-frame hot path (every pane, every keystroke), so resolving
+// the env var via os.Getenv on each call is a real allocation cost for
+// the assertion-off case that's the production default.
+var layoutAssertEnabled = os.Getenv(alignAssertEnv) == "1"
+
 // renderAndCheck invokes a Component.Render and, in assert mode,
 // validates the output matches the requested Box exactly. Used by
 // composition primitives so a buggy child surfaces with a clear
 // message at the parent's call site.
 func renderAndCheck(c Component, box Box) string {
 	out := c.Render(box)
-	if os.Getenv(alignAssertEnv) != "1" {
+	if !layoutAssertEnabled {
 		return out
 	}
 	if box.Empty() {
@@ -230,28 +236,51 @@ func padCells(s string, w int) string {
 	return res
 }
 
-// alignCells fits s into exactly w cells with the given horizontal
-// alignment. Right-padding for AlignLeft, left-padding for AlignRight,
-// equal padding for AlignCenter. Truncation with ellipsis on overflow.
-func alignCells(s string, w int, a Align) string {
+// renderCell fits a Cell into exactly w cells: content + alignment
+// padding, with PadStyle applied to the pad spaces only and Style
+// (when set) applied as an outer wrap. Splitting the pad path lets
+// callers tint trailing cell-fill in rowBg without disturbing the
+// content's existing ANSI codes — the chat/notice row body cells
+// rely on this so the zebra background extends past short message
+// text out to the metrics columns.
+func renderCell(c Cell, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	cur := ansiCells(s)
+	cur := ansiCells(c.Content)
 	if cur >= w {
-		return padCells(s, w)
+		out := padCells(c.Content, w)
+		if c.Style != nil {
+			out = c.Style.Render(out)
+		}
+		return out
 	}
 	gap := w - cur
-	switch a {
+	var leftPad, rightPad string
+	switch c.Align {
 	case AlignRight:
-		return strings.Repeat(" ", gap) + s
+		leftPad = strings.Repeat(" ", gap)
 	case AlignCenter:
-		left := gap / 2
-		right := gap - left
-		return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
+		l := gap / 2
+		r := gap - l
+		leftPad = strings.Repeat(" ", l)
+		rightPad = strings.Repeat(" ", r)
 	default:
-		return s + strings.Repeat(" ", gap)
+		rightPad = strings.Repeat(" ", gap)
 	}
+	if c.PadStyle != nil {
+		if leftPad != "" {
+			leftPad = c.PadStyle.Render(leftPad)
+		}
+		if rightPad != "" {
+			rightPad = c.PadStyle.Render(rightPad)
+		}
+	}
+	out := leftPad + c.Content + rightPad
+	if c.Style != nil {
+		out = c.Style.Render(out)
+	}
+	return out
 }
 
 // Cell is one segment of a Row — a styled, measured chunk of content
@@ -260,11 +289,22 @@ func alignCells(s string, w int, a Align) string {
 // A Width of -1 means "flex" — the parent Row distributes leftover
 // cells among all flex children equally. Style is applied to the
 // padded result so background fills extend through the whole cell.
+//
+// PadStyle, when set, styles ONLY the spaces renderCell appends to
+// fill the cell to its declared width. This is the Right Way to
+// extend a row-bg tint past the end of styled content: the content's
+// own ANSI codes (lipgloss bake-in fg+bg) stay untouched, and the
+// trailing pad spaces get an SGR span tinted to match. Wrapping the
+// whole cell with a single bg styler (Style) instead breaks because
+// the content's inner `\e[0m` resets terminate the outer span mid-
+// cell — the same bug class wrapSelection had to dodge for selection
+// highlights.
 type Cell struct {
-	Content string
-	Width   int // exact cell budget; -1 = flex
-	Align   Align
-	Style   styler // optional styling wrapper, applied AFTER pad/truncate
+	Content  string
+	Width    int // exact cell budget; -1 = flex
+	Align    Align
+	Style    styler // optional styling wrapper, applied AFTER pad/truncate
+	PadStyle styler // optional styler for cell-internal pad spaces only
 }
 
 // styler is a deliberately minimal interface: we accept anything that
@@ -342,10 +382,7 @@ func (r Row) Render(box Box) string {
 		if emitted+w > box.Width {
 			w = box.Width - emitted
 		}
-		piece := alignCells(c.Content, w, c.Align)
-		if c.Style != nil {
-			piece = c.Style.Render(piece)
-		}
+		piece := renderCell(c, w)
 		b.WriteString(piece)
 		emitted += w
 		if emitted >= box.Width {
@@ -428,3 +465,202 @@ type ComponentFunc func(box Box) string
 // closure. Lets a function literal stand in anywhere a Component is
 // expected — same pattern as net/http's HandlerFunc.
 func (f ComponentFunc) Render(box Box) string { return f(box) }
+
+// Viewport is a scrollable single-pane window over a slice of pre-
+// styled lines. Given a list of Lines, a Scroll offset (0-based), and
+// the rest of the layout (Reserved rows for chrome, optional Footer
+// shown beneath the viewport content), Render returns a block of
+// exactly Box.Height lines × Box.Width cells that displays
+// Lines[clamped(Scroll) : clamped(Scroll)+visible] padded out.
+//
+// The clamp is one-way: Scroll is silently pulled back into range if
+// it exceeds the content. The caller (model state) doesn't need to
+// know the visible-row count; it just bumps Scroll and the Component
+// figures out the math from its Box.
+//
+// Reserved tells the Component how many rows of its Box are already
+// committed to non-content chrome (like a "line N/M" indicator
+// appended to the output). The visible-row budget is Box.Height -
+// Reserved. Set Reserved to len(Footer) when wiring the helper:
+// helpPane uses Reserved=2 (a blank row + a one-line scroll indicator).
+//
+// Footer is rendered AFTER the viewport content and BEFORE any final
+// blank padding rows. Each Footer line is padded to Box.Width via
+// padCells, so callers can hand pre-styled chrome (italic dim, etc.)
+// without knowing the box dimensions.
+type Viewport struct {
+	Lines    []string
+	Scroll   int
+	Reserved int
+	Footer   []string
+}
+
+// Render fills box with the visible window of Lines plus Footer.
+// Output has exactly box.Height lines, each exactly box.Width cells
+// per ansiCells. Blank rows are appended below if the visible content
+// + Footer don't fill the box.
+func (v Viewport) Render(box Box) string {
+	if box.Empty() {
+		return ""
+	}
+	visible := box.Height - v.Reserved
+	if visible < 1 {
+		visible = 1
+	}
+	scroll := v.Scroll
+	maxScroll := len(v.Lines) - visible
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	end := scroll + visible
+	if end > len(v.Lines) {
+		end = len(v.Lines)
+	}
+
+	out := make([]string, 0, box.Height)
+	for i := scroll; i < end; i++ {
+		out = append(out, padCells(v.Lines[i], box.Width))
+	}
+	// Pad the visible-content region with blank rows so the footer
+	// always sits at its declared offset (Box.Height - Reserved + 1)
+	// rather than floating up against the last content line.
+	for i := end - scroll; i < visible; i++ {
+		out = append(out, strings.Repeat(" ", box.Width))
+	}
+	for _, fl := range v.Footer {
+		out = append(out, padCells(fl, box.Width))
+	}
+	for len(out) < box.Height {
+		out = append(out, strings.Repeat(" ", box.Width))
+	}
+	if len(out) > box.Height {
+		out = out[:box.Height]
+	}
+	return strings.Join(out, "\n")
+}
+
+// RawBlock wraps a pre-rendered multi-line string and Renders it sized
+// to a Box. Each line is right-padded to Box.Width via padCells
+// (keycap-aware) and the block is padded out to Box.Height with blank
+// rows. Lines wider than Box.Width are truncated with an ellipsis.
+//
+// This is the bridge between legacy string-emitting renderers and the
+// Component layout tree: until every pane is a real composed Component
+// tree, the orchestrators (renderChannelsPane / renderMessagesPane /
+// etc.) emit pre-formed strings and wrap them in RawBlock at the
+// pane → Bordered seam. Replaces the previous fitToBox function and
+// the inline ComponentFunc{strings.Split + padCells + strings.Repeat}
+// adapters that lived in renderBorderedPane and renderHelpView — same
+// behavior, one canonical implementation.
+type RawBlock struct {
+	Content string
+}
+
+// Render satisfies Component for RawBlock. Empty box short-circuits
+// to "" so an off-screen pane doesn't allocate. Lines are split on
+// '\n'; missing lines are filled with all-space rows so the output
+// always meets the box.Height contract.
+func (r RawBlock) Render(box Box) string {
+	if box.Empty() {
+		return ""
+	}
+	lines := strings.Split(r.Content, "\n")
+	out := make([]string, box.Height)
+	for i := 0; i < box.Height; i++ {
+		if i < len(lines) {
+			out[i] = padCells(lines[i], box.Width)
+		} else {
+			out[i] = strings.Repeat(" ", box.Width)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// Centered horizontally centers a single-line or multi-line content
+// block within its parent's Box. Each line of Content is measured
+// via ansiCells (the canonical keycap-aware width) and padded with
+// (Box.Width - lineW)/2 leading spaces so the visible content's
+// midpoint lands at the box's midpoint.
+//
+// This is the "center globally" primitive: hand it a Box of any
+// width and it centers the content against THAT width, regardless
+// of how deeply nested the parent is. A pane that wants its splash
+// art pane-centered just wraps the art in Centered and feeds it the
+// pane's inner Box; a modal that wants a single-line title centered
+// does the same. Multi-line content centers each line independently
+// — the right call for ASCII-art banners where each line has its
+// own width and you want every line to share the same midpoint.
+//
+// FillStyle styles the leading + trailing pad on each line; CellPad
+// stays styled by the content's own ANSI codes since lipgloss spans
+// reset at \e[0m. Set FillStyle to a row-bg styler when the parent
+// expects the row background to extend through the whole Box.
+type Centered struct {
+	Content   string
+	FillStyle styler
+	// VAlign: AlignLeft (top), AlignCenter (vertical center),
+	// AlignRight (bottom). Defaults to top — extra Box.Height beyond
+	// content lines pad below.
+	VAlign Align
+}
+
+// Render fills box with Content horizontally + vertically centered.
+// Content is split on '\n'; each line is padded to box.Width with
+// equal leading + trailing space. Vertical alignment positions the
+// content block within box.Height; surrounding rows are blank
+// (FillStyle-tinted) lines.
+func (c Centered) Render(box Box) string {
+	if box.Empty() {
+		return ""
+	}
+	lines := strings.Split(c.Content, "\n")
+	contentH := len(lines)
+	if contentH > box.Height {
+		contentH = box.Height
+		lines = lines[:contentH]
+	}
+	topPad, bottomPad := 0, box.Height-contentH
+	switch c.VAlign {
+	case AlignCenter:
+		topPad = (box.Height - contentH) / 2
+		bottomPad = box.Height - contentH - topPad
+	case AlignRight:
+		topPad = box.Height - contentH
+		bottomPad = 0
+	}
+	blank := strings.Repeat(" ", box.Width)
+	if c.FillStyle != nil {
+		blank = c.FillStyle.Render(blank)
+	}
+	out := make([]string, 0, box.Height)
+	for i := 0; i < topPad; i++ {
+		out = append(out, blank)
+	}
+	for _, line := range lines {
+		w := ansiCells(line)
+		if w >= box.Width {
+			out = append(out, padCells(line, box.Width))
+			continue
+		}
+		gap := box.Width - w
+		left := gap / 2
+		right := gap - left
+		leftPad := strings.Repeat(" ", left)
+		rightPad := strings.Repeat(" ", right)
+		if c.FillStyle != nil {
+			leftPad = c.FillStyle.Render(leftPad)
+			rightPad = c.FillStyle.Render(rightPad)
+		}
+		out = append(out, leftPad+line+rightPad)
+	}
+	for i := 0; i < bottomPad; i++ {
+		out = append(out, blank)
+	}
+	return strings.Join(out, "\n")
+}

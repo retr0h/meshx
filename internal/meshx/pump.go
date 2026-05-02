@@ -326,7 +326,13 @@ func startPump(dest string, program *tea.Program) *pump {
 
 func (p *pump) Stop() {
 	p.cancel()
-	_ = p.client.Close()
+	// p.client is nil between startPump and the first successful dial,
+	// so a Ctrl+X during the initial BLE scan would panic here without
+	// the guard. The run loop owns subsequent client mutations and will
+	// observe ctx cancellation on its next iteration to clean up.
+	if p.client != nil {
+		_ = p.client.Close()
+	}
 }
 
 // Enqueue is how model code sends a ToRadio from the Update goroutine.
@@ -484,13 +490,15 @@ func (p *pump) runSession(
 				continue
 			}
 			totalIn++
-			tm := p.translate(msg)
-			if tm == nil {
+			tms := p.translate(msg)
+			if len(tms) == 0 {
 				dbgf("[%d] inbound translated to nil (housekeeping)", totalIn)
 				continue
 			}
-			dbgf("[%d] sending %T to tea", totalIn, tm)
-			p.program.Send(tm)
+			for _, tm := range tms {
+				dbgf("[%d] sending %T to tea", totalIn, tm)
+				p.program.Send(tm)
+			}
 		}
 	}
 }
@@ -518,15 +526,23 @@ func openPumpDebugLog() *os.File {
 	return f
 }
 
-// translate converts a FromRadio envelope to the corresponding
-// tea.Msg. Returns nil for housekeeping variants the UI doesn't
-// care about (module config, raw config dumps, etc.) — those get
-// silently dropped so the Bubble Tea Update loop isn't spammed.
-func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
+// translate converts a FromRadio envelope to zero or more tea.Msg
+// values, in the order the model should observe them. A single
+// FromRadio frame may produce multiple messages — e.g. a NodeInfo
+// envelope with an embedded Position fans out to BOTH a
+// radioNodeInfoMsg AND a radioPositionMsg, and the NodeInfoMsg has
+// to land first so the position update applies to an existing node
+// row instead of creating a stub. Returning a slice (instead of
+// firing a goroutine for the side-channel msg) keeps that ordering
+// deterministic — runSession iterates and Sends in slice order on
+// the same goroutine that receives frames, so the NodeInfo always
+// reaches Update before the Position. Returns nil/empty for
+// housekeeping variants the UI doesn't care about.
+func (p *pump) translate(msg *pb.FromRadio) []tea.Msg {
 	switch v := msg.GetPayloadVariant().(type) {
 	case *pb.FromRadio_MyInfo:
 		p.myNum = v.MyInfo.GetMyNodeNum()
-		return radioMyInfoMsg{nodeNum: p.myNum}
+		return []tea.Msg{radioMyInfoMsg{nodeNum: p.myNum}}
 
 	case *pb.FromRadio_NodeInfo:
 		n := v.NodeInfo
@@ -536,21 +552,7 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 		// leave blank — MeshPacket telemetry carries it per-message.
 		rssi := ""
 
-		// NodeInfo.Position is populated for peers whose radios
-		// broadcast their location. Piggy-back a radioPositionMsg so
-		// the model can stash the coordinates for /qth + grid-square
-		// rendering. Zero lat+lon → no fix, skip.
-		if pos := n.GetPosition(); pos != nil &&
-			(pos.GetLatitudeI() != 0 || pos.GetLongitudeI() != 0) {
-			go p.program.Send(radioPositionMsg{
-				fromNodeNum: n.GetNum(),
-				latitude:    float64(pos.GetLatitudeI()) / 1e7,
-				longitude:   float64(pos.GetLongitudeI()) / 1e7,
-				altitude:    pos.GetAltitude(),
-				at:          time.Unix(int64(pos.GetTime()), 0),
-			})
-		}
-		return radioNodeInfoMsg{
+		out := []tea.Msg{radioNodeInfoMsg{
 			nodeNum:     n.GetNum(),
 			longName:    u.GetLongName(),
 			shortName:   u.GetShortName(),
@@ -559,16 +561,32 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 			rssi:        rssi,
 			hops:        0,
 			lastHeardAt: time.Unix(int64(n.GetLastHeard()), 0),
+		}}
+		// NodeInfo.Position is populated for peers whose radios
+		// broadcast their location. Append a radioPositionMsg AFTER
+		// the NodeInfoMsg so the model has already created the node
+		// row by the time the position update applies. Zero lat+lon
+		// → no fix, skip.
+		if pos := n.GetPosition(); pos != nil &&
+			(pos.GetLatitudeI() != 0 || pos.GetLongitudeI() != 0) {
+			out = append(out, radioPositionMsg{
+				fromNodeNum: n.GetNum(),
+				latitude:    float64(pos.GetLatitudeI()) / 1e7,
+				longitude:   float64(pos.GetLongitudeI()) / 1e7,
+				altitude:    pos.GetAltitude(),
+				at:          time.Unix(int64(pos.GetTime()), 0),
+			})
 		}
+		return out
 
 	case *pb.FromRadio_Channel:
 		s := v.Channel.GetSettings()
-		return radioChannelMsg{
+		return []tea.Msg{radioChannelMsg{
 			index:  int(v.Channel.GetIndex()),
 			name:   s.GetName(),
 			role:   v.Channel.GetRole().String(),
 			hasPSK: len(s.GetPsk()) > 0,
-		}
+		}}
 
 	case *pb.FromRadio_Packet:
 		p := v.Packet
@@ -578,7 +596,7 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 		}
 		switch dec.GetPortnum() {
 		case pb.PortNum_TEXT_MESSAGE_APP:
-			return radioTextMsg{
+			return []tea.Msg{radioTextMsg{
 				fromNum:  p.GetFrom(),
 				toNum:    p.GetTo(),
 				channel:  int(p.GetChannel()),
@@ -589,7 +607,7 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 				at:       time.Unix(int64(p.GetRxTime()), 0),
 				packetID: p.GetId(),
 				replyID:  dec.GetReplyId(),
-			}
+			}}
 		case pb.PortNum_TELEMETRY_APP:
 			// TELEMETRY_APP payload is a Telemetry protobuf whose
 			// `variant` oneof is DeviceMetrics / EnvironmentMetrics /
@@ -603,24 +621,24 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 				if v == nil || v.DeviceMetrics == nil {
 					return nil
 				}
-				return radioDeviceMetricsMsg{
+				return []tea.Msg{radioDeviceMetricsMsg{
 					fromNodeNum:  p.GetFrom(),
 					batteryLevel: v.DeviceMetrics.GetBatteryLevel(),
 					voltage:      v.DeviceMetrics.GetVoltage(),
 					channelUtil:  v.DeviceMetrics.GetChannelUtilization(),
 					airUtilTx:    v.DeviceMetrics.GetAirUtilTx(),
-				}
+				}}
 			case *pb.Telemetry_EnvironmentMetrics:
 				if v == nil || v.EnvironmentMetrics == nil {
 					return nil
 				}
-				return radioEnvMetricsMsg{
+				return []tea.Msg{radioEnvMetricsMsg{
 					fromNodeNum: p.GetFrom(),
 					temperature: v.EnvironmentMetrics.GetTemperature(),
 					humidity:    v.EnvironmentMetrics.GetRelativeHumidity(),
 					pressure:    v.EnvironmentMetrics.GetBarometricPressure(),
 					gas:         v.EnvironmentMetrics.GetGasResistance(),
-				}
+				}}
 			}
 			return nil
 		case pb.PortNum_POSITION_APP:
@@ -633,13 +651,13 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 			if pos.GetLatitudeI() == 0 && pos.GetLongitudeI() == 0 {
 				return nil
 			}
-			return radioPositionMsg{
+			return []tea.Msg{radioPositionMsg{
 				fromNodeNum: p.GetFrom(),
 				latitude:    float64(pos.GetLatitudeI()) / 1e7,
 				longitude:   float64(pos.GetLongitudeI()) / 1e7,
 				altitude:    pos.GetAltitude(),
 				at:          time.Unix(int64(pos.GetTime()), 0),
-			}
+			}}
 		case pb.PortNum_NODEINFO_APP:
 			// Live NodeInfo broadcast — a peer announcing their User
 			// (longname + shortname + hw). The FromRadio_NodeInfo
@@ -652,7 +670,7 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 			if err := proto.Unmarshal(dec.GetPayload(), u); err != nil {
 				return nil
 			}
-			return radioNodeInfoMsg{
+			return []tea.Msg{radioNodeInfoMsg{
 				nodeNum:     p.GetFrom(),
 				longName:    u.GetLongName(),
 				shortName:   u.GetShortName(),
@@ -661,7 +679,7 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 				rssi:        fmt.Sprintf("%d", p.GetRxRssi()),
 				hops:        int(p.GetHopStart()) - int(p.GetHopLimit()),
 				lastHeardAt: time.Unix(int64(p.GetRxTime()), 0),
-			}
+			}}
 		case pb.PortNum_ROUTING_APP:
 			// Routing payload carries the radio's verdict on a packet
 			// we (or someone else) sent. For our own outbound: the
@@ -675,22 +693,22 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 				return nil
 			}
 			reason := r.GetErrorReason().String()
-			return radioRoutingMsg{
+			return []tea.Msg{radioRoutingMsg{
 				requestID: dec.GetRequestId(),
 				errorName: reason,
 				ok:        reason == "NONE",
-			}
+			}}
 		}
 		return nil
 
 	case *pb.FromRadio_Metadata:
 		md := v.Metadata
-		return radioMetadataMsg{
+		return []tea.Msg{radioMetadataMsg{
 			firmwareVersion: md.GetFirmwareVersion(),
 			deviceStateVer:  md.GetDeviceStateVersion(),
 			hasWifi:         md.GetHasWifi(),
 			hasBluetooth:    md.GetHasBluetooth(),
-		}
+		}}
 
 	case *pb.FromRadio_Config:
 		switch c := v.Config.GetPayloadVariant().(type) {
@@ -698,21 +716,21 @@ func (p *pump) translate(msg *pb.FromRadio) tea.Msg {
 			if c == nil || c.Lora == nil {
 				return nil
 			}
-			return radioLoraConfigMsg{
+			return []tea.Msg{radioLoraConfigMsg{
 				txPowerDBm:  c.Lora.GetTxPower(),
 				region:      c.Lora.GetRegion().String(),
 				modemPreset: c.Lora.GetModemPreset().String(),
-			}
+			}}
 		case *pb.Config_Device:
 			if c == nil || c.Device == nil {
 				return nil
 			}
-			return radioDeviceConfigMsg{role: c.Device.GetRole().String()}
+			return []tea.Msg{radioDeviceConfigMsg{role: c.Device.GetRole().String()}}
 		}
 		return nil
 
 	case *pb.FromRadio_ConfigCompleteId:
-		return radioConfigCompleteMsg{}
+		return []tea.Msg{radioConfigCompleteMsg{}}
 	}
 	// ModuleConfig and other variants — ignore.
 	return nil

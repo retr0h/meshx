@@ -20,13 +20,20 @@
 
 package meshx
 
-// ui_map.go — the /nearby and /radar overlay renderers.
+// components_panes_geo.go — the /nearby and /radar pane Components,
+// plus the peerPlot data prep both consume.
 //
-// Both surfaces need (bearing, distance) from our position to every
-// peer with a known fix. They share a `peerPlot` collection helper
-// so the math runs once per render; /nearby sorts by distance and
-// formats a bar chart, /radar projects onto a polar grid. Geometry
-// helpers (haversineKm, bearingDeg, compassAbbr) live in geo.go.
+// Both panes need (bearing, distance) from our position to every
+// peer with a known fix. They share a peerPlot collection helper so
+// the math runs once per render; nearbyPane sorts by distance and
+// renders a horizontal bar chart, radarPane projects onto a polar
+// grid via the radarCanvas Component. Geometry helpers (haversineKm,
+// bearingDeg, compassAbbr) live in geo.go.
+//
+// File naming follows the components_*.go convention: this is the
+// geo flavor of the pane Component layer, sibling to components_panes.go
+// (channels / nodes / messages / help) and components_radar.go (the
+// 2D rune-canvas Component the radar pane consumes).
 
 import (
 	"fmt"
@@ -137,14 +144,23 @@ func (m model) collectPeerPlots() []peerPlot {
 	return plots
 }
 
-// renderNearbyPane — distance-sorted roster. Each row has a
-// distance bar scaled to the farthest peer in the list, absolute
-// km, compass bearing, and the 8-point cardinal abbreviation.
-// Selection highlights the cursor via the shared wrapSelection
-// pipeline; j/k walks step through peers in order.
-func (m model) renderNearbyPane(width, height int) string {
-	header := paneHeader("NEARBY", paneNodes, m.focused == paneNodes)
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
+// nearbyPane is the /nearby distance-sorted peer roster — peer rows
+// under a NEARBY header, with a no-fix / no-peers placeholder when
+// GPS data isn't available. Each row carries a distance bar scaled
+// to the farthest peer, absolute km, compass bearing, and the 8-
+// point cardinal abbreviation. Selection highlights the cursor via
+// the shared wrapSelection pipeline; j/k walks step through peers
+// in order.
+type nearbyPane struct{ m model }
+
+// Render returns the bordered pane sized exactly to box. Owns the
+// no-fix / no-peers explainer paths AND the row-rendering loop —
+// peerRowLine + distanceBarCell handle per-row styling, this method
+// composes them into the bordered pane.
+func (p nearbyPane) Render(box Box) string {
+	width, height := box.Width, box.Height
+	m := p.m
+	header := paneHeaderCell("NEARBY", m.focused == paneNodes)
 
 	// No self-fix — distances + bearings are meaningless without an
 	// origin point. Explain the situation in-pane rather than
@@ -153,23 +169,18 @@ func (m model) renderNearbyPane(width, height int) string {
 	// packet yet (cold-boot, GPS off in firmware, indoor with no
 	// sky view, etc.).
 	if m.myLatitude == 0 && m.myLongitude == 0 {
-		count := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mhDrained)).
-			Render("  (waiting for own GPS fix)")
-		lines := make([]string, 0, 9)
-		lines = append(lines,
-			header+count,
+		body := header + paneCountSuffix("  (waiting for own GPS fix)") +
+			"\n\n" + paneEmptyMessage(
+			"   no GPS fix on this radio yet — /nearby needs your own",
+			"   position to compute distances + bearings to peers.",
 			"",
-			dim.Render("   no GPS fix on this radio yet — /nearby needs your own"),
-			dim.Render("   position to compute distances + bearings to peers."),
-			"",
-			dim.Render("   options:"),
-			dim.Render("     • wait for your radio to acquire a fix (outdoor + sky view)"),
-			dim.Render("     • check position.* in your radio config (Meshtastic app/CLI)"),
-			dim.Render("     • try /sync to force a NodeDB re-dump"),
+			"   options:",
+			"     • wait for your radio to acquire a fix (outdoor + sky view)",
+			"     • check position.* in your radio config (Meshtastic app/CLI)",
+			"     • try /sync to force a NodeDB re-dump",
 		)
 		return renderBorderedPane(
-			strings.Join(lines, "\n"), width, height, paneNodes, m.focused == paneNodes,
+			body, width, height, paneNodes, m.focused == paneNodes,
 		)
 	}
 
@@ -179,18 +190,18 @@ func (m model) renderNearbyPane(width, height int) string {
 	if m.myNodeNum != 0 {
 		peerCount-- // self doesn't count toward the "N with GPS fix" tally
 	}
-	count := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained)).
-		Render(fmt.Sprintf("  (%d with GPS fix — closest first)", peerCount))
+	count := paneCountSuffix(fmt.Sprintf(
+		"  (%d with GPS fix — closest first)", peerCount,
+	))
 
 	lines := make([]string, 0, 3+len(plots))
 	lines = append(lines, header+count, "")
 
 	if len(plots) == 0 {
-		lines = append(lines,
-			dim.Render("   no peers with a GPS fix yet — positions land as"),
-			dim.Render("   Meshtastic Position packets arrive (periodic)."),
-		)
+		lines = append(lines, paneEmptyMessage(
+			"   no peers with a GPS fix yet — positions land as",
+			"   Meshtastic Position packets arrive (periodic).",
+		))
 		return renderBorderedPane(
 			strings.Join(lines, "\n"), width, height, paneNodes, m.focused == paneNodes,
 		)
@@ -257,106 +268,31 @@ func (m model) renderNearbyPane(width, height int) string {
 		if isSel {
 			rowBg = selectionRowBg
 		}
-		bgCol := lipgloss.Color(rowBg)
-
-		// Sigil + name color derived from the live state — same
-		// switch /nodes uses so a peer reads consistently across
-		// both overlays. Self is marked in magenta (the "me"
-		// color reserved in palette.go); fav beats state; self
-		// beats fav so the logged-in radio always stands out.
-		state := p.node.currentState()
-		sigil := " "
-		sigilColor := mhDrained
-		nameColor := mhFG
-		switch state {
-		case "online":
-			sigil = "@"
-			sigilColor = mhGreen
-		case "muted":
-			sigil = "⊘"
-			sigilColor = mhLavender
-			nameColor = mhLavender
-		case "failed":
-			sigil = "✗"
-			sigilColor = mhPink
-			nameColor = mhPink
-		case "offline":
-			sigil = "·"
-			sigilColor = mhDrained
-			nameColor = mhDrained
-		}
-		if p.node.fav {
-			sigil = "+"
-			sigilColor = mhYellow
-			nameColor = mhYellow
-		}
-		// Self-marker — only the sigil picks up the magenta "me"
-		// color. Name + distance columns stay on their normal
-		// state-derived styling so the row reads the same as
-		// every other peer; the purple `@` is the sole signal
-		// that this is the logged-in radio.
 		isSelf := m.myNodeNum != 0 && p.node.nodeNum == m.myNodeNum
-		if isSelf {
-			sigil = "@"
-			sigilColor = mhMagenta
-		}
-		sigilStyled := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(sigilColor)).
-			Background(bgCol).
-			Bold(state == "online" || p.node.fav || isSelf).
-			Render(sigil)
-		nameStyled := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(nameColor)).
-			Background(bgCol).
-			Render(padOrTruncate(p.node.callsign, 22))
-		barStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(meshGreen)).
-			Background(bgCol)
-		barDimStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mhDrained)).
-			Background(bgCol)
-		dim := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mhDrained)).
-			Background(bgCol)
-		spacer := lipgloss.NewStyle().Background(bgCol)
 
-		// Self row: zero-distance "0.0 km · N 0°" is technically
-		// accurate but reads like a rendering bug. Use "(you)" +
-		// "— home QTH" + a dimmed-dots bar so the row declares
-		// "this is anchor, not a datapoint." Colors stay dim
-		// (not purple) — the magenta sigil already signals self.
-		var distCol, bearingCol, barCol string
+		// Distance bar + dist + bearing columns are domain rendering
+		// (numbers + scale), not peer-state styling. distanceBarCell /
+		// distanceBarUnknownCell live in components_overlays.go;
+		// peerRowLine owns sigil + name + chrome.
+		var distStr, bearingStr, barCol string
 		if isSelf {
-			distCol = dim.Render(padOrTruncate("(you)", 10))
-			bearingCol = dim.Render("— home QTH")
-			barCol = barDimStyle.Render(strings.Repeat("·", barMax))
+			distStr = padOrTruncate("(you)", 10)
+			bearingStr = "— home QTH"
+			barCol = distanceBarUnknownCell(barMax, rowBg)
 		} else {
 			filled := int(math.Round(p.distKm / maxKm * barMax))
 			if filled < 1 {
 				filled = 1
 			}
-			if filled > barMax {
-				filled = barMax
-			}
-			barCol = barStyle.Render(strings.Repeat("▓", filled)) +
-				barDimStyle.Render(strings.Repeat("░", barMax-filled))
-			distCol = dim.Render(padOrTruncate(fmt.Sprintf("%6.1f km", p.distKm), 10))
-			bearingCol = dim.Render(fmt.Sprintf("%s %3.0f°", compassAbbr(p.bearing), p.bearing))
+			barCol = distanceBarCell(filled, barMax, rowBg)
+			distStr = padOrTruncate(fmt.Sprintf("%6.1f km", p.distKm), 10)
+			bearingStr = fmt.Sprintf("%s %3.0f°", compassAbbr(p.bearing), p.bearing)
 		}
-
-		row := spacer.Render("  ") +
-			sigilStyled +
-			spacer.Render(" ") +
-			nameStyled +
-			spacer.Render("  ") +
-			barCol +
-			spacer.Render("  ") +
-			distCol +
-			spacer.Render("  ") +
-			dim.Render("·") +
-			spacer.Render("  ") +
-			bearingCol
-
+		row := peerRowLine(
+			*p.node, isSelf, isSel, rowBg,
+			barCol, barMax, distStr, bearingStr,
+			paneInnerWidth(width)-gutterWidth,
+		)
 		lines = append(lines, wrapSelection(row, isSel, false, paneInnerWidth(width), rowBg))
 	}
 
@@ -374,10 +310,10 @@ func (m model) renderNearbyPane(width, height int) string {
 	)
 }
 
-// renderRadarPane — polar scope with peers plotted by (bearing,
-// distance). You sit at the centre; north is up, east is right.
-// Ring scale is adaptive: the farthest peer sets the outer ring
-// and we draw 4 concentric rings inside that.
+// radarPane is the /radar polar scope — peers plotted by (bearing,
+// distance) on a 2D rune canvas. You sit at the centre; north is up,
+// east is right. Ring scale is adaptive: the farthest peer sets the
+// outer ring and we draw 4 concentric rings inside that.
 //
 // Glyph choice:
 //   - '@' (pink, bold) = self, dead centre
@@ -388,37 +324,43 @@ func (m model) renderNearbyPane(width, height int) string {
 // highest-priority glyph wins (self > direct-RF > multi-hop). The
 // legend at the bottom surfaces the closest few by name so a busy
 // scope still reads as a directory of "who's close."
-func (m model) renderRadarPane(width, height int) string {
-	header := paneHeader("RADAR", paneNodes, m.focused == paneNodes)
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
+type radarPane struct{ m model }
+
+// Render returns the bordered radar canvas sized exactly to box.
+// Owns the no-fix / no-peers explainer, the canvas drawing, the
+// peer-glyph plot, and the closest-peer legend — radarCanvas
+// Component handles per-cell SGR + bold-on-anchor; this method
+// composes the canvas + legend rows.
+func (p radarPane) Render(box Box) string {
+	width, height := box.Width, box.Height
+	m := p.m
+	header := paneHeaderCell("RADAR", m.focused == paneNodes)
 
 	// No self-fix — there's no centre to plot peers around. Same
 	// in-pane explainer /nearby uses for the same reason.
 	if m.myLatitude == 0 && m.myLongitude == 0 {
-		lines := []string{
-			header, "",
-			dim.Render("   no GPS fix on this radio yet — /radar needs your own"),
-			dim.Render("   position to plot peers around you."),
+		body := header + "\n\n" + paneEmptyMessage(
+			"   no GPS fix on this radio yet — /radar needs your own",
+			"   position to plot peers around you.",
 			"",
-			dim.Render("   options:"),
-			dim.Render("     • wait for your radio to acquire a fix (outdoor + sky view)"),
-			dim.Render("     • check position.* in your radio config (Meshtastic app/CLI)"),
-			dim.Render("     • try /sync to force a NodeDB re-dump"),
-		}
+			"   options:",
+			"     • wait for your radio to acquire a fix (outdoor + sky view)",
+			"     • check position.* in your radio config (Meshtastic app/CLI)",
+			"     • try /sync to force a NodeDB re-dump",
+		)
 		return renderBorderedPane(
-			strings.Join(lines, "\n"), width, height, paneNodes, m.focused == paneNodes,
+			body, width, height, paneNodes, m.focused == paneNodes,
 		)
 	}
 
 	plots := m.collectPeerPlots()
 	if len(plots) == 0 {
-		lines := []string{
-			header, "",
-			dim.Render("   no peers with a GPS fix yet — waiting for"),
-			dim.Render("   Meshtastic Position packets to land."),
-		}
+		body := header + "\n\n" + paneEmptyMessage(
+			"   no peers with a GPS fix yet — waiting for",
+			"   Meshtastic Position packets to land.",
+		)
 		return renderBorderedPane(
-			strings.Join(lines, "\n"), width, height, paneNodes, m.focused == paneNodes,
+			body, width, height, paneNodes, m.focused == paneNodes,
 		)
 	}
 
@@ -506,43 +448,22 @@ func (m model) renderRadarPane(width, height int) string {
 	canvas[cy][cx] = '@'
 	colors[cy][cx] = mhMagenta
 
-	// Render each row to a styled string.
-	fgStyle := lipgloss.NewStyle()
-	var body strings.Builder
-	for r := 0; r < rows; r++ {
-		body.WriteString("  ")
-		for c := 0; c < cols; c++ {
-			ch := canvas[r][c]
-			color := colors[r][c]
-			if color == "" {
-				body.WriteRune(ch)
-				continue
-			}
-			styled := fgStyle.Foreground(lipgloss.Color(color))
-			if ch == '@' || ch == '●' {
-				styled = styled.Bold(true)
-			}
-			body.WriteString(styled.Render(string(ch)))
-		}
-		body.WriteString("\n")
-	}
+	// Radar canvas → multi-line styled string via the radarCanvas
+	// Component. The Component owns the per-cell SGR + bold-on-anchor
+	// rules and the Box-sized contract; this renderer just hands it
+	// the buffer + colors and gets back a properly-padded block.
+	canvasW := cols + 2 // 2-cell lead pad
+	canvasBlock := radarCanvas{
+		Canvas:  canvas,
+		Colors:  colors,
+		LeadPad: 2,
+	}.Render(Box{Width: canvasW, Height: rows})
 
 	// Legend — ring scale + top 5 closest by name with bearing.
-	// Re-bind dim here without italic: the function-scope dim is
-	// italicized for the no-fix explainer, but the legend reads
-	// cleaner upright. (Shadows the outer dim deliberately.)
-	dim = lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	keyDim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
-	legend := []string{
-		"",
-		fmt.Sprintf("  %s  outer ring = %.1f km  ·  %s direct-RF  %s multi-hop  %s me",
-			keyDim.Render("scale:"),
-			maxKm,
-			lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true).Render("●"),
-			lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan)).Render("·"),
-			lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta)).Bold(true).Render("@"),
-		),
-	}
+	// All styling lives in components_radar.go (radarLegendCell +
+	// radarPeerLine); this orchestrator only picks the data.
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	legend := []string{"", radarLegendCell(maxKm)}
 	n := len(plots)
 	if n > 5 {
 		n = 5
@@ -551,14 +472,14 @@ func (m model) renderRadarPane(width, height int) string {
 		legend = append(legend, dim.Render("  closest:"))
 		for i := 0; i < n; i++ {
 			p := plots[i]
-			legend = append(legend,
-				fmt.Sprintf("    %s  %s %3.0f°  %.1f km",
-					padOrTruncate(p.node.callsign, 22),
-					compassAbbr(p.bearing), p.bearing, p.distKm))
+			legend = append(legend, radarPeerLine(
+				p.node.callsign, compassAbbr(p.bearing),
+				p.bearing, p.distKm,
+			))
 		}
 	}
 
-	bodyRows := strings.Split(body.String(), "\n")
+	bodyRows := strings.Split(canvasBlock, "\n")
 	lines := make([]string, 0, 2+len(bodyRows)+len(legend))
 	lines = append(lines, header, "")
 	lines = append(lines, bodyRows...)

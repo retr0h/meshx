@@ -27,6 +27,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// components_splash.go — splash banner data + the splashAsNotices
+// Component-style helper that converts a splashVariant into a
+// noticeRow slice (the same shape every other `-!-` notice writer
+// emits).
+//
 // BitchX pioneered the rotating-ANSI-logo splash — running the client
 // gave you a different graffiti art banner each launch. We pay homage:
 // meshx ships several block-art MESHX variants and picks one randomly
@@ -34,8 +39,9 @@ import (
 // / magenta / amber / pink) so launches feel alive and different.
 //
 // The art itself is composed from plain-text block characters — no
-// embedded ANSI — and tinted at render time via lipgloss so the
-// palette stays unified with the rest of the UI.
+// embedded ANSI — and tinted at render time via the splashTaglineCell
+// + noticeRow Components so the palette stays unified with the rest
+// of the UI.
 
 // splashVariant is one logo design — a set of raw text rows + a color
 // chooser function that says which color each row should render in.
@@ -155,7 +161,7 @@ func pickSplash() splashVariant {
 // m.noticeCard; that's the same single-entrypoint discipline every
 // other `-!-` writer follows and keeps splash out of the "rogue
 // m.messages = append" smell.
-func splashAsNotices(v splashVariant) []noticeRow {
+func splashAsNotices(v splashVariant, callsign string) []noticeRow {
 	// Normalize row widths to the variant's widest row so every line
 	// centers at the same column. Hand-drawn block-art tends to
 	// drift a cell or two row-to-row (slab-classic had row 0 at 35
@@ -199,19 +205,11 @@ func splashAsNotices(v splashVariant) []noticeRow {
 	// Blank separator between logo and tagline.
 	out = append(out, noticeRow{text: "", style: noticeStyle{}})
 
-	// Tagline — cyan brand, drained punctuation, magenta handle,
-	// bracketed with the mesh-green ░▒▓█▓▒░ spark. Pre-styled body
-	// passed as-is; the renderer doesn't wrap it in sys.Render since
-	// center means the style split stays visible.
-	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
-	magenta := lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta))
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	spark := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Render("░▒▓█▓▒░")
-	tagline := spark + " " +
-		cyan.Render("Meshtastic") + dim.Render(" messenger  ·  by ") +
-		magenta.Render("retr0h") + " " + spark
+	// Tagline — composed from the splashTaglineCell() Component
+	// which owns the gradient + per-token coloring (mesh-green
+	// spark, cyan brand, dim punctuation, magenta handle).
 	out = append(out, noticeRow{
-		text:  tagline,
+		text:  splashTaglineCell(callsign),
 		style: noticeStyle{center: true},
 	})
 

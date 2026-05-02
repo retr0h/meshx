@@ -358,6 +358,14 @@ type model struct {
 	// ConfigComplete that fires after handshake.
 	syncPendingGhosts int
 
+	// syncReceived backs the live peer counter shown in the chanRow
+	// flash during the NodeDB handshake. Bumps once per
+	// radioNodeInfoMsg between MyInfo and ConfigComplete; reset to 0
+	// at MyInfo (start) and at ConfigComplete (end). No denominator
+	// because meshtastic doesn't surface the radio's expected
+	// NodeDB total up front.
+	syncReceived int
+
 	// storageAlerted — once any saveMessage / saveNode /
 	// saveNodePrefs fails, flip this flag and emit a single
 	// systemLine so the user knows persistence is degraded. Every
@@ -365,6 +373,17 @@ type model struct {
 	// machine-gun the messages pane. In-memory operation continues
 	// normally — losing persistence is preferable to crashing.
 	storageAlerted bool
+
+	// programSlot holds the *tea.Program once the bubbletea runtime is
+	// up. The pump goroutine needs program.Send(), but tea.NewProgram
+	// won't return the pointer until AFTER it has captured the model
+	// value. The slot is a heap-allocated struct whose address is
+	// stable across model copies — RunRadio creates one, stashes its
+	// address here BEFORE NewProgram captures the model, then writes
+	// program into the slot. Update reads slot.p when spawning the
+	// pump. Replaces the previous package-level globalProgramRef so
+	// state is per-Run and not visible outside this file.
+	programSlot *programSlot
 
 	// Live-radio state. Zero-value is "demo mode — no transport".
 	pump        *pump          // non-nil when connected to a real radio
@@ -478,22 +497,31 @@ func RunRadio(dest string) error {
 			_ = m.db.Close()
 		}
 	}()
+	// Allocate the program slot BEFORE handing the model to NewProgram —
+	// tea takes the model by value, but m.programSlot is a pointer so
+	// every copy of the model (the one tea holds, the ones produced by
+	// Update) sees the same underlying struct. We fill slot.p AFTER
+	// NewProgram returns; openPumpMsg reads it via m.programSlot.p.
+	slot := &programSlot{}
+	m.programSlot = slot
 	program := tea.NewProgram(m, tea.WithAltScreen())
-
-	// We need a reference to the program inside the pump so it can
-	// call program.Send() from its goroutine. Stash it on a shared
-	// ptr that Init() fills once the loop is up.
-	globalProgramRef = program
-	defer func() { globalProgramRef = nil }()
+	slot.p = program
+	defer func() { slot.p = nil }()
 
 	_, err := program.Run()
 	return err
 }
 
-// globalProgramRef is a small hand-off slot used because tea.Program
-// doesn't expose itself to models. The pump goroutine needs program.Send.
-// Scoped to one running Bubble Tea program at a time (which is the norm).
-var globalProgramRef *tea.Program
+// programSlot is a hand-off type that lets the model surface the
+// running *tea.Program to Update without resorting to package-level
+// state. RunRadio creates one, hands its address to the model before
+// tea.NewProgram captures the value, then writes program into the
+// slot once NewProgram returns. The pump goroutine needs Send and
+// only Update calls startPump — so reads of slot.p are confined to
+// the single goroutine that runs Update.
+type programSlot struct {
+	p *tea.Program
+}
 
 // pumpAttachedMsg hands the transport pump pointer into the model so
 // outbound messages (/cq, typed text) can enqueue ToRadio envelopes.
@@ -770,7 +798,9 @@ func newModel(demo *Demo, dest string) model {
 		// newest entry in the log — sits right at the bottom above
 		// the input bar on launch just like every other recent
 		// message, and scrolls UP naturally as fresh chat arrives.
-		m.noticeCard(splashAsNotices(chosenSplash)...)
+		// Pass the cached self callsign so the splash tagline reads
+		// "as <callsign>" instead of a hardcoded credit.
+		m.noticeCard(splashAsNotices(chosenSplash, m.myCallsign())...)
 		return m
 	}
 
@@ -782,8 +812,15 @@ func newModel(demo *Demo, dest string) model {
 	m.nodes = append([]nodeItem(nil), demo.Nodes...)
 	m.messages = append([]messageItem(nil), demo.Messages...)
 	// Splash notices land at the tail so the BitchX greeter is the
-	// newest entry in the log — same behaviour as live mode.
-	m.noticeCard(splashAsNotices(chosenSplash)...)
+	// newest entry in the log — same behaviour as live mode. In
+	// demo mode the "me" callsign is set up below from demo.NodeNum;
+	// pass the demo's first-row callsign so the splash tagline
+	// renders against the demo identity.
+	demoCallsign := ""
+	if len(demo.Nodes) > 0 {
+		demoCallsign = demo.Nodes[0].callsign
+	}
+	m.noticeCard(splashAsNotices(chosenSplash, demoCallsign)...)
 	if len(demo.Channels) > 0 {
 		m.currentChannel = demo.Channels[0].name
 	}
@@ -919,7 +956,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// because a 30s backoff would otherwise blow past flashTTL
 		// silently. The banner clears the moment a radio frame
 		// proves the link is back (radioMyInfoMsg / ConfigComplete).
-		if m.reconnect != nil {
+		//
+		// EXCEPTION: once MyInfo has arrived (myNodeNum != 0) but
+		// ConfigComplete hasn't, we're mid-handshake — let the live
+		// "sync: N peers received" counter (set in radioNodeInfoMsg)
+		// own the flash. Otherwise this tick blows the counter away
+		// every 250ms with the dial banner.
+		if m.reconnect != nil && m.myNodeNum == 0 {
 			m.flash = m.reconnectFlashText()
 			m.flashSeen = m.flash
 			m.flashSeenAt = time.Now()
@@ -943,7 +986,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openPumpMsg:
 		// Program is running; safe to spawn the pump now.
-		if globalProgramRef == nil {
+		if m.programSlot == nil || m.programSlot.p == nil {
 			m.flash = "internal error: program ref missing"
 			return m, nil
 		}
@@ -961,7 +1004,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = m.reconnectFlashText()
 		m.flashSeen = m.flash
 		m.flashSeenAt = time.Now()
-		m.pump = startPump(msg.dest, globalProgramRef)
+		m.pump = startPump(msg.dest, m.programSlot.p)
 		return m, nil
 
 	case pumpAttachedMsg:
@@ -970,18 +1013,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioMyInfoMsg:
 		m.myNodeNum = msg.nodeNum
-		// DELIBERATELY don't clear the reconnect banner here. MyInfo is
-		// the FIRST frame of the handshake, not the last — if the link
-		// drops between MyInfo and ConfigComplete (BLE sessions
-		// regularly do), clearing here would hide the banner while
-		// `m.connected` stayed false, leaving the top bar's "●
-		// connecting" dot with no in-band flash explaining why. We
-		// wait for ConfigComplete; until then the user sees the same
-		// banner that drove the reconnect.
+		// MyInfo = first frame of the handshake. Reset the received
+		// counter to 0 and emit the start-of-sync notice so the
+		// user sees node-list progress instead of staring at an
+		// empty pane. The radio doesn't tell us the total NodeDB
+		// size up front — only currently-known peers get re-broadcast
+		// (the SQLite cache holds historical accumulation, which can
+		// be much larger). So no denominator: just a running count.
+		// Reconnect banner stays up until ConfigComplete; if the
+		// link drops mid-handshake (BLE regularly does), the banner
+		// re-appears in the correct state.
+		if !m.connected {
+			m.syncReceived = 0
+			m.systemLine("sync: pulling NodeDB from radio…")
+		}
 		return m, nil
 
 	case radioNodeInfoMsg:
 		m.upsertNode(msg)
+		// While the handshake is still in flight (m.connected stays
+		// false until ConfigComplete), bump the received counter and
+		// surface it in the chanRow flash via syncCounterFlash —
+		// the running number renders bright (mesh-green bold) so it
+		// reads as the active live signal, "peers received" stays
+		// in the regular flash green. On ConfigComplete the
+		// systemLine path takes over with the final tally.
+		if !m.connected && m.myNodeNum != 0 {
+			m.syncReceived++
+			m.flash = "sync: " + syncCounterFlash(m.syncReceived) + " peers received"
+		}
 		return m, nil
 
 	case radioChannelMsg:
@@ -1060,14 +1120,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case radioConfigCompleteMsg:
+		wasDisconnected := !m.connected
 		m.connected = true
 		// Definitive end of the handshake — NodeDB and config dump
 		// have all arrived, the user can see live state. Drop the
 		// reconnect banner now and not before; MyInfo isn't strong
 		// enough on its own (see comment in the radioMyInfoMsg case).
 		m.clearReconnectBanner()
+		// Initial-connect handshake (was disconnected, no /sync
+		// pending): emit a completion notice with the peer count so
+		// the user sees that the NodeDB pull finished. The earlier
+		// "sync: pulling NodeDB" notice on MyInfo gives the start;
+		// this one closes the loop.
+		if wasDisconnected && m.syncPendingGhosts == 0 {
+			m.systemLine(fmt.Sprintf(
+				"sync: complete — %d peers identified", len(m.nodes),
+			))
+		}
+		// Clear the handshake-progress counter so a future /sync
+		// or post-disconnect rehandshake starts from a clean slate.
+		m.syncReceived = 0
 		// If the user issued /sync and we snapshotted a ghost count,
-		// emit a completion systemLine with the delta so they see
+		// emit a completion systemBlock with the delta so they see
 		// what the re-dump actually changed. syncPendingGhosts > 0
 		// means the snapshot had placeholders; == -1 is the sentinel
 		// for "/sync fired with zero ghosts baseline"; == 0 means

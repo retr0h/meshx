@@ -50,7 +50,7 @@ func TestMessagesPane_KeycapRowFitsBox(t *testing.T) {
 		}
 		boxW := termW - 1 // mirrors View()'s safeW frame
 		paneH := 20
-		out := m.renderMessagesPane(boxW, paneH)
+		out := messagesPane{m: m}.Render(Box{Width: boxW, Height: paneH})
 		for i, line := range strings.Split(out, "\n") {
 			if w := ansiCells(line); w != boxW {
 				t.Errorf("termW=%d line %d: ansiCells=%d, want %d\nstripped=%q",

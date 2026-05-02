@@ -230,28 +230,51 @@ func padCells(s string, w int) string {
 	return res
 }
 
-// alignCells fits s into exactly w cells with the given horizontal
-// alignment. Right-padding for AlignLeft, left-padding for AlignRight,
-// equal padding for AlignCenter. Truncation with ellipsis on overflow.
-func alignCells(s string, w int, a Align) string {
+// renderCell fits a Cell into exactly w cells: content + alignment
+// padding, with PadStyle applied to the pad spaces only and Style
+// (when set) applied as an outer wrap. Splitting the pad path lets
+// callers tint trailing cell-fill in rowBg without disturbing the
+// content's existing ANSI codes — the chat/notice row body cells
+// rely on this so the zebra background extends past short message
+// text out to the metrics columns.
+func renderCell(c Cell, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	cur := ansiCells(s)
+	cur := ansiCells(c.Content)
 	if cur >= w {
-		return padCells(s, w)
+		out := padCells(c.Content, w)
+		if c.Style != nil {
+			out = c.Style.Render(out)
+		}
+		return out
 	}
 	gap := w - cur
-	switch a {
+	var leftPad, rightPad string
+	switch c.Align {
 	case AlignRight:
-		return strings.Repeat(" ", gap) + s
+		leftPad = strings.Repeat(" ", gap)
 	case AlignCenter:
-		left := gap / 2
-		right := gap - left
-		return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
+		l := gap / 2
+		r := gap - l
+		leftPad = strings.Repeat(" ", l)
+		rightPad = strings.Repeat(" ", r)
 	default:
-		return s + strings.Repeat(" ", gap)
+		rightPad = strings.Repeat(" ", gap)
 	}
+	if c.PadStyle != nil {
+		if leftPad != "" {
+			leftPad = c.PadStyle.Render(leftPad)
+		}
+		if rightPad != "" {
+			rightPad = c.PadStyle.Render(rightPad)
+		}
+	}
+	out := leftPad + c.Content + rightPad
+	if c.Style != nil {
+		out = c.Style.Render(out)
+	}
+	return out
 }
 
 // Cell is one segment of a Row — a styled, measured chunk of content
@@ -260,11 +283,22 @@ func alignCells(s string, w int, a Align) string {
 // A Width of -1 means "flex" — the parent Row distributes leftover
 // cells among all flex children equally. Style is applied to the
 // padded result so background fills extend through the whole cell.
+//
+// PadStyle, when set, styles ONLY the spaces renderCell appends to
+// fill the cell to its declared width. This is the Right Way to
+// extend a row-bg tint past the end of styled content: the content's
+// own ANSI codes (lipgloss bake-in fg+bg) stay untouched, and the
+// trailing pad spaces get an SGR span tinted to match. Wrapping the
+// whole cell with a single bg styler (Style) instead breaks because
+// the content's inner `\e[0m` resets terminate the outer span mid-
+// cell — the same bug class wrapSelection had to dodge for selection
+// highlights.
 type Cell struct {
-	Content string
-	Width   int // exact cell budget; -1 = flex
-	Align   Align
-	Style   styler // optional styling wrapper, applied AFTER pad/truncate
+	Content  string
+	Width    int // exact cell budget; -1 = flex
+	Align    Align
+	Style    styler // optional styling wrapper, applied AFTER pad/truncate
+	PadStyle styler // optional styler for cell-internal pad spaces only
 }
 
 // styler is a deliberately minimal interface: we accept anything that
@@ -342,10 +376,7 @@ func (r Row) Render(box Box) string {
 		if emitted+w > box.Width {
 			w = box.Width - emitted
 		}
-		piece := alignCells(c.Content, w, c.Align)
-		if c.Style != nil {
-			piece = c.Style.Render(piece)
-		}
+		piece := renderCell(c, w)
 		b.WriteString(piece)
 		emitted += w
 		if emitted >= box.Width {

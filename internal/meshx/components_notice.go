@@ -94,13 +94,17 @@ func noticeRowFor(rowBg string, time string, pinFirst, pinLast bool, fade float6
 // Row{Cells:...}. body is the already-styled body content (everything
 // after time column); the body cell gets the flex slot.
 func noticeRowLine(parts noticeRowParts, body string, contentW int) string {
+	bg := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
 	cells := []Cell{
 		{Content: parts.accent, Width: noticeAccentW},
 		{Content: parts.time, Width: noticeTimeW},
-		{Content: body, Width: -1},
+		// Body flex slot — PadStyle tints the trailing space past the
+		// end of the message text so the row's lavender-on-rowBg
+		// background extends continuously through to the pin column.
+		{Content: body, Width: -1, PadStyle: bg},
 		{Content: parts.pinEnd, Width: noticePinW},
 	}
-	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
+	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
 
 // noticeCenterPad returns padding to prepend a centered notice

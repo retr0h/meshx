@@ -211,21 +211,25 @@ func chatRowMainLine(parts chatRowParts, body string, bodyStyler styler, content
 		timeW   = 7 // "HH:MM  "
 		gapW    = 2 // 2-space gutter between sender and body
 	)
-	gap := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg)).Render("  ")
+	bg := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
+	gap := bg.Render("  ")
 	cells := []Cell{
 		{Content: parts.accent, Width: accentW},
 		{Content: parts.flag, Width: flagW},
 		{Content: parts.time, Width: timeW},
 		{Content: parts.sender, Width: fromW},
 		{Content: gap, Width: gapW},
-		{Content: bodyStyler.Render(body), Width: -1, // flex slot
-			Style: nil},
+		// Body is the flex slot — PadStyle tints the trailing space
+		// past the end of the message text so the zebra rowBg extends
+		// continuously through to the hop column instead of dropping
+		// to the terminal default.
+		{Content: bodyStyler.Render(body), Width: -1, PadStyle: bg},
 		{Content: parts.hop, Width: hopColW},
 		{Content: parts.snr, Width: snrColW},
 		{Content: parts.statusGap, Width: 1},
 		{Content: parts.status, Width: 1},
 	}
-	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
+	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
 
 // fromW is the cell budget for the sender column. Meshtastic
@@ -248,14 +252,14 @@ const chatRowLeftFixed = 2 /*accent*/ + 2 /*flag*/ + 7 /*time*/ + fromW + 2 /*ga
 // group; everything between accent and the body column is bg-tinted
 // blank so the row reads as a single solid rectangle.
 func chatContinuationLine(parts chatRowParts, body string, bodyStyler styler, contentW int) string {
-	gap := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
-	indent := gap.Render(strings.Repeat(" ", chatRowLeftFixed-2))
+	bg := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
+	indent := bg.Render(strings.Repeat(" ", chatRowLeftFixed-2))
 	cells := []Cell{
 		{Content: parts.accent, Width: 2},
 		{Content: indent, Width: chatRowLeftFixed - 2},
-		{Content: bodyStyler.Render(body), Width: -1},
+		{Content: bodyStyler.Render(body), Width: -1, PadStyle: bg},
 	}
-	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
+	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
 
 // chatAckLine renders the optional acks subline that hangs under a
@@ -263,13 +267,13 @@ func chatContinuationLine(parts chatRowParts, body string, bodyStyler styler, co
 // on the row above. The body cell is rendered with the lavender
 // italic system style.
 func chatAckLine(parts chatRowParts, acks string, sysStyler styler, contentW int) string {
-	gap := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
-	indent := gap.Render(strings.Repeat(" ", chatRowLeftFixed))
+	bg := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
+	indent := bg.Render(strings.Repeat(" ", chatRowLeftFixed))
 	cells := []Cell{
 		{Content: indent, Width: chatRowLeftFixed},
-		{Content: sysStyler.Render(acks), Width: -1},
+		{Content: sysStyler.Render(acks), Width: -1, PadStyle: bg},
 	}
-	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
+	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
 
 // chatThreadingQuote renders the dim one-line "┌ from time \"text\""
@@ -280,8 +284,8 @@ func chatThreadingQuote(
 	rowBg string,
 	contentW int,
 ) string {
-	gap := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
-	indent := gap.Render(strings.Repeat(" ", 2+2+7)) // accent+flag+time
+	bg := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
+	indent := bg.Render(strings.Repeat(" ", 2+2+7)) // accent+flag+time
 	hook := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhPink)).
 		Background(lipgloss.Color(rowBg)).
@@ -298,9 +302,9 @@ func chatThreadingQuote(
 	cells := []Cell{
 		{Content: indent, Width: 2 + 2 + 7},
 		{Content: hook, Width: 2},
-		{Content: tstamp.Render(quoteBody), Width: -1},
+		{Content: tstamp.Render(quoteBody), Width: -1, PadStyle: bg},
 	}
-	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
+	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
 
 // hopColW / snrColW are the cell widths for the right-hand metrics

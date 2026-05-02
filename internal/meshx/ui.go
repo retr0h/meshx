@@ -1088,14 +1088,22 @@ func (m model) renderNoticeRow(
 	}
 	styled := bodyStyle.Render(bodyContent)
 
+	// `-!-` is the leftmost chrome of every notice row — the irssi
+	// signature that says "this is system, not chat." It MUST stay
+	// flush at the body cell's left edge regardless of style.center,
+	// otherwise the splash banner ends up with `-!-` floating in the
+	// middle of the row, breaking the per-row chrome contract that
+	// makes notices read as a vertical column.
+	//
+	// For style.center, only the content AFTER the prefix gets
+	// center-padded — within the remaining body width, not the full
+	// body cell. The art (e.g. the MESHX splash banner) floats at
+	// (innerBody - bw)/2 with `-!- ` always at the left.
 	body := sys.Render(prefix) + styled
 	if style.center {
-		// Center within the body cell — pad lead with sys-styled
-		// spaces so the visible body floats at (bodyW - bw)/2 inside
-		// the cell, where bw includes the "-!- " prefix because the
-		// prefix is the visual chrome of every notice row.
-		bw := ansiCells(prefix) + ansiCells(bodyContent)
-		body = noticeCenterPad(bodyW, bw, sys) + body
+		innerBody := bodyW - ansiCells(prefix)
+		bw := ansiCells(bodyContent)
+		body = sys.Render(prefix) + noticeCenterPad(innerBody, bw, sys) + styled
 	}
 	line := noticeRowLine(parts, body, contentW)
 	return wrapSelection(line, selected, false, inner, rowBg)

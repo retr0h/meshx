@@ -71,6 +71,32 @@ func paneEmptyMessage(lines ...string) string {
 	return strings.Join(out, "\n")
 }
 
+// tabCompletionFlashCell renders the tab-cycle feedback shown in
+// the status flash row when the user pages through completion
+// matches. Format: "N/M  match1 · match2 · match3" — the active
+// counter + active match render in pink-bold, the denominator and
+// inactive matches drop to dim drained, separators are dim lavender.
+// Same maxheadroom "loud-number / quiet-chrome" rhythm the byte
+// counter uses on the input bar.
+func tabCompletionFlashCell(matches []matchItem, active int) string {
+	pinkBold := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhPink)).
+		Bold(true)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	counter := pinkBold.Render(fmt.Sprintf("%d", active+1)) +
+		dim.Render(fmt.Sprintf("/%d", len(matches)))
+	sep := dim.Render("  ·  ")
+	parts := make([]string, len(matches))
+	for i, mi := range matches {
+		if i == active {
+			parts[i] = pinkBold.Render(mi.display)
+		} else {
+			parts[i] = dim.Render(mi.display)
+		}
+	}
+	return counter + "  " + strings.Join(parts, sep)
+}
+
 // splashTaglineCell renders the BitchX-style tagline that hangs
 // under the splash banner: `░▒▓█▓▒░ Meshtastic messenger  ·  as
 // <callsign> ░▒▓█▓▒░` — or just `░▒▓█▓▒░ Meshtastic messenger

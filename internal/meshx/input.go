@@ -43,7 +43,6 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 func (m *model) handleTab(dir int) {
@@ -81,47 +80,10 @@ func (m *model) handleTab(dir int) {
 	// inactive set, dim · separators. Makes it obvious which of
 	// three "retr0h" entries Tab is currently substituting.
 	if len(m.tab.matches) > 1 {
-		m.flash = renderTabFlash(m.tab.matches, m.tab.cursor)
+		m.flash = tabCompletionFlashCell(m.tab.matches, m.tab.cursor)
 	} else {
 		m.flash = ""
 	}
-}
-
-// renderTabFlash styles the tab-cycle feedback with the maxheadroom
-// palette: pink counter, active match bold+pink, inactives drained,
-// dim lavender separators. Returns pre-rendered lipgloss-styled
-// string ready for the status bar.
-func renderTabFlash(matches []matchItem, active int) string {
-	// Counter: "<n>" in pink-bold, "/<total>" in drained grey so the
-	// active position pops while the denominator sits quietly next
-	// to it. Matches the maxheadroom palette's loud-number quiet-
-	// chrome rhythm.
-	nStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhPink)).
-		Bold(true)
-	denomStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained))
-	counter := nStyle.Render(fmt.Sprintf("%d", active+1)) +
-		denomStyle.Render(fmt.Sprintf("/%d", len(matches)))
-
-	activeStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhPink)).
-		Bold(true)
-	idleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained))
-	sep := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained)).
-		Render("  ·  ")
-
-	parts := make([]string, len(matches))
-	for i, mi := range matches {
-		if i == active {
-			parts[i] = activeStyle.Render(mi.display)
-		} else {
-			parts[i] = idleStyle.Render(mi.display)
-		}
-	}
-	return counter + "  " + strings.Join(parts, sep)
 }
 
 // RunDemo launches the Bubble Tea model with the canonical Demo

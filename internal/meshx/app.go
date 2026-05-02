@@ -970,14 +970,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioMyInfoMsg:
 		m.myNodeNum = msg.nodeNum
-		// DELIBERATELY don't clear the reconnect banner here. MyInfo is
-		// the FIRST frame of the handshake, not the last — if the link
-		// drops between MyInfo and ConfigComplete (BLE sessions
-		// regularly do), clearing here would hide the banner while
-		// `m.connected` stayed false, leaving the top bar's "●
-		// connecting" dot with no in-band flash explaining why. We
-		// wait for ConfigComplete; until then the user sees the same
-		// banner that drove the reconnect.
+		// MyInfo = first frame of the handshake. Emit an in-band
+		// "syncing NodeDB" notice so the user sees node-list progress
+		// instead of staring at an empty pane wondering if anything's
+		// happening. We deliberately do NOT clear the reconnect banner
+		// here — if the link drops between MyInfo and ConfigComplete
+		// (BLE sessions regularly do), clearing would hide the banner
+		// while m.connected stayed false. We wait for ConfigComplete.
+		if !m.connected {
+			m.systemLine("sync: pulling NodeDB from radio…")
+		}
 		return m, nil
 
 	case radioNodeInfoMsg:
@@ -1060,14 +1062,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case radioConfigCompleteMsg:
+		wasDisconnected := !m.connected
 		m.connected = true
 		// Definitive end of the handshake — NodeDB and config dump
 		// have all arrived, the user can see live state. Drop the
 		// reconnect banner now and not before; MyInfo isn't strong
 		// enough on its own (see comment in the radioMyInfoMsg case).
 		m.clearReconnectBanner()
+		// Initial-connect handshake (was disconnected, no /sync
+		// pending): emit a completion notice with the peer count so
+		// the user sees that the NodeDB pull finished. The earlier
+		// "sync: pulling NodeDB" notice on MyInfo gives the start;
+		// this one closes the loop.
+		if wasDisconnected && m.syncPendingGhosts == 0 {
+			m.systemLine(fmt.Sprintf(
+				"sync: complete — %d peers identified", len(m.nodes),
+			))
+		}
 		// If the user issued /sync and we snapshotted a ghost count,
-		// emit a completion systemLine with the delta so they see
+		// emit a completion systemBlock with the delta so they see
 		// what the re-dump actually changed. syncPendingGhosts > 0
 		// means the snapshot had placeholders; == -1 is the sentinel
 		// for "/sync fired with zero ghosts baseline"; == 0 means

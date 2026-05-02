@@ -94,18 +94,16 @@ func frameView(m model) Component {
 		}
 		return fitToBox(s, box)
 	})
-	// Spacer rows sandwich the chanRow + inputBar:
-	//   - 1 above chanRow      → keeps chrome off the bottom of the body pane
-	//   - 1 below inputBar     → keeps the input prompt off the very last
-	//                            terminal row so the cursor / typed text isn't
-	//                            jammed against the tmux/iTerm status bar
-	// Costs 2 lines of body real estate; gives the bottom chrome a
-	// readable margin on both sides.
+	// Single trailing Spacer below the input bar keeps the cursor /
+	// typed text off the very last terminal row so it isn't jammed
+	// against the tmux / iTerm status bar. The chanRow sits directly
+	// against the bottom pane border — no spacer between body and
+	// channelTabsRow because that gap reads as wasted vertical real
+	// estate, not breathing room.
 	return VStack{Children: []SizedChild{
 		{Comp: statusBar{m: m}, Size: 1},
 		{Comp: topDivider{}, Size: 1},
 		{Comp: body, Size: -1},
-		{Comp: Spacer{}, Size: 1},
 		{Comp: channelTabsRow{m: m}, Size: 1},
 		{Comp: inputBar{m: m}, Size: 1},
 		{Comp: Spacer{}, Size: 1},

@@ -107,15 +107,46 @@ func noticeRowLine(parts noticeRowParts, body string, contentW int) string {
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
 
-// noticeCenterPad returns padding to prepend a centered notice
-// body so it floats at (bodyW - bw)/2 within the body cell. bw is
-// the visible width of the bodyContent (not including the "-!- "
-// prefix). Returns "" when no centering is needed (already wider
-// than half the body cell).
-func noticeCenterPad(bodyW, bw int, sysStyler styler) string {
-	padLen := (bodyW - bw) / 2
-	if padLen <= 0 {
-		return ""
+// noticeCenteredRowLine renders a notice row with the body block
+// pane-centered against contentW (the pane's inner width), instead
+// of within the regular accent/time/body/pin cell layout.
+//
+// The regular noticeRowLine has 12 cells of left chrome (accent +
+// time) and 1 cell of right chrome (pin tail). Centering the body
+// within the body cell would offset the visible content ~6 cells
+// right of pane center because of that asymmetry. For splash banner
+// rows we want the art's visual midpoint to land on the pane's
+// midpoint, so we bypass the time cell entirely and emit a row
+// shaped as: accent + flex-pad + body + flex-pad + pinEnd. Row's
+// flex distribution divides leftover width equally between the two
+// pads, which lands the body at exactly contentW/2 - bw/2 cells
+// from the gutter regardless of how wide the pane is.
+//
+// body must be a pre-styled string; this Component owns the layout
+// math but not the styling, so the caller can vary the splash
+// banner's foreground (the rotating Max-Headroom palette) without
+// re-implementing the whole row.
+func noticeCenteredRowLine(parts noticeRowParts, body string, contentW int) string {
+	bg := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
+	bw := ansiCells(body)
+	available := contentW - noticeAccentW - noticePinW
+	if bw > available {
+		bw = available
 	}
-	return sysStyler.Render(strings.Repeat(" ", padLen))
+	leftPad := (available - bw) / 2
+	rightPad := available - bw - leftPad
+	if leftPad < 0 {
+		leftPad = 0
+	}
+	if rightPad < 0 {
+		rightPad = 0
+	}
+	cells := []Cell{
+		{Content: parts.accent, Width: noticeAccentW},
+		{Content: bg.Render(strings.Repeat(" ", leftPad)), Width: leftPad},
+		{Content: body, Width: bw, PadStyle: bg},
+		{Content: bg.Render(strings.Repeat(" ", rightPad)), Width: rightPad},
+		{Content: parts.pinEnd, Width: noticePinW},
+	}
+	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }

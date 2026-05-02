@@ -1052,7 +1052,6 @@ func (m model) renderNoticeRow(
 	if contentW < 20 {
 		contentW = 20
 	}
-	bodyW := contentW - noticeAccentW - noticeTimeW - noticePinW
 
 	sys := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(lav)).
@@ -1088,22 +1087,18 @@ func (m model) renderNoticeRow(
 	}
 	styled := bodyStyle.Render(bodyContent)
 
-	// `-!-` is the leftmost chrome of every notice row — the irssi
-	// signature that says "this is system, not chat." It MUST stay
-	// flush at the body cell's left edge regardless of style.center,
-	// otherwise the splash banner ends up with `-!-` floating in the
-	// middle of the row, breaking the per-row chrome contract that
-	// makes notices read as a vertical column.
-	//
-	// For style.center, only the content AFTER the prefix gets
-	// center-padded — within the remaining body width, not the full
-	// body cell. The art (e.g. the MESHX splash banner) floats at
-	// (innerBody - bw)/2 with `-!- ` always at the left.
+	// style.center routes through the noticeCenteredRowLine Component,
+	// which pane-centers prefix + bodyContent against contentW. The
+	// Component owns the geometry — it knows about accent/pinEnd
+	// chrome and lets Row's flex distribution land the body at exactly
+	// contentW/2 - bw/2 cells from the gutter, regardless of pane
+	// width or chrome asymmetry. Non-centered styled rows keep `-!-`
+	// flush at the body cell's left edge via the regular noticeRowLine
+	// path so the per-row chrome stacks consistently across notices.
 	body := sys.Render(prefix) + styled
 	if style.center {
-		innerBody := bodyW - ansiCells(prefix)
-		bw := ansiCells(bodyContent)
-		body = sys.Render(prefix) + noticeCenterPad(innerBody, bw, sys) + styled
+		line := noticeCenteredRowLine(parts, body, contentW)
+		return wrapSelection(line, selected, false, inner, rowBg)
 	}
 	line := noticeRowLine(parts, body, contentW)
 	return wrapSelection(line, selected, false, inner, rowBg)

@@ -1525,22 +1525,36 @@ func (m model) renderMessageRow(
 			Italic(true)
 		firstLine = "(?) " + firstLine
 	}
-	firstStyled := bodyText.Render(padOrTruncate(firstLine, textW))
 	_ = bang // kept in scope for any future command-styling use
+	_ = firstLine
+	_ = fromPadded
+	_ = senderStyle
+	_ = flagStyle
+	_ = flag
+	_ = right
+
+	// Build the row's first visible line via the chatRow Component
+	// composition (Row{Cells:[]Cell{...}}) instead of inline string
+	// concat — this is the leaf decomposition the architecture has
+	// been moving toward. Each named cell (accent, flag, time,
+	// sender, body, hop, snr, statusGap, status) now has a single
+	// authoritative source in components_chat.go::chatRowFor, so
+	// reuse (e.g., the same hop / snr cells in /whois output cards)
+	// is one struct-field reach away.
+	parts := chatRowFor(m, msg, rowBg)
+	bodyForFirst := bodyLines[0]
+	if msg.corrupted {
+		bodyForFirst = "(?) " + bodyForFirst
+	}
+	row := chatRowMainLine(parts, bodyForFirst, bodyText, contentW)
 
 	// Build the right-hand segment with a 2-space gap — both on the
 	// tinted bg so the row reads as a single uninterrupted rectangle.
+	// Kept for use by continuation-line / threading-quote rendering
+	// below, which still flows through the legacy concat path.
 	gapStyle := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
 	twoSpace := gapStyle.Render("  ")
-
-	left := accent +
-		flagStyle.Render(flag+" ") +
-		tstamp.Render(msg.time+"  ") +
-		senderStyle.Render(fromPadded) +
-		twoSpace +
-		firstStyled
-
-	row := left + right
+	_ = twoSpace
 
 	// Continuation lines (line 2+) hang under the text column.
 	// Carry the same sender-color ▎ accent as the first line so the

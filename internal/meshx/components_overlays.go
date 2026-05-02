@@ -55,6 +55,74 @@ func channelRowLine(name string, private bool, unread int, contentW int) string 
 	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
 }
 
+// peerRowLine renders one row of the /nearby distance roster. The
+// per-cell content is pre-styled by the caller (sigil color +
+// bg-styled spans for state, fav, self markers); this Component
+// owns the cell-budget layout so a wide name or long bearing label
+// can never push the right ║ frame out of column.
+//
+//	"  " (2) + sigil (1) + " " (1) + name (22) + "  " (2) +
+//	bar (barW) + "  " (2) + dist (10) + "  " (2) + "·" (1) +
+//	"  " (2) + bearing (flex)
+//
+// Setting all chrome cells to fixed widths plus a flex bearing
+// column means the row always sums to exactly contentW cells per
+// ansiCells, regardless of pane width.
+func peerRowLine(
+	rowBg string,
+	sigil string,
+	name string,
+	bar string,
+	barW int,
+	dist string,
+	bearing string,
+	contentW int,
+) string {
+	bg := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
+	dot := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Background(lipgloss.Color(rowBg)).
+		Render("·")
+	cells := []Cell{
+		{Content: bg.Render("  "), Width: 2},
+		{Content: sigil, Width: 1},
+		{Content: bg.Render(" "), Width: 1},
+		{Content: name, Width: 22},
+		{Content: bg.Render("  "), Width: 2},
+		{Content: bar, Width: barW},
+		{Content: bg.Render("  "), Width: 2},
+		{Content: dist, Width: 10},
+		{Content: bg.Render("  "), Width: 2},
+		{Content: dot, Width: 1},
+		{Content: bg.Render("  "), Width: 2},
+		{Content: bearing, Width: -1, PadStyle: bg},
+	}
+	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
+}
+
+// helpKVLine renders one row of the /help overlay: a left-margin
+// pad, the key (e.g. "Ctrl+W") in yellow, a column gutter, and the
+// description text in default fg. The key column is fixed-width
+// (keyW cells) so every kv row's description aligns at the same
+// column; the description takes the flex slot and truncates with
+// an ellipsis if the row is narrower than the description.
+//
+//	"  " (2) + key (keyW) + "  " (2) + description (flex)
+func helpKVLine(key, desc string, keyW, contentW int) string {
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhYellow)).
+		Bold(true)
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhFG))
+	cells := []Cell{
+		{Content: "  ", Width: 2},
+		{Content: keyStyle.Render(padOrTruncate(key, keyW)), Width: keyW},
+		{Content: "  ", Width: 2},
+		{Content: descStyle.Render(desc), Width: -1},
+	}
+	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
+}
+
 // userCellLine renders one [ @callsign ] tile for the /nodes grid
 // at exactly cellW cells. Sigil + name color derive from node state
 // + fav + self per the BitchX/IRC-users convention; brackets dim by

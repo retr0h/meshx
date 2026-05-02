@@ -344,20 +344,13 @@ func (m model) renderNearbyPane(width, height int) string {
 			bearingCol = dim.Render(fmt.Sprintf("%s %3.0f°", compassAbbr(p.bearing), p.bearing))
 		}
 
-		row := spacer.Render("  ") +
-			sigilStyled +
-			spacer.Render(" ") +
-			nameStyled +
-			spacer.Render("  ") +
-			barCol +
-			spacer.Render("  ") +
-			distCol +
-			spacer.Render("  ") +
-			dim.Render("·") +
-			spacer.Render("  ") +
-			bearingCol
-
+		row := peerRowLine(
+			rowBg, sigilStyled, nameStyled, barCol, barMax,
+			distCol, bearingCol,
+			paneInnerWidth(width)-gutterWidth,
+		)
 		lines = append(lines, wrapSelection(row, isSel, false, paneInnerWidth(width), rowBg))
+		_ = spacer
 	}
 
 	// Clamp selection after the slice-size changes (peers come and

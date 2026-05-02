@@ -169,16 +169,18 @@ func (m model) renderHelpView(width, height int) string {
 		Foreground(lipgloss.Color(mhCyan)).
 		Bold(true).
 		Underline(true)
-	key := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhYellow)).
-		Bold(true)
-	desc := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhFG))
 	dim := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained))
 
+	// Width budget for kv lines = pane width - frame (2) - padding (6).
+	// Routes through helpKVLine so the cell math (key column 14 cells,
+	// description as the flex slot) lives in components_overlays.go.
+	kvW := width - 2 - 6
+	if kvW < 30 {
+		kvW = 30
+	}
 	kv := func(k, d string) string {
-		return "  " + key.Render(padOrTruncate(k, 14)) + "  " + desc.Render(d)
+		return helpKVLine(k, d, 14, kvW)
 	}
 
 	lines := []string{

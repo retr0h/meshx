@@ -88,7 +88,7 @@ func frameView(m model) Component {
 		var s string
 		switch m.mode {
 		case modeHelp:
-			s = m.renderHelpView(box.Width, box.Height)
+			s = helpPane{m: m}.Render(box)
 		default:
 			s = m.renderIrssiBody(box.Width, box.Height)
 		}
@@ -141,18 +141,21 @@ func fitToBox(s string, box Box) string {
 // indirection that lets the global frame box (m.w - 1, the safeW
 // margin) propagate down so no row hits the right edge.
 func (m model) renderIrssiBody(width, height int) string {
+	box := Box{Width: width, Height: height}
+	var pane Component
 	switch m.overlay {
 	case overlayChannels:
-		return m.renderChannelsPane(width, height)
+		pane = channelsPane{m: m}
 	case overlayNodes:
-		return m.renderNodesPane(width, height)
+		pane = nodesPane{m: m}
 	case overlayNearby:
-		return m.renderNearbyPane(width, height)
+		pane = nearbyPane{m: m}
 	case overlayRadar:
-		return m.renderRadarPane(width, height)
+		pane = radarPane{m: m}
 	default:
-		return m.renderMessagesPane(width, height)
+		pane = messagesPane{m: m}
 	}
+	return pane.Render(box)
 }
 
 // renderHelpView draws a full-pane help overlay listing every keybind

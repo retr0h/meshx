@@ -235,6 +235,74 @@ func chatRowMainLine(parts chatRowParts, body string, bodyStyler styler, content
 // row on typical terminal widths.
 const fromW = 30
 
+// chatRowLeftFixed is the cell width consumed by accent + flag +
+// time + sender + sender-to-body gap on a chat row's first line.
+// Continuation lines hang under the body column starting at this
+// offset so multi-line messages indent correctly without re-emitting
+// the time / sender chrome.
+const chatRowLeftFixed = 2 /*accent*/ + 2 /*flag*/ + 7 /*time*/ + fromW + 2 /*gap*/
+
+// chatContinuationLine renders a hanging continuation line for a
+// multi-line message body. accent column carries the same sender
+// tick as the first line so the color bar spans the whole message
+// group; everything between accent and the body column is bg-tinted
+// blank so the row reads as a single solid rectangle.
+func chatContinuationLine(parts chatRowParts, body string, bodyStyler styler, contentW int) string {
+	gap := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
+	indent := gap.Render(strings.Repeat(" ", chatRowLeftFixed-2))
+	cells := []Cell{
+		{Content: parts.accent, Width: 2},
+		{Content: indent, Width: chatRowLeftFixed - 2},
+		{Content: bodyStyler.Render(body), Width: -1},
+	}
+	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
+}
+
+// chatAckLine renders the optional acks subline that hangs under a
+// chat row, indented to the body column so it reads as commentary
+// on the row above. The body cell is rendered with the lavender
+// italic system style.
+func chatAckLine(parts chatRowParts, acks string, sysStyler styler, contentW int) string {
+	gap := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
+	indent := gap.Render(strings.Repeat(" ", chatRowLeftFixed))
+	cells := []Cell{
+		{Content: indent, Width: chatRowLeftFixed},
+		{Content: sysStyler.Render(acks), Width: -1},
+	}
+	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
+}
+
+// chatThreadingQuote renders the dim one-line "┌ from time \"text\""
+// quote header above a reply, indented under the row's time column
+// so the hook reads as context for the row below.
+func chatThreadingQuote(
+	parentFrom, parentTime, parentText string,
+	rowBg string,
+	contentW int,
+) string {
+	gap := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
+	indent := gap.Render(strings.Repeat(" ", 2+2+7)) // accent+flag+time
+	hook := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhPink)).
+		Background(lipgloss.Color(rowBg)).
+		Bold(true).
+		Render("┌ ")
+	tstamp := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Background(lipgloss.Color(rowBg))
+	if parentFrom == "" {
+		parentFrom = "—"
+	}
+	quoteBody := fmt.Sprintf("%s %s  %q", parentFrom, parentTime,
+		truncateRunes(parentText, 60))
+	cells := []Cell{
+		{Content: indent, Width: 2 + 2 + 7},
+		{Content: hook, Width: 2},
+		{Content: tstamp.Render(quoteBody), Width: -1},
+	}
+	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
+}
+
 // hopColW / snrColW are the cell widths for the right-hand metrics
 // columns. "↝%3dh" leaves 5 cells of value + 2 cells of trailing
 // gap = 7 total; "%6sdB" right-aligns the SNR value in 6 cells +

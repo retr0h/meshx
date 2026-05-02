@@ -1029,97 +1029,51 @@ func (m model) renderNoticeRow(
 	rowBg string,
 	pinFirst, pinLast bool,
 ) string {
-	// When this row is the nav cursor, override the zebra bg with
-	// the selection tint BEFORE any of the inner spans render. The
-	// notice row pipeline bakes rowBg into every styled component
-	// (accent, timestamp, prefix, body), and a later wrapSelection
-	// Background() wouldn't override those nested ANSI codes — so
-	// without this override the cursor wouldn't read on -!- rows
-	// at all, only on plain chat rows where wrapSelection's bg
-	// isn't fighting pre-baked spans.
 	if selected {
 		rowBg = selectionRowBg
 	}
-
-	// Default style — zero-value noticeStyle is the canonical
-	// lavender italic system line. Letting msg.style be nil falls
-	// back to this so callers without a style (legacy entry points
-	// that haven't migrated to m.notice yet) still render sanely.
 	style := noticeStyle{}
 	if msg.style != nil {
 		style = *msg.style
 	}
-
-	// Fade — lerp every fg on this row toward rowBg during the last
-	// noticeFadeWindow before expiry. Frozen at 0 while the user is
-	// in modeNav so a mid-scroll read doesn't dim under the cursor.
-	// Pinned rows also get alpha=0 (computed inside noticeFadeAlpha).
 	fade := 0.0
 	if m.mode != modeNav {
 		fade = noticeFadeAlpha(msg, time.Now())
 	}
-	lav := lerpHex(mhLavender, rowBg, fade)
-	drn := lerpHex(mhDrained, rowBg, fade)
 	bodyFg := style.fg
 	if bodyFg == "" {
 		bodyFg = mhLavender
 	}
 	bodyFg = lerpHex(bodyFg, rowBg, fade)
+	lav := lerpHex(mhLavender, rowBg, fade)
 
-	accent := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(lav)).
-		Background(lipgloss.Color(rowBg)).
-		Bold(true).
-		Render("▎") + lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
-	tstamp := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(drn)).
-		Background(lipgloss.Color(rowBg))
-	// sys — the standard `-!-` chrome style. Lavender italic over
-	// rowBg, identical to what systemLine has worn since day one.
-	// Used for the prefix + center-pad so the left edge of every
-	// notice row reads cohesive regardless of body color.
+	parts := noticeRowFor(rowBg, msg.time, pinFirst, pinLast, fade)
+	contentW := inner - gutterWidth
+	if contentW < 20 {
+		contentW = 20
+	}
+	bodyW := contentW - noticeAccentW - noticeTimeW - noticePinW
+
 	sys := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(lav)).
 		Background(lipgloss.Color(rowBg)).
 		Italic(true)
 
-	timeCol := "   " + msg.time + "  "
-	if msg.time == "" {
-		timeCol = "          "
-	}
-	// Pinned first-of-group corner — replace the leading space of
-	// timeCol with `⌜`. Same 10-cell width, so alignment down the
-	// pane is preserved. Rendered in meshGreen without fade so the
-	// pin affordance stays at full brightness even if the row is
-	// mid-fade (which shouldn't happen since pin pauses expiry, but
-	// defensive).
-	tsRendered := tstamp.Render(timeCol)
-	if pinFirst && len(timeCol) > 0 {
-		corner := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(meshGreen)).
-			Background(lipgloss.Color(rowBg)).
-			Bold(true).
-			Render("⌜")
-		tsRendered = corner + tstamp.Render(timeCol[1:])
-	}
-
-	// Fast path — default styling, no centering. One sys.Render
-	// over the whole msg.text produces a single uninterrupted ANSI
-	// span, which the terminal paints as one clean lavender-italic
-	// band on rowBg. Every storage / whois / identified line lands
-	// here.
+	// Fast path — default styling: one sys.Render over the whole
+	// msg.text gives the terminal a single uninterrupted ANSI span,
+	// painted as one clean lavender-italic band. Every storage /
+	// whois / identified line lands here.
 	if style.fg == "" && !style.center && !style.bold {
-		line := accent + tsRendered + sys.Render(msg.text)
-		line = appendPinTail(line, inner, rowBg, pinLast)
+		body := sys.Render(msg.text)
+		line := noticeRowLine(parts, body, contentW)
 		return wrapSelection(line, selected, false, inner, rowBg)
 	}
 
-	// Styled path — the body takes a custom fg / bold / center.
-	// Split the literal "-!- " prefix off so it stays flush-left in
-	// the standard sys style; only the content after it receives
-	// the override styling. Keeping the prefix uniform across every
-	// notice row is what makes the splash banner visually stack
-	// with regular `-!-` lines.
+	// Styled path — body takes a custom fg / bold / center. Split
+	// the "-!- " prefix off so it stays flush-left in the standard
+	// sys style; only the content after it receives override styling.
+	// Keeping the prefix uniform across every notice row is what
+	// makes the splash banner visually stack with regular `-!-`.
 	const prefix = "-!- "
 	bodyContent := strings.TrimPrefix(msg.text, prefix)
 
@@ -1132,50 +1086,19 @@ func (m model) renderNoticeRow(
 	if style.bold {
 		bodyStyle = bodyStyle.Bold(true)
 	}
-	styledBody := bodyStyle.Render(bodyContent)
+	styled := bodyStyle.Render(bodyContent)
 
-	// center — pad leading sys-styled spaces so the body floats at
-	// (inner - bw) / 2 in the pane. Fixed 19-cell prefix = gutter 3
-	// + accent 2 + timeCol 10 + "-!- " 4.
-	var pad string
+	body := sys.Render(prefix) + styled
 	if style.center {
-		const prefixCells = 19
-		bw := lipgloss.Width(bodyContent)
-		padLen := (inner-bw)/2 - prefixCells
-		if padLen > 0 {
-			pad = sys.Render(strings.Repeat(" ", padLen))
-		}
+		// Center within the body cell — pad lead with sys-styled
+		// spaces so the visible body floats at (bodyW - bw)/2 inside
+		// the cell, where bw includes the "-!- " prefix because the
+		// prefix is the visual chrome of every notice row.
+		bw := ansiCells(prefix) + ansiCells(bodyContent)
+		body = noticeCenterPad(bodyW, bw, sys) + body
 	}
-
-	line := accent + tsRendered + sys.Render(prefix) + pad + styledBody
-	line = appendPinTail(line, inner, rowBg, pinLast)
+	line := noticeRowLine(parts, body, contentW)
 	return wrapSelection(line, selected, false, inner, rowBg)
-}
-
-// appendPinTail pads `line` with rowBg-colored spaces and terminates
-// with a meshGreen `⌟` at the rightmost content column when pinLast
-// is true. Sized to `inner - gutterWidth - 1` so wrapSelection's
-// Width() pass leaves the corner flush against the `║` pane frame.
-// No-op when pinLast is false.
-func appendPinTail(line string, inner int, rowBg string, pinLast bool) string {
-	if !pinLast {
-		return line
-	}
-	innerW := inner - gutterWidth
-	curW := lipgloss.Width(line)
-	padN := innerW - curW - 1
-	if padN < 0 {
-		padN = 0
-	}
-	fill := lipgloss.NewStyle().
-		Background(lipgloss.Color(rowBg)).
-		Render(strings.Repeat(" ", padN))
-	corner := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(meshGreen)).
-		Background(lipgloss.Color(rowBg)).
-		Bold(true).
-		Render("⌟")
-	return line + fill + corner
 }
 
 func (m model) renderMessageRow(
@@ -1200,422 +1123,110 @@ func (m model) renderMessageRow(
 	if selected {
 		rowBg = selectionRowBg
 	}
-	tstamp := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained)).
-		Background(lipgloss.Color(rowBg))
-	me := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhMagenta)).
-		Background(lipgloss.Color(rowBg)).
-		Bold(true)
-	// Per-sender callsign color — irssi/weechat-style nick hash so
-	// each peer picks a stable color from the accent palette. Turns
-	// a cyan-wall log into something you can skim by hue; each
-	// conversation reads as a distinct thread at a glance. Ghost
-	// peers (synthesized "Meshtastic <last4hex>" placeholders whose
-	// NodeInfo never arrived) render drained instead so they don't
-	// compete visually with resolved names. Detection goes through
-	// the live nodeItem.unresolved flag rather than string-matching
-	// the callsign — the firmware-default longname is a real value
-	// other clients display, so we can't tell from the string alone
-	// whether it's been confirmed.
-	resolvedName := m.displayFrom(msg)
-	peerColor := nickColor(resolvedName)
-	if m.senderUnresolved(msg) {
-		peerColor = mhDrained
-	}
-	peer := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(peerColor)).
-		Background(lipgloss.Color(rowBg)).
-		Bold(true)
-	text := lipgloss.NewStyle().Foreground(lipgloss.Color(mhFG)).Background(lipgloss.Color(rowBg))
-	ack := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhGreen)).
-		Background(lipgloss.Color(rowBg)).
-		Bold(true)
-	fail := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhPink)).
-		Background(lipgloss.Color(rowBg)).
-		Bold(true)
-	bang := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhYellow)).
-		Background(lipgloss.Color(rowBg)).
-		Bold(true)
-	sys := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhLavender)).
-		Background(lipgloss.Color(rowBg)).
-		Italic(true)
-	hop := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(meshGreen)).
-		Background(lipgloss.Color(rowBg))
-
 	contentW := inner - gutterWidth
 	if contentW < 40 {
 		contentW = 40
 	}
 
-	// ── Thin 1-cell sender-color accent on the left edge — a ▎ tick,
-	//    not a solid block. Quiet enough to not clash, bright enough
-	//    to show "who's talking" at a glance. Default maps the accent
-	//    to the same hash bucket the peer name renders in, so the
-	//    tick and the callsign pick the same color.
-	senderAccentColor := nickColor(resolvedName)
-	if m.senderUnresolved(msg) {
-		senderAccentColor = mhDrained
-	}
-	if msg.mine {
-		senderAccentColor = mhMagenta
-	}
-	if msg.bang != "" {
-		senderAccentColor = mhYellow
-	}
-	if msg.status == "fail" {
-		senderAccentColor = mhPink
-	}
-	if msg.status == "system" {
-		senderAccentColor = mhLavender
-	}
-	accent := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(senderAccentColor)).
-		Background(lipgloss.Color(rowBg)).
-		Bold(true).
-		Render("▎") + lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
-
 	// System messages — single-line. Multi-line blocks are emitted
 	// as multiple messageItems sharing a `group` ID; the pane loop
-	// binds them visually by reusing the same zebra bg.
+	// binds them visually by reusing the same zebra bg. We route
+	// through the same noticeRowLine the `-!-` notice path uses, so
+	// the "left chrome (accent + time) → body (flex) → pin tail"
+	// column structure is one Component for both row types.
 	if msg.status == "system" {
-		timeCol := "   " + msg.time + "  "
-		// Continuation lines in a block hide the timestamp so only the
-		// header row carries it — makes the block read as one card.
+		// Continuation rows in a system block (e.g. /whois block,
+		// /config block) hide the timestamp so only the header row
+		// carries it — makes the block read as one card.
+		timeCell := msg.time
 		if msg.group != 0 && !strings.HasPrefix(msg.text, "-!- whois") &&
 			!strings.HasPrefix(msg.text, "-!- config") &&
 			!strings.HasPrefix(msg.text, "-!- env") &&
 			!strings.HasPrefix(msg.text, "-!- ping") &&
 			!strings.HasPrefix(msg.text, "-!- traceroute") {
-			// Not the header row — blank out time, keep accent.
-			// Width must match header's "   HH:MM  " (10 cells) so the
-			// `-!-` prefix column lines up between header and body.
-			timeCol = "          "
+			timeCell = ""
 		}
+		parts := noticeRowFor(rowBg, timeCell, false, false, 0)
+		sys := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(mhLavender)).
+			Background(lipgloss.Color(rowBg)).
+			Italic(true)
 		// Ghost-glyph special case — systemBlock lines whose body
-		// contains "👻 " render the glyph in warn-orange bold while
+		// contains "👻 " render the glyph in muted drained while
 		// the prose stays in the regular sys (lavender italic)
-		// style. Embedding ANSI directly in the text doesn't work
-		// because sys.Render wraps the whole string; any mid-string
-		// reset bleeds the rest of the line into default color.
-		// Splitting lets each half render with its own style,
-		// concatenated on the same zebra bg.
+		// style. Splitting lets each half render with its own
+		// style, concatenated on the same zebra bg.
 		body := msg.text
-		prefixIdx := strings.Index(body, "👻 ")
-		if prefixIdx >= 0 {
-			// Muted ghost glyph — drained fg, no bold. The point is
-			// to say "this is a placeholder-warning line", not shout
-			// for attention. Let the prose carry the message and
-			// the glyph just tag it semantically.
-			ghostStyle := lipgloss.NewStyle().
+		var bodyStyled string
+		if idx := strings.Index(body, "👻 "); idx >= 0 {
+			ghost := lipgloss.NewStyle().
 				Foreground(lipgloss.Color(mhDrained)).
 				Background(lipgloss.Color(rowBg))
-			pre := body[:prefixIdx]
-			post := body[prefixIdx+len("👻 "):]
-			line := accent + tstamp.Render(timeCol) +
-				sys.Render(pre) +
-				ghostStyle.Render("👻") +
+			pre := body[:idx]
+			post := body[idx+len("👻 "):]
+			bodyStyled = sys.Render(pre) +
+				ghost.Render("👻") +
 				sys.Render(" "+post)
-			return wrapSelection(line, selected, m.isMsgSearchHit(msg), inner, rowBg)
+		} else {
+			bodyStyled = sys.Render(body)
 		}
-		line := accent + tstamp.Render(timeCol) + sys.Render(msg.text)
+		line := noticeRowLine(parts, bodyStyled, contentW)
 		return wrapSelection(line, selected, m.isMsgSearchHit(msg), inner, rowBg)
 	}
 
-	// Flag column (1 col + space).
-	flag := " "
-	flagStyle := tstamp
-	switch {
-	case msg.status == "fail":
-		flag = "✗"
-		flagStyle = fail
-	case msg.bang != "":
-		flag = "*"
-		flagStyle = bang
-	case msg.mine:
-		flag = "›"
-		flagStyle = me
-	}
-
-	// From column — 16 visible cells, truncated w/ ellipsis.
-	// Resolve via displayFrom so "node 0x…" placeholders flip to
-	// real callsigns as NodeInfo arrives mid-session. Ghost peers
-	// (no NodeInfo ever received) get a 👻 prefix as a quick visual
-	// marker alongside the drained color — doubly obvious which
-	// senders are placeholders vs resolved. Own messages use our
-	// actual callsign (not the irssi "me" placeholder) so the
-	// brand in the top bar and the sender column tell the same
-	// story about identity — the magenta peer style still flags
-	// "this one's yours" at a glance.
-	fromRaw := m.displayFrom(msg)
-	shortName := ""
-	if msg.mine {
-		fromRaw = m.myCallsign()
-		shortName = m.myShortName()
-	} else {
-		// Both resolved and unresolved peers get the [shortname]
-		// badge — for resolved peers it's whatever they advertised
-		// in their User packet, for ghosts it's the last-4-hex
-		// (computed from the node number, same value every other
-		// Meshtastic client renders for that node). Unresolved
-		// peers additionally get the 👻 marker + drained styling
-		// so the row reads "[c7f7] 👻 node 0x273cc7f7" — badge for
-		// recognition, hex for honesty about the longname.
-		if idx, ok := m.nodesByNum[msg.fromNum]; ok &&
-			idx >= 0 && idx < len(m.nodes) {
-			shortName = m.nodes[idx].shortName
-		}
-		if m.senderUnresolved(msg) {
-			fromRaw = "👻 " + fromRaw
-		}
-	}
-	// Avatar-style shortname prefix — "[SHORT] longname". Matches the
-	// official Meshtastic app convention of leading each message with
-	// a shortname badge so the community practice of addressing peers
-	// by short_name in the body ("70F8 your hop count keeps going up")
-	// is resolvable at a glance. Skip the brackets entirely when we
-	// don't have a shortname yet (ghost peer pre-NodeInfo, or our own
-	// radio before /tag has been run) so the column never carries
-	// empty [    ] chrome fighting the longname for space.
-	if shortName != "" {
-		fromRaw = "[" + shortName + "] " + fromRaw
-	}
-	// 30-cell from column — Meshtastic longnames cap at 36 bytes per
-	// the firmware; 30 display cells covers the large majority of
-	// real callsigns ("AmputiLayag_MeshNodeQTHlab", "SGV_Shredder__
-	// Base", "Gleep - socalme.sh") without ellipsis while still
-	// leaving the message column the dominant share of the row on
-	// typical terminal widths.
-	const fromW = 30
-	senderStyle := peer
-	if msg.mine {
-		senderStyle = me
-	}
-	fromPadded := padOrTruncate(fromRaw, fromW)
-
-	// Right-side metadata column: hops / SNR / ack — always in the
-	// same column positions so rows line up visually as a grid.
-	// Hops cell is always rendered for incoming packets so absence
-	// never has to be inferred — direct (0 hop) reads "↝ dx",
-	// multi-hop reads "↝Nh". Our own outgoing messages (mine) skip
-	// the cell since "hops from me to mesh" isn't a thing we know
-	// until the packet echoes back.
-	// Right-aligned metric columns so the numbers always end at
-	// the same column regardless of digit count or sign. "↝ 6h"
-	// and "↝12h" both end at the same "h" position; "9.5dB" and
-	// "-12.2dB" both end at the same "B" position. Left-padding
-	// the value rather than right-padding is the key — humans
-	// read numbers from the right edge, so aligning units is
-	// what actually lets you compare rows at a glance.
-	const hopColW = 7 // "↝%3dh" = 5 cells value + 2 trailing gap
-	const snrColW = 8 // "%6sdB" = 8 cells total
-	var hopCol string
-	switch {
-	case msg.mine:
-		hopCol = strings.Repeat(" ", hopColW)
-	case msg.hops > 0:
-		// "↝%3dh  " — 3-digit hop field keeps 1/10/100 flush.
-		hopCol = fmt.Sprintf("↝%3dh  ", msg.hops)
-	default:
-		// "↝  dx  " — "dx" (direct, 0 hops) lives in the same
-		// 3-cell value region as hop numbers above.
-		hopCol = "↝  dx  "
-	}
-	snrCol := strings.Repeat(" ", snrColW)
-	if msg.snr != "" {
-		// "%6s" right-aligns the SNR value in 6 cells, then
-		// "dB" adds 2 → 8 total. "9.5" → "   9.5dB", "-12.2" →
-		// " -12.2dB", "10.2" → "  10.2dB" — the "B" lands at the
-		// same column every time.
-		snrCol = fmt.Sprintf("%6sdB", msg.snr)
-	}
-	// statusCol — per-message delivery state co-located with the row.
-	//   "…"  pending: sent, awaiting Routing reply from the radio
-	//   "✓"  ack:     radio acknowledged delivery
-	//   "✗"  fail:    Routing returned a non-NONE error reason
-	//   " "  empty:   inbound message (no delivery state to show)
-	// Persistent across scrollback + unique per row so multiple
-	// in-flight messages each carry their own indicator.
-	// One-cell status glyph. Gap to the SNR column is assembled
-	// separately below so columns stay independent — treating
-	// the gap as statusCol's problem mixes chrome into content.
-	statusCol := " "
-	switch msg.status {
-	case "pending":
-		statusCol = "…"
-	case "ack":
-		statusCol = "✓"
-	case "fail":
-		statusCol = "✗"
-	}
-	// Status-column gap — 1 cell of breathing room between SNR
-	// and the state glyph so "-0.5dB✓" doesn't collide. The gap
-	// is its own span on the same rowBg tint so it blends, not
-	// part of statusCol (column chrome stays separate from
-	// column content).
-	statusGap := lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
-	right := hop.Render(hopCol) + hop.Render(snrCol) + statusGap + func() string {
-		switch msg.status {
-		case "pending":
-			return tstamp.Render(statusCol) // dim drained — in flight
-		case "ack":
-			return ack.Render(statusCol)
-		case "fail":
-			return fail.Render(statusCol)
-		default:
-			return tstamp.Render(statusCol)
-		}
-	}()
-
-	// Text column — flexible middle. Compute its width from what's left.
-	//   flag(2) + time(7) + from(18) + gap(1) + right(len) = fixed
-	// Fixed left-side columns, in visible cells:
-	//   accent "▎ "       = 2
-	//   flag + space       = 2
-	//   time "HH:MM  "    = 7
-	//   fromPadded         = fromW
-	//   twoSpace gap       = 2
-	const leftFixed = 2 + 2 + 7 + fromW + 2
-	rightW := lipgloss.Width(right)
-	textW := contentW - leftFixed - rightW
-	if textW < 10 {
-		textW = 10
-	}
-
-	// The on-wire content is msg.text only — msg.bang is purely a
-	// local marker identifying which /command emitted the message.
-	// We render the text as-is, so what you see matches what went
-	// out (a clean ham-style payload like "73" or "QTH: CN85", not
-	// meshx-internal "!grid CN85" chrome).
-	//
-	// Multi-line messages (radios can embed \n — e.g. "End of Day
-	// Report:\nMax Power: …") lay out with the signal columns on
-	// the FIRST visual line only. Continuation lines hang under
-	// the text column so the right edge stays aligned with every
-	// other row in the log. Collapsing to one line would hide
-	// content; padding every continuation line to carry metrics
-	// looks weird (~4h floating three lines below the callsign).
+	// Regular chat row — the entire visual structure lives in the
+	// chatRow Component family (components_chat.go). chatRowFor
+	// computes the per-cell styled strings (accent, flag, time,
+	// sender, hop, snr, status); chatRowMainLine stitches them with
+	// the body cell via Row{Cells:...}. No more inline string concat
+	// for the dense case.
+	parts := chatRowFor(m, msg, rowBg)
 	bodyLines := strings.Split(msg.text, "\n")
 	if len(bodyLines) == 0 {
 		bodyLines = []string{""}
 	}
 	// Corrupted bodies — sanitizeMessageText replaced bad bytes with
 	// '?' and dropped non-printable runes, so the text is still
-	// readable but no longer trustworthy. Re-style the row in dim
-	// lavender italic so the user sees "this row had garbage in it"
-	// without us having to throw away the salvageable printable
-	// chars. Marker is pure ASCII "(?) " — earlier iterations used
-	// the U+26A0 ⚠ glyph but that rune is East-Asian-Ambiguous
-	// width (lipgloss.Width reports 1, many terminal fonts render
-	// 2), causing every corrupted row to be one cell wider than
-	// padding budgeted, soft-wrap in the terminal, and desync Tea's
-	// diff renderer with cumulative layout damage on every new
-	// message. ASCII fixes both the styling signal and the width.
-	bodyText := text
-	firstLine := bodyLines[0]
+	// readable but no longer trustworthy. Re-style in dim lavender
+	// italic and prefix "(?) " so the user sees "this row had
+	// garbage in it" without us throwing away the salvageable chars.
+	bodyText := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhFG)).
+		Background(lipgloss.Color(rowBg))
+	bodyForFirst := bodyLines[0]
 	if msg.corrupted {
 		bodyText = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(mhLavender)).
 			Background(lipgloss.Color(rowBg)).
 			Italic(true)
-		firstLine = "(?) " + firstLine
-	}
-	_ = bang // kept in scope for any future command-styling use
-	_ = firstLine
-	_ = fromPadded
-	_ = senderStyle
-	_ = flagStyle
-	_ = flag
-	_ = right
-
-	// Build the row's first visible line via the chatRow Component
-	// composition (Row{Cells:[]Cell{...}}) instead of inline string
-	// concat — this is the leaf decomposition the architecture has
-	// been moving toward. Each named cell (accent, flag, time,
-	// sender, body, hop, snr, statusGap, status) now has a single
-	// authoritative source in components_chat.go::chatRowFor, so
-	// reuse (e.g., the same hop / snr cells in /whois output cards)
-	// is one struct-field reach away.
-	parts := chatRowFor(m, msg, rowBg)
-	bodyForFirst := bodyLines[0]
-	if msg.corrupted {
 		bodyForFirst = "(?) " + bodyForFirst
 	}
+	sys := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhLavender)).
+		Background(lipgloss.Color(rowBg)).
+		Italic(true)
 	row := chatRowMainLine(parts, bodyForFirst, bodyText, contentW)
 
-	// Build the right-hand segment with a 2-space gap — both on the
-	// tinted bg so the row reads as a single uninterrupted rectangle.
-	// Kept for use by continuation-line / threading-quote rendering
-	// below, which still flows through the legacy concat path.
-	gapStyle := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
-	twoSpace := gapStyle.Render("  ")
-	_ = twoSpace
-
-	// Continuation lines (line 2+) hang under the text column.
-	// Carry the same sender-color ▎ accent as the first line so the
-	// color bar reads as one tall strip spanning the whole message
-	// group — easier to scan "where does this message end" when a
-	// solar-node end-of-day report runs three or four lines deep.
-	// hangIndent covers leftFixed-2 cells because `accent` already
-	// occupies the first two. contW = textW + rightW so the tinted
-	// bg reaches the full row width; without it, wrapSelection's
-	// per-line truncation + pad would leave a ragged right edge on
-	// multi-line rows.
+	// Continuation lines, ack subline, and threading-quote header all
+	// flow through Row{Cells} now via the chat* helpers in
+	// components_chat.go — same Component primitive that builds the
+	// first line. Each helper produces exactly contentW cells per
+	// ansiCells, so the whole row is a vertical stack of guaranteed-
+	// width lines and wrapSelection just adds the gutter.
 	if len(bodyLines) > 1 {
-		hangIndent := gapStyle.Render(strings.Repeat(" ", leftFixed-2))
-		contW := textW + rightW
-		if contW < textW {
-			contW = textW
-		}
 		for _, bl := range bodyLines[1:] {
-			cont := accent + hangIndent + bodyText.Render(padOrTruncate(bl, contW))
-			row += "\n" + cont
+			row += "\n" + chatContinuationLine(parts, bl, bodyText, contentW)
 		}
 	}
-	// Append acks subline if present — indented past the accent+flag+time+from cols.
 	if msg.acks != "" {
-		indent := gapStyle.Render(strings.Repeat(" ", 2+2+7+fromW+2))
-		row += "\n" + indent + sys.Render(msg.acks)
+		row += "\n" + chatAckLine(parts, msg.acks, sys, contentW)
 	}
-
-	// Threading — when this message carries a reply_id pointing at a
-	// parent we have in the log, render a dim one-line quoted
-	// reference ABOVE the row. Indented under the timestamp column so
-	// it reads as "this line is context for the row below". Format:
-	//   ┌ <from> <time>  "<text, truncated>"
-	// Matches how mutt / modern chat clients show reply context.
 	if msg.replyID != 0 {
 		if parent := m.findMessageByPacketID(msg.replyID); parent != nil {
-			// Indent the quote to sit under the reply's from-column
-			// start — 2 (accent) + 2 (flag) + 7 (time) = 11 cells —
-			// so the ┌ hook reads as "context for the row below"
-			// rather than floating out on the left margin.
-			quoteIndent := gapStyle.Render(strings.Repeat(" ", 2+2+7))
-			quoteW := inner - (2 + 2 + 7) - gutterWidth
-			if quoteW < 20 {
-				quoteW = 20
-			}
-			parentFrom := m.displayFrom(*parent)
-			if parentFrom == "" {
-				parentFrom = "—"
-			}
-			// Hot-pink hook — matches the /active channel bracket
-			// style so "threading" reads as another active-state
-			// signal, distinct from the drained labels elsewhere.
-			hookStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhPink)).
-				Background(lipgloss.Color(rowBg)).
-				Bold(true)
-			quoteBody := fmt.Sprintf("%s %s  %q",
-				parentFrom, parent.time, truncateRunes(parent.text, 60))
-			quoteLine := quoteIndent + hookStyle.Render("┌ ") +
-				tstamp.Render(padOrTruncate(quoteBody, quoteW-2))
-			row = quoteLine + "\n" + row
+			row = chatThreadingQuote(
+				m.displayFrom(*parent), parent.time, parent.text,
+				rowBg, contentW,
+			) + "\n" + row
 		}
 	}
 

@@ -16,6 +16,8 @@
 package meshx
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -86,6 +88,78 @@ func noticeRowFor(rowBg string, time string, pinFirst, pinLast bool, fade float6
 		pinEnd: pinEnd,
 		rowBg:  rowBg,
 	}
+}
+
+// noticeRowLineSplit renders a notice row with the `-!- ` prefix
+// anchored at the same fixed column across every notice row, while
+// the content after the prefix is pane-aware — `align` selects
+// where the visible content midpoint lands within the FULL row
+// width (contentW), not the body cell's smaller width.
+//
+//	accent (2) + time (10) + prefix (4) + leadPad + content (bw) + trailPad + pinEnd (1)
+//
+// The Component owns the pane-centering math: it knows about the
+// chrome on either side and computes the leading pad inside the
+// body region so the content's midpoint == contentW/2. Caller just
+// says "center it" via AlignCenter and the layout layer figures out
+// the offset.
+//
+// AlignLeft  → content flush right of `-!- `, trailing space.
+// AlignCenter → content midpoint at contentW/2 (pane center) via
+//
+//	leading pad after `-!- ` and trailing pad before
+//	pinEnd.
+//
+// AlignRight → content flush against pinEnd, leading pad after
+//
+//	`-!- `.
+func noticeRowLineSplit(
+	parts noticeRowParts,
+	prefix, content string,
+	align Align,
+	contentW int,
+) string {
+	bg := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
+	const prefixW = 4 // "-!- "
+	leftChrome := noticeAccentW + noticeTimeW + prefixW
+	rightChrome := noticePinW
+	bw := ansiCells(content)
+	// Available cells inside the body region (between prefix and
+	// pinEnd) for the visible content + leading + trailing pad.
+	available := contentW - leftChrome - rightChrome
+	if bw > available {
+		bw = available
+	}
+	leadPad, trailPad := 0, available-bw
+	switch align {
+	case AlignCenter:
+		// Center against contentW: content midpoint at contentW/2.
+		// content starts at leftChrome + leadPad, so:
+		//   leftChrome + leadPad + bw/2 == contentW/2
+		// → leadPad = (contentW - bw)/2 - leftChrome
+		// (clamped to [0, available-bw] so we never overflow).
+		leadPad = (contentW-bw)/2 - leftChrome
+		if leadPad < 0 {
+			leadPad = 0
+		}
+		if leadPad > available-bw {
+			leadPad = available - bw
+		}
+		trailPad = available - bw - leadPad
+	case AlignRight:
+		leadPad = available - bw
+		trailPad = 0
+	}
+	cells := []Cell{
+		{Content: parts.accent, Width: noticeAccentW},
+		{Content: parts.time, Width: noticeTimeW},
+		{Content: prefix, Width: prefixW},
+		{Content: bg.Render(strings.Repeat(" ", leadPad)), Width: leadPad},
+		{Content: content, Width: bw, PadStyle: bg},
+		{Content: bg.Render(strings.Repeat(" ", trailPad)), Width: trailPad},
+		{Content: parts.pinEnd, Width: noticePinW},
+	}
+	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
 
 // noticeRowLine renders a notice row at exactly contentW cells via

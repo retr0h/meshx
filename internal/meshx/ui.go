@@ -1063,23 +1063,15 @@ func (m model) renderNoticeRow(
 	}
 	styled := bodyStyle.Render(bodyContent)
 
-	// style.center routes through the global Centered Component, which
-	// pane-centers content against the FULL contentW (not the body
-	// cell's smaller width). It owns the centering math entirely —
-	// pass it a Box of any width and the content's midpoint lands on
-	// the box's midpoint, no manual chrome accounting in the caller.
-	//
-	// For splash rows we drop the accent + time chrome on this row
-	// shape: pane-centered art can't co-exist with one-sided chrome
-	// because the chrome offsets the visible center. The `-!-`
-	// prefix gets centered together with the art, treated as part of
-	// the centered block. Non-centered styled rows keep accent +
-	// time + `-!-` flush via noticeRowLine.
+	// `-!-` is ALWAYS anchored at the leftmost body chrome column —
+	// never floats. style.center only changes the alignment of the
+	// content AFTER the prefix: the prefix gets its own fixed-width
+	// cell in noticeRowLineSplit, and the content cell takes
+	// Align: AlignCenter so the art body-cell-centers in the space
+	// to the right of the prefix while the prefix stays put.
 	if style.center {
-		bg := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
-		body := sys.Render(prefix) + styled
-		line := Centered{Content: body, FillStyle: bg}.Render(
-			Box{Width: contentW, Height: 1},
+		line := noticeRowLineSplit(
+			parts, sys.Render(prefix), styled, AlignCenter, contentW,
 		)
 		return wrapSelection(line, selected, false, inner, rowBg)
 	}

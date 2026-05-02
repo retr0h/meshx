@@ -217,6 +217,33 @@ func peerRowLine(
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
 
+// helpSectionLine renders a section heading inside the /help
+// overlay (e.g. "MODES", "GLOBAL", "WINDOW NAV") in cyan bold +
+// underline, matching the irssi help-section convention.
+func helpSectionLine(text string) string {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhCyan)).
+		Bold(true).
+		Underline(true).
+		Render(text)
+}
+
+// helpScrollIndicator renders the bottom-of-help scroll position
+// hint: "line N/M   j/k scroll · d/u page · g/G top/bottom · q/Esc/?
+// close" — or, when content fits without scrolling, a simpler
+// "q / Esc / ? to close". Always dim drained so it reads as
+// passive chrome, not active.
+func helpScrollIndicator(scroll, total, visible int) string {
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	if total <= visible {
+		return dim.Render("q / Esc / ? to close")
+	}
+	return dim.Render(fmt.Sprintf(
+		"line %d/%d   j/k scroll · d/u page · g/G top/bottom · q/Esc/? close",
+		scroll+1, total,
+	))
+}
+
 // helpKVLine renders one row of the /help overlay: a left-margin
 // pad, the key (e.g. "Ctrl+W") in yellow, a column gutter, and the
 // description text in default fg. The key column is fixed-width

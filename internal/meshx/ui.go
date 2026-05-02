@@ -163,10 +163,6 @@ func (m model) renderHelpView(width, height int) string {
 	head := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(meshGreen)).
 		Bold(true)
-	sec := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhCyan)).
-		Bold(true).
-		Underline(true)
 	dim := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained))
 
@@ -180,18 +176,19 @@ func (m model) renderHelpView(width, height int) string {
 	kv := func(k, d string) string {
 		return helpKVLine(k, d, 14, kvW)
 	}
+	sec := func(s string) string { return helpSectionLine(s) }
 
 	lines := []string{
 		head.Render("S Q U E L C H   ·   H E L P"),
 		dim.Render("j/k scroll · q/Esc/? close · irssi-style modal UI"),
 		"",
-		sec.Render("MODES"),
+		sec("MODES"),
 		kv("INPUT (default)", "cursor in the input bar — type a message or /command"),
 		kv("NAV (Esc)", "cursor in the scrollback — single letters act on highlight"),
 		kv("SEARCH (/ in nav)", "live-filter current pane. Enter commits, Esc cancels"),
 		kv("HELP (?)", "this screen — Esc / q / ? to dismiss"),
 		"",
-		sec.Render("GLOBAL"),
+		sec("GLOBAL"),
 		kv("Ctrl+X", "exit app (also Ctrl+C on empty input)"),
 		kv("?", "open help"),
 		kv("Enter", "send message / run /command / activate selection"),
@@ -199,26 +196,26 @@ func (m model) renderHelpView(width, height int) string {
 		kv("Tab", "complete /command, #channel, or nick (cycles)"),
 		kv("Shift+Tab", "cycle completion backwards"),
 		"",
-		sec.Render("CHANNEL SWITCHING"),
+		sec("CHANNEL SWITCHING"),
 		kv("Alt+1..4", "jump to channel by index"),
 		kv("Ctrl+N / Ctrl+P", "cycle to next / prev channel"),
 		kv("/join <name>", "switch to named channel"),
 		kv("/channel list", "show all known channels"),
 		"",
-		sec.Render("WINDOW NAV"),
+		sec("WINDOW NAV"),
 		kv("Ctrl+W k", "from input → jump up to the message log (nav mode)"),
 		kv("Ctrl+W j", "from nav   → drop down to the input bar"),
 		kv("Esc (input)", "same as Ctrl+W k — enter scrollback nav"),
 		kv("Esc (nav)", "same as Ctrl+W j — return to input bar"),
 		"",
-		sec.Render("OVERLAYS"),
+		sec("OVERLAYS"),
 		kv("/channels", "open channels list — j/k walk, Enter opens"),
 		kv("/nodes /users /names", "open users grid — h/j/k/l walk, Enter whois"),
 		kv("/nearby", "distance-sorted peer roster (closest first; requires own GPS fix)"),
 		kv("/radar", "polar scope — peers plotted by bearing + distance around you"),
 		kv("/help or ?", "this help screen — j/k scroll, Esc closes"),
 		"",
-		sec.Render("NAV MODE (after Esc)"),
+		sec("NAV MODE (after Esc)"),
 		kv("j / k", "walk selection down / up"),
 		kv("gg / G", "top / bottom"),
 		kv("Ctrl+D / Ctrl+U", "half-page down / up"),
@@ -227,7 +224,7 @@ func (m model) renderHelpView(width, height int) string {
 		kv("Enter", "detail view (hop, SNR, RSSI, hex id)"),
 		kv("Esc / i / q", "back to input mode"),
 		"",
-		sec.Render("NAV-MODE QUICK-KEYS (on message/node selection)"),
+		sec("NAV-MODE QUICK-KEYS (on message/node selection)"),
 		kv("r", "reply — prefills /reply <sender> into input"),
 		kv("R", "resend — retransmit a failed (✗) outbound row"),
 		kv("t", "traceroute selected sender"),
@@ -239,7 +236,7 @@ func (m model) renderHelpView(width, height int) string {
 		kv("X", "clear active filter"),
 		kv("s", "cycle node sort (heard → name → state)  (nodes drawer)"),
 		"",
-		sec.Render("HAM RADIO /COMMANDS"),
+		sec("HAM RADIO /COMMANDS"),
 		kv("/cq [tail]", "broadcast CQ with optional custom tail"),
 		kv("/cqr <call>", "respond to someone's CQ with a real copy report"),
 		kv("/rs <call>", "send a signal report (real SNR/RSSI/hops)"),
@@ -257,7 +254,7 @@ func (m model) renderHelpView(width, height int) string {
 		kv("/mesh", "summarize the mesh you can hear (meshtastic-specific)"),
 		kv("/k <call>", "\"over — go ahead\" ragchew turn-taking"),
 		"",
-		sec.Render("MESSAGING /COMMANDS"),
+		sec("MESSAGING /COMMANDS"),
 		kv("/msg <call> <text>", "direct message to node"),
 		kv("/reply [call] [text]", "reply (uses highlighted sender if omitted)"),
 		kv("/r", "alias for /reply"),
@@ -265,7 +262,7 @@ func (m model) renderHelpView(width, height int) string {
 		kv("/tr <call>", "traceroute — alias /traceroute"),
 		kv("/whois <call>", "node metadata — alias /w"),
 		"",
-		sec.Render("CHANNEL / UTIL /COMMANDS"),
+		sec("CHANNEL / UTIL /COMMANDS"),
 		kv("/join <channel>", "switch to named channel"),
 		kv("/channel list", "list known channels"),
 		kv("/config", "show radio + identity configuration"),
@@ -273,7 +270,7 @@ func (m model) renderHelpView(width, height int) string {
 		kv("/help", "open this help"),
 		kv("/q, /quit", "hint — use Ctrl+X to exit"),
 		"",
-		sec.Render("NOTES ON CHANNELS"),
+		sec("NOTES ON CHANNELS"),
 		kv("", "Channels are configured on the RADIO, not in meshx."),
 		kv("", "A channel = a name + a shared PSK (encryption key)."),
 		kv("", "Create channels via the official Meshtastic app / CLI;"),
@@ -307,15 +304,7 @@ func (m model) renderHelpView(width, height int) string {
 	viewLines := append([]string(nil), lines[scroll:end]...)
 
 	// Scroll indicator — shows position + vim-style hint.
-	indicator := ""
-	if len(lines) > visible {
-		pos := fmt.Sprintf("line %d/%d", scroll+1, len(lines))
-		hint := "j/k scroll · d/u page · g/G top/bottom · q/Esc/? close"
-		indicator = dim.Render(pos + "   " + hint)
-	} else {
-		indicator = dim.Render("q / Esc / ? to close")
-	}
-	viewLines = append(viewLines, "", indicator)
+	viewLines = append(viewLines, "", helpScrollIndicator(scroll, len(lines), visible))
 
 	// Wrap in Bordered so the help overlay obeys the same component-
 	// tree contract as every other pane: an inner box exactly sized

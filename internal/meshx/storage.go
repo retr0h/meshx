@@ -358,6 +358,42 @@ func saveNodePrefs(db *sql.DB, nodeNum uint32, favorite, muted bool) error {
 	return nil
 }
 
+// getSetting returns the persisted value for `key` or ("", false) when
+// the row is missing. Used for /mute (key="ding_muted") and /config's
+// radio buzzer pref (key="radio_buzzer"). Treats a nil db (demo mode
+// or storage open failure) as "no row" so callers fall back to default
+// without branching on storage state.
+func getSetting(db *sql.DB, key string) (string, bool) {
+	if db == nil {
+		return "", false
+	}
+	var v string
+	if err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v); err != nil {
+		return "", false
+	}
+	return v, true
+}
+
+// putSetting writes `value` under `key`, upserting when the row already
+// exists. Nil db is a silent no-op so demo mode and storage-open failures
+// don't have to special-case at the call site. Failure is returned so
+// callers can route through storagePersist for the same one-shot
+// "persistence degraded" warning every other write goes through.
+func putSetting(db *sql.DB, key, value string) error {
+	if db == nil {
+		return nil
+	}
+	_, err := db.Exec(`
+        INSERT INTO settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key, value,
+	)
+	if err != nil {
+		return fmt.Errorf("put setting %s: %w", key, err)
+	}
+	return nil
+}
+
 // loadMessages reads the most recent `limit` rows, oldest-first (so
 // callers can append directly to m.messages and selectedMsg = len-1
 // lands on the newest). An empty channel string means "every

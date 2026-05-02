@@ -97,6 +97,14 @@ func (m *model) openOverlay(kind overlayKind) {
 	switch kind {
 	case overlayChannels:
 		m.focused = paneChannels
+	case overlayConfig:
+		// /config gets its own pane focus so j/k routes to
+		// selectedCfg instead of selectedMsg / selectedNd. Reset
+		// the cursor to the top entry so a fresh open always
+		// lands on the same row regardless of where it was the
+		// last time the panel closed.
+		m.focused = paneConfig
+		m.selectedCfg = 0
 	case overlayNodes, overlayNearby, overlayRadar:
 		// /nearby + /radar are peer-oriented surfaces — keep focus
 		// on the nodes pane so j/k stepping lands where the user
@@ -780,6 +788,25 @@ func (m *model) cycleChannel(dir int) {
 // row — which is the "I selected KE0ABC but it muted Rural Signal" bug.
 func (m *model) moveSelection(delta int) {
 	switch m.focused {
+	case paneConfig:
+		// /config skips read-only / separator rows so j on the bottom
+		// interactive entry doesn't dead-end on a divider line. Walk
+		// the selectable index list, find where we currently sit, and
+		// step delta entries through THAT slice — then map back to
+		// the underlying configEntries() index.
+		sel := m.selectableConfigEntryIndices()
+		if len(sel) == 0 {
+			return
+		}
+		cur := 0
+		for i, idx := range sel {
+			if idx == m.selectedCfg {
+				cur = i
+				break
+			}
+		}
+		next := clamp(cur+delta, 0, len(sel)-1)
+		m.selectedCfg = sel[next]
 	case paneChannels:
 		m.selectedCh = clamp(m.selectedCh+delta, 0, len(m.channels)-1)
 	case paneMessages:

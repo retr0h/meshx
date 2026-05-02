@@ -77,8 +77,8 @@ type tabState struct {
 var slashCommands = []string{
 	"73", "88", "callsign", "channel", "channels", "clear", "config",
 	"cq", "cqr", "emoji", "exit", "grid", "h", "help", "info", "join",
-	"k", "mesh", "msg", "nearby", "nick", "nodes", "part", "pin", "ping",
-	"q", "qrm", "qrz", "qsb", "qsl", "qth", "quit", "r", "radar",
+	"k", "mesh", "msg", "mute", "nearby", "nick", "nodes", "part", "pin",
+	"ping", "q", "qrm", "qrz", "qsb", "qsl", "qth", "quit", "r", "radar",
 	"reply", "rs", "search", "sk", "sked", "sync", "tag", "tr", "trace",
 	"traceroute", "w", "whois", "wx",
 }

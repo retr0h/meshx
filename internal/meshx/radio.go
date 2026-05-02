@@ -34,6 +34,7 @@ package meshx
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -383,6 +384,17 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 	// Bump unread count on non-active channels.
 	if msg.channel < len(m.channels) && m.channels[msg.channel].name != m.currentChannel && !mine {
 		m.channels[msg.channel].unread++
+	}
+
+	// Terminal ding — write a BEL byte to stderr when the message
+	// came from someone else and the user hasn't /muted it. Stderr
+	// (not stdout) so the byte bypasses bubbletea's alt-screen
+	// buffer; the terminal still interprets BEL because it's TTY-
+	// level, not screen-level. iTerm + macOS Terminal both honor
+	// the bell (visual / audible per their own preferences); /mute
+	// silences this without touching the radio's onboard buzzer.
+	if !mine && !m.dingMuted {
+		_, _ = os.Stderr.Write([]byte{'\a'})
 	}
 }
 

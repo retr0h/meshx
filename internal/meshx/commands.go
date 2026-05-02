@@ -227,6 +227,84 @@ func newAdminSetOwner(
 	}, nil
 }
 
+// newAdminSetBuzzer builds an AdminMessage.SetModuleConfig ToRadio
+// envelope toggling ModuleConfig.external_notification.alert_message_buzzer
+// — the firmware field that controls "radio beeps when a text message
+// arrives." We only set the single field we care about; firmware
+// merges the message into the live ExternalNotificationConfig, so
+// other fields (alert_bell_buzzer, output_buzzer pin, …) keep their
+// existing values. Same MeshPacket envelope shape as setOwner.
+//
+// Like setOwner this skips the reboot the official phone app issues
+// after a module-config write — modern firmware accepts module config
+// hot. If a future radio refuses the change without a reboot we'd
+// need to chain an AdminMessage_RebootSeconds packet here.
+func newAdminSetBuzzer(myNodeNum uint32, enabled bool) (*pb.ToRadio, error) {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetModuleConfig{
+			SetModuleConfig: &pb.ModuleConfig{
+				PayloadVariant: &pb.ModuleConfig_ExternalNotification{
+					ExternalNotification: &pb.ModuleConfig_ExternalNotificationConfig{
+						AlertMessageBuzzer: enabled,
+					},
+				},
+			},
+		},
+	}
+	payload, err := proto.Marshal(admin)
+	if err != nil {
+		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
+	}
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			To:      myNodeNum,
+			WantAck: true,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum: pb.PortNum_ADMIN_APP,
+				Payload: payload,
+			}},
+		}},
+	}, nil
+}
+
+// setRadioBuzzer toggles the radio's external-notification buzzer to
+// `enabled` and persists the new desired-state under the radio_buzzer
+// settings key. Demo mode and offline mode flash a hint instead of
+// silently no-opping. On a successful enqueue we flip the local mirror
+// (m.radioBuzzerEnabled) so the /config panel reflects the new value
+// even before the radio acks — same UX setOwner uses for /nick.
+func (m *model) setRadioBuzzer(enabled bool) {
+	if m.isDemo() {
+		m.flash = "/config: radio buzzer toggle needs a real radio (demo mode)"
+		return
+	}
+	if m.pump == nil {
+		m.flash = "/config: radio buzzer toggle needs a live radio connection"
+		return
+	}
+	envelope, err := newAdminSetBuzzer(m.myNodeNum, enabled)
+	if err != nil {
+		m.flash = fmt.Sprintf("/config: buzzer write failed: %v", err)
+		return
+	}
+	if !m.pump.Enqueue(envelope) {
+		m.flash = "/config: buzzer write dropped — outbound buffer full"
+		return
+	}
+	m.radioBuzzerEnabled = enabled
+	v := "on"
+	if !enabled {
+		v = "off"
+	}
+	m.storagePersist(putSetting(m.db, "radio_buzzer", v))
+	state := "enabled"
+	if !enabled {
+		state = "disabled"
+	}
+	m.flash = fmt.Sprintf("radio buzzer %s — change applied", state)
+	m.systemLine(fmt.Sprintf("radio buzzer %s (alert_message_buzzer = %t)", state, enabled))
+}
+
 // currentChannelIndex maps m.currentChannel back to the Meshtastic
 // channel index used on the wire. Defaults to 0 (PRIMARY) when the
 // channel name isn't in our list.
@@ -266,6 +344,21 @@ func (m *model) actOnSelectedNode(fn func(*nodeItem)) {
 //   - messages: expand selected message (hop, SNR, RSSI, hex id)
 func (m *model) activate() tea.Cmd {
 	switch m.focused {
+	case paneConfig:
+		entries := m.configEntries()
+		if m.selectedCfg < 0 || m.selectedCfg >= len(entries) {
+			return nil
+		}
+		e := entries[m.selectedCfg]
+		if e.action == nil {
+			// Read-only row — Enter is a no-op (cursor isn't supposed
+			// to land on these per selectableConfigEntryIndices, but
+			// guard anyway in case future code paths drop selectedCfg
+			// onto one).
+			return nil
+		}
+		e.action(m)
+		return nil
 	case paneChannels:
 		if m.selectedCh < len(m.channels) {
 			c := m.channels[m.selectedCh]
@@ -909,47 +1002,33 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// user sets shortname to a single emoji). Up to 4 bytes.
 		return m.setOwner(m.myCallsign(), rest, "short")
 	case "config":
-		// Single render path — demo and live both read from model
-		// state since demo mode pre-populates these fields. The only
-		// difference is a [DEMO] tag on the block header.
-		n := m.myNode()
-		lines := []string{fmt.Sprintf("callsign: %s", m.myCallsign())}
-		if n != nil && n.hwModel != "" {
-			lines = append(lines, fmt.Sprintf("hw:       %s", n.hwModel))
+		// Open the radio-config overlay. The interactive panel
+		// (configPane) shows an "Radio buzzer: on/off" row at the
+		// top — Enter toggles it via AdminMessage.SetModuleConfig.
+		// The dump-as-systemBlock variant /config used to do is
+		// gone; /info already covers "what does meshx know" and
+		// /config is now the consistent path for radio-side knobs.
+		m.openOverlay(overlayConfig)
+	case "mute":
+		// Toggle the meshX terminal ding (BEL on inbound text).
+		// Persists to settings.ding_muted so the pref survives
+		// restarts. Does NOT touch the radio's onboard buzzer —
+		// that's /config → "Radio buzzer". Two separate knobs by
+		// design: the radio beeps in your pocket / on your desk,
+		// meshX dings inside the terminal.
+		m.dingMuted = !m.dingMuted
+		v := "off"
+		if m.dingMuted {
+			v = "on"
 		}
-		if m.radioFirmware != "" {
-			lines = append(lines, fmt.Sprintf("fw:       %s", m.radioFirmware))
+		m.storagePersist(putSetting(m.db, "ding_muted", v))
+		if m.dingMuted {
+			m.flash = "/mute on — terminal ding silenced"
+			m.systemLine("ding muted — terminal won't beep on incoming text")
+		} else {
+			m.flash = "/mute off — terminal ding restored"
+			m.systemLine("ding unmuted — terminal will beep on incoming text")
 		}
-		if m.currentChannel != "" {
-			lines = append(
-				lines,
-				fmt.Sprintf("channel:  %s  %s", m.currentChannel, m.radioModemPreset),
-			)
-		}
-		if m.radioRole != "" {
-			lines = append(lines, fmt.Sprintf("role:     %s", m.radioRole))
-		}
-		if m.radioRegion != "" {
-			lines = append(lines, fmt.Sprintf("region:   %s", m.radioRegion))
-		}
-		if m.radioTxPower != 0 {
-			lines = append(lines, fmt.Sprintf("tx power: %d dBm", m.radioTxPower))
-		}
-		if m.myGrid != "" {
-			lines = append(lines, fmt.Sprintf("grid:     %s", m.myGrid))
-		}
-		if m.hasTelemetry {
-			lines = append(lines,
-				fmt.Sprintf("battery:  %.2f V  %d%%", m.batteryVoltage, m.batteryLevel),
-				fmt.Sprintf("chan use: %.1f%%", m.channelUtil),
-			)
-		}
-		lines = append(lines, fmt.Sprintf("peers:    %d known", len(m.nodes)))
-		header := "config"
-		if m.isDemo() {
-			header = "config [DEMO]"
-		}
-		m.systemBlock(header, lines...)
 	case "info":
 		// /info — dump meshx's current knowledge to the log so you
 		// can diagnose "why don't I have a name for this peer?"

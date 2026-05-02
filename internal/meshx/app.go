@@ -171,6 +171,11 @@ const (
 	paneChannels = 0
 	paneMessages = 1
 	paneNodes    = 2
+	// paneConfig — the /config overlay shares the messages-pane slot
+	// (full-width) but has its own focus index so j/k/Enter route to
+	// configPane's selectedCfg cursor instead of paneMessages's
+	// selectedMsg. Same pattern as paneChannels / paneNodes.
+	paneConfig = 3
 )
 
 // overlayKind — the main log is replaced by a contextual overlay when
@@ -192,6 +197,15 @@ const (
 	// on a fixed grid. Re-renders every tick so new NodeInfo
 	// + Position arrivals flow in live.
 	overlayRadar
+	// overlayConfig — "/config" interactive radio configuration
+	// panel. Same chrome as channels/nodes overlays (j/k walks,
+	// Enter activates). Currently surfaces the radio buzzer toggle
+	// (writes ModuleConfig.external_notification.alert_message_buzzer
+	// via AdminMessage.SetModuleConfig) plus a read-only block of
+	// connection / firmware / region info. Future config knobs land
+	// as additional rows in configEntries() — every interactive row
+	// shares the same Enter-to-toggle UX so muscle memory carries.
+	overlayConfig
 )
 
 type channelItem struct {
@@ -428,6 +442,27 @@ type model struct {
 	peerEnv       map[uint32]peerEnvMetrics
 
 	flash string
+
+	// dingMuted gates the terminal BEL emit on inbound text packets.
+	// Toggled by /mute, persisted under settings.ding_muted so the
+	// preference rides across restarts. Default false (=ding on)
+	// matches a fresh-install Meshtastic radio's stock notification
+	// behavior; the user has to deliberately silence meshX.
+	dingMuted bool
+	// radioBuzzerEnabled mirrors the radio's
+	// ModuleConfig.external_notification.alert_message_buzzer field
+	// — true when the LoRa radio beeps on incoming text. We track it
+	// locally because the firmware doesn't push module config on
+	// every connect; the value is persisted to settings.radio_buzzer
+	// so the /config panel renders the right state immediately on
+	// next launch instead of showing a stale guess until the user
+	// re-runs the toggle. Defaults true to match a stock radio.
+	radioBuzzerEnabled bool
+	// selectedCfg is the cursor index for the /config overlay (one
+	// entry per row; j/k walks). Same accounting shape as selectedCh
+	// / selectedNd / selectedMsg — clamped against configEntries() in
+	// moveSelection.
+	selectedCfg int
 	// reconnect is non-nil while the pump is in its retry loop. Each
 	// radioReconnectingMsg refreshes the struct; noticeTickMsg uses it
 	// to repaint the flash with a live "in Ns" countdown so the user
@@ -627,6 +662,10 @@ func newModel(demo *Demo, dest string) model {
 		input:              in,
 		searchInput:        func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
 		initialFocusCmd:    focusCmd,
+		// Defaults match a stock Meshtastic radio + a fresh meshX
+		// install (radio buzzer beeps on text, terminal also dings).
+		// Overridden below from the settings table when storage opens.
+		radioBuzzerEnabled: true,
 	}
 
 	if demo == nil {
@@ -638,6 +677,17 @@ func newModel(demo *Demo, dest string) model {
 		if path, err := defaultStoragePath(); err == nil {
 			if db, notes, err := openStorage(path); err == nil {
 				m.db = db
+				// Hydrate persisted prefs early — /mute (terminal ding)
+				// and /config's radio buzzer state. Both default "on"
+				// to match stock-radio + fresh-install behaviour, so
+				// missing rows just leave the model defaults from
+				// above untouched.
+				if v, ok := getSetting(db, "ding_muted"); ok {
+					m.dingMuted = v == "on"
+				}
+				if v, ok := getSetting(db, "radio_buzzer"); ok {
+					m.radioBuzzerEnabled = v != "off"
+				}
 				// Load the cached NodeDB FIRST — every peer we've
 				// ever resolved a real User for gets inserted into
 				// m.nodes / m.nodesByNum before anything else runs.

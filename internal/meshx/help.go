@@ -166,7 +166,11 @@ var helpEntries = map[string]helpEntry{
 	"find": {usage: "/find <pattern>", summary: "alias for /search"},
 	"config": {
 		usage:   "/config",
-		summary: "dump the radio + identity configuration as a systemBlock",
+		summary: "open the interactive radio config panel — j/k walks, Enter toggles. First row is the radio buzzer (alert_message_buzzer); read-only rows below show identity, firmware, region, and telemetry. Separate from /mute (which silences only the meshX terminal ding)",
+	},
+	"mute": {
+		usage:   "/mute",
+		summary: "toggle the meshX terminal ding (BEL on incoming text). Persists across restarts. The radio's own buzzer is unaffected — for that, use /config → \"radio buzzer\"",
 	},
 	"info": {
 		usage:   "/info",

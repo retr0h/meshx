@@ -270,7 +270,8 @@ func (p helpPane) Render(box Box) string {
 		sec("CHANNEL / UTIL /COMMANDS"),
 		kv("/join <channel>", "switch to named channel"),
 		kv("/channel list", "list known channels"),
-		kv("/config", "show radio + identity configuration"),
+		kv("/config", "open interactive radio config panel (Enter toggles radio buzzer)"),
+		kv("/mute", "toggle meshX terminal ding (does not touch radio buzzer)"),
 		kv("/clear", "clear local scrollback (does not unsend)"),
 		kv("/help", "open this help"),
 		kv("/q, /quit", "hint — use Ctrl+X to exit"),
@@ -305,6 +306,193 @@ func (p helpPane) Render(box Box) string {
 		BorderStyle: style,
 		Padding:     [4]int{1, 3, 1, 3},
 	}.Render(box)
+}
+
+// configEntryKind classifies a /config row. Interactive rows respond
+// to Enter (toggle / cycle / prompt); read-only rows are display-only
+// — they exist so the panel doubles as the radio-state reference
+// /config used to systemBlock-dump, without forking the surface into
+// two commands.
+type configEntryKind int
+
+const (
+	cfgEntryReadOnly configEntryKind = iota
+	cfgEntryToggle
+)
+
+// configEntry describes one row in the /config overlay. label is the
+// left-column key (cell-padded by configPane.Render); value is what
+// renders on the right (e.g. "on" / "off" / "915MHz / LONG_FAST").
+// kind controls whether activate() does anything when the cursor is
+// parked on this row.
+type configEntry struct {
+	label string
+	value string
+	kind  configEntryKind
+	// action runs when the user presses Enter on a kind=Toggle row.
+	// nil for read-only entries — activate() short-circuits when the
+	// current row's action is nil. Non-nil rows MUST be the only
+	// rows users can stop on; selectableConfigEntries() drops
+	// read-onlys when computing j/k destinations so the cursor jumps
+	// past the firmware/region block instead of getting stuck on it.
+	action func(m *model)
+}
+
+// configEntries returns the rows the /config overlay should render in
+// display order. The selectable ones (Enter does something) come
+// first so j-only-from-the-top hits them without scrolling. Order:
+//
+//  1. Radio buzzer toggle (interactive)
+//  2. — separator —
+//  3. Read-only radio identity / firmware / region / preset / role
+//
+// Future interactive knobs (LoRa region, preset, …) slot in above
+// the separator. Read-only rows beneath the divider are documentation
+// for what's currently true — same fields the legacy `/config`
+// systemBlock used to dump.
+func (m model) configEntries() []configEntry {
+	on := "on"
+	if !m.radioBuzzerEnabled {
+		on = "off"
+	}
+	out := []configEntry{
+		{
+			label: "radio buzzer",
+			value: on,
+			kind:  cfgEntryToggle,
+			action: func(mm *model) {
+				mm.setRadioBuzzer(!mm.radioBuzzerEnabled)
+			},
+		},
+		// Separator row — rendered as a dim divider; non-selectable.
+		{label: "", value: "", kind: cfgEntryReadOnly},
+	}
+
+	add := func(k, v string) {
+		if v == "" {
+			return
+		}
+		out = append(out, configEntry{label: k, value: v, kind: cfgEntryReadOnly})
+	}
+
+	add("callsign", m.myCallsign())
+	if n := m.myNode(); n != nil {
+		add("hw", n.hwModel)
+	}
+	add("firmware", m.radioFirmware)
+	if m.currentChannel != "" {
+		add("channel", m.currentChannel)
+	}
+	add("modem preset", m.radioModemPreset)
+	add("region", m.radioRegion)
+	add("role", m.radioRole)
+	if m.radioTxPower != 0 {
+		add("tx power", fmt.Sprintf("%d dBm", m.radioTxPower))
+	}
+	add("grid", m.myGrid)
+	if m.hasTelemetry {
+		add("battery", fmt.Sprintf("%.2f V (%d%%)", m.batteryVoltage, m.batteryLevel))
+		add("chan use", fmt.Sprintf("%.1f%%", m.channelUtil))
+	}
+	add("peers", fmt.Sprintf("%d known", len(m.nodes)))
+	return out
+}
+
+// selectableConfigEntryIndices returns the slice indices of rows that
+// j/k should land on — interactive rows only. The cursor jumps over
+// the separator + read-only block so j from "radio buzzer" wraps
+// straight back to the same row instead of marching through eight
+// non-actionable lines.
+func (m model) selectableConfigEntryIndices() []int {
+	entries := m.configEntries()
+	out := make([]int, 0, 1)
+	for i, e := range entries {
+		if e.kind != cfgEntryReadOnly {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// configPane is the /config overlay — interactive radio configuration
+// with vim nav (j/k walks selectable rows, Enter toggles). Mirrors
+// channelsPane's frame chrome (CONFIG header, paneCountSuffix,
+// renderBorderedPane), so the user experience is identical to
+// /channels — only the row content differs.
+type configPane struct{ m model }
+
+// Render lays the entries from configEntries() onto bordered-pane
+// rows. Selectable rows pass through wrapSelection so the cursor
+// renders the same selection chrome /channels uses; read-only rows
+// render as dim "  key  value" lines. Header counts the toggleable
+// entries so users see "(1 toggle)" and know the panel does
+// something even before they press anything.
+func (p configPane) Render(box Box) string {
+	m := p.m
+	entries := m.configEntries()
+
+	header := paneHeaderCell("CONFIG", m.focused == paneConfig)
+	togglable := 0
+	for _, e := range entries {
+		if e.kind != cfgEntryReadOnly {
+			togglable++
+		}
+	}
+	count := paneCountSuffix(fmt.Sprintf("  (%d toggle, %d info)", togglable, len(entries)-togglable-1))
+	legend := paneLegendLine(
+		"j/k walk · Enter toggle · Esc close · /mute silences the meshX terminal ding (separate)",
+	)
+
+	inner := paneInnerWidth(box.Width)
+	contentW := inner - gutterWidth
+	if contentW < 1 {
+		contentW = 1
+	}
+
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
+	valStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
+	offStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+
+	lines := make([]string, 0, 4+len(entries))
+	lines = append(lines, header+count, "", legend, "")
+
+	for i, e := range entries {
+		// Empty separator row — rendered as a dim divider line.
+		if e.label == "" && e.value == "" {
+			lines = append(lines, dim.Render(strings.Repeat("─", contentW)))
+			continue
+		}
+		// Build "key" left, "value" right, with the value styled by
+		// kind (interactive = bold green/dim; read-only = drained
+		// label + cyan value to match the rest of the UI palette).
+		var row string
+		switch e.kind {
+		case cfgEntryToggle:
+			val := e.value
+			styled := valStyle.Render(val)
+			if val == "off" {
+				styled = offStyle.Render(val)
+			}
+			row = fmt.Sprintf("  %s  %s",
+				keyStyle.Render(padCells(e.label, 14)),
+				styled,
+			)
+		default:
+			row = fmt.Sprintf("  %s  %s",
+				dim.Render(padCells(e.label, 14)),
+				keyStyle.Render(e.value),
+			)
+		}
+		row = padCells(row, contentW)
+		selected := i == m.selectedCfg && m.focused == paneConfig && e.kind != cfgEntryReadOnly
+		lines = append(lines, wrapSelection(row, selected, false, inner))
+	}
+
+	return renderBorderedPane(
+		strings.Join(lines, "\n"),
+		box.Width, box.Height, paneConfig, m.focused == paneConfig,
+	)
 }
 
 // sortedNodes returns a view of m.nodes with pinned (fav) nodes first,
@@ -394,6 +582,8 @@ func (m model) renderIrssiBody(width, height int) string {
 		pane = nearbyPane{m: m}
 	case overlayRadar:
 		pane = radarPane{m: m}
+	case overlayConfig:
+		pane = configPane{m: m}
 	default:
 		pane = messagesPane{m: m}
 	}

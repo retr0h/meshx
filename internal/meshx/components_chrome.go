@@ -245,6 +245,24 @@ func byteCounterCell(used, capBytes int) string {
 	return style.Render(fmt.Sprintf("%d/%d", used, capBytes))
 }
 
+// syncCounterFlash renders the live running peer counter for the
+// NodeDB-handshake flash banner. The number itself goes bright
+// (mesh-green bold) so the user's eye lands on it as the
+// constantly-updating value; the surrounding "sync: " / "peers
+// received" prose stays in the flash banner's default style.
+//
+// No denominator: meshtastic doesn't broadcast the radio's expected
+// NodeDB total up front (only currently-known peers get
+// re-broadcast), and the SQLite cache count grows over time as a
+// historical accumulator that's much larger than any single
+// handshake. A made-up "/N" would mislead more than help.
+func syncCounterFlash(received int) string {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(meshGreen)).
+		Bold(true).
+		Render(fmt.Sprintf("%d", received))
+}
+
 // flashBannerCell renders the optional transient `m.flash` message
 // emitted by /command dispatch. Affirmative messages (acks, hints)
 // render in mesh-green; rejection-style messages ("unknown",

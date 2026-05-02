@@ -358,6 +358,14 @@ type model struct {
 	// ConfigComplete that fires after handshake.
 	syncPendingGhosts int
 
+	// syncReceived backs the live peer counter shown in the chanRow
+	// flash during the NodeDB handshake. Bumps once per
+	// radioNodeInfoMsg between MyInfo and ConfigComplete; reset to 0
+	// at MyInfo (start) and at ConfigComplete (end). No denominator
+	// because meshtastic doesn't surface the radio's expected
+	// NodeDB total up front.
+	syncReceived int
+
 	// storageAlerted — once any saveMessage / saveNode /
 	// saveNodePrefs fails, flip this flag and emit a single
 	// systemLine so the user knows persistence is degraded. Every
@@ -919,7 +927,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// because a 30s backoff would otherwise blow past flashTTL
 		// silently. The banner clears the moment a radio frame
 		// proves the link is back (radioMyInfoMsg / ConfigComplete).
-		if m.reconnect != nil {
+		//
+		// EXCEPTION: once MyInfo has arrived (myNodeNum != 0) but
+		// ConfigComplete hasn't, we're mid-handshake — let the live
+		// "sync: N peers received" counter (set in radioNodeInfoMsg)
+		// own the flash. Otherwise this tick blows the counter away
+		// every 250ms with the dial banner.
+		if m.reconnect != nil && m.myNodeNum == 0 {
 			m.flash = m.reconnectFlashText()
 			m.flashSeen = m.flash
 			m.flashSeenAt = time.Now()
@@ -970,14 +984,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioMyInfoMsg:
 		m.myNodeNum = msg.nodeNum
-		// MyInfo = first frame of the handshake. Emit an in-band
-		// "syncing NodeDB" notice so the user sees node-list progress
-		// instead of staring at an empty pane wondering if anything's
-		// happening. We deliberately do NOT clear the reconnect banner
-		// here — if the link drops between MyInfo and ConfigComplete
-		// (BLE sessions regularly do), clearing would hide the banner
-		// while m.connected stayed false. We wait for ConfigComplete.
+		// MyInfo = first frame of the handshake. Reset the received
+		// counter to 0 and emit the start-of-sync notice so the
+		// user sees node-list progress instead of staring at an
+		// empty pane. The radio doesn't tell us the total NodeDB
+		// size up front — only currently-known peers get re-broadcast
+		// (the SQLite cache holds historical accumulation, which can
+		// be much larger). So no denominator: just a running count.
+		// Reconnect banner stays up until ConfigComplete; if the
+		// link drops mid-handshake (BLE regularly does), the banner
+		// re-appears in the correct state.
 		if !m.connected {
+			m.syncReceived = 0
 			m.systemLine("sync: pulling NodeDB from radio…")
 		}
 		return m, nil
@@ -985,13 +1003,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case radioNodeInfoMsg:
 		m.upsertNode(msg)
 		// While the handshake is still in flight (m.connected stays
-		// false until ConfigComplete), surface a live peer count in
-		// the bottom flash so the user sees the NodeDB pull ticking
-		// up instead of staring at a silent "connecting…" spinner.
-		// On ConfigComplete the systemLine path takes over with the
-		// final tally.
+		// false until ConfigComplete), bump the received counter and
+		// surface it in the chanRow flash via syncCounterFlash —
+		// the running number renders bright (mesh-green bold) so it
+		// reads as the active live signal, "peers received" stays
+		// in the regular flash green. On ConfigComplete the
+		// systemLine path takes over with the final tally.
 		if !m.connected && m.myNodeNum != 0 {
-			m.flash = fmt.Sprintf("sync: %d peers received", len(m.nodes))
+			m.syncReceived++
+			m.flash = "sync: " + syncCounterFlash(m.syncReceived) + " peers received"
 		}
 		return m, nil
 
@@ -1088,6 +1108,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				"sync: complete — %d peers identified", len(m.nodes),
 			))
 		}
+		// Clear the handshake-progress counter so a future /sync
+		// or post-disconnect rehandshake starts from a clean slate.
+		m.syncReceived = 0
 		// If the user issued /sync and we snapshotted a ghost count,
 		// emit a completion systemBlock with the delta so they see
 		// what the re-dump actually changed. syncPendingGhosts > 0

@@ -56,6 +56,10 @@ meshx/
 │   ├── commands.go               # /command dispatcher + ham bangs
 │   ├── input.go                  # key bindings, nav mode, tab completion entry
 │   ├── ui.go                     # renderers, pane styles, selection highlight
+│   ├── box.go                    # layout primitives — Box, Component, Row/Cell, Text, Spacer
+│   ├── stack.go                  # composition primitives — VStack, HStack, Bordered, Styled
+│   ├── components_chrome.go      # statusBar / topDivider / channelTabsRow / inputBar Components
+│   ├── components_message.go     # messageRow Component + visual-height bookkeeping
 │   ├── notices.go                # TTL + pin + fade for `-!-` rows
 │   ├── splash.go                 # BitchX-style rotating graffiti banner
 │   ├── complete.go               # Tab completion — /cmd, #chan, nicks
@@ -120,6 +124,57 @@ Four modes plus splash:
 
 ESC always returns to the input bar (the canonical "where I type"
 state). Ctrl+X always quits.
+
+## Layout primitives (component tree)
+
+Rendering is a strict component tree, not ad-hoc string concatenation:
+every region of the UI implements `Component.Render(box Box) string`
+and MUST return precisely `box.Height` lines, each precisely
+`box.Width` cells per `ansiCells` (the same measurement the terminal
+uses, with VS16/keycap promotion to 2 cells per Unicode TR51 so
+"7️⃣"-bodied rows don't drift the right `║` frame out of column).
+
+- `box.go` — `Box`, `Component`, `Row`/`Cell`, `Text`, `Spacer`,
+  `padCells`, `alignCells`, `ansiCells`. `padCells` funnels through
+  `ansi.Truncate` for ANSI-aware grapheme-aware truncation, so styled
+  prefixes survive when content overflows (the input-bar
+  `[#default] ›` keeps its colors when typing past the row edge).
+- `stack.go` — `VStack` / `HStack` distribute a parent box across
+  `SizedChild` slots with flex (-1) support; `Bordered` wraps an inner
+  Component in a `╔═══╗` / `┌───┐` frame, subtracting border + padding
+  from the inner box. `Styled` is the post-composition style wrapper.
+- `components_chrome.go` — top-of-screen `statusBar`, `topDivider`,
+  bottom `channelTabsRow`, `inputBar` (compact textinput with
+  cell-correct prefix budget; reserves 1-cell `cursorPad` for the
+  off-by-one in `bubbles/textinput.View()`).
+- `components_message.go` — `messageRow` enforces the per-row layout
+  contract; the legacy `renderMessageRow` string emitter is the source
+  of truth for *content*, while `messageRow.Render` is the source of
+  truth for *size* (every line padded to box.Width via `padCells`).
+- `ui.go::renderBorderedPane` — wraps any pre-rendered pane string
+  (messages / channels / nodes / nearby / radar / help) in `Bordered`,
+  replacing the legacy lipgloss `paneStyle`. lipgloss measures with
+  runewidth (keycap = 1) and pads its content using its own count;
+  Bordered uses `ansiCells` so the keycap-bodied row's right `║`
+  lands in the same column as plain-text rows.
+
+The frame `View()` builds:
+
+```
+VStack:
+  statusBar       (1 row)
+  topDivider      (1 row)
+  body (flex)     ← renderIrssiBody → renderMessagesPane / overlays
+  Spacer          (1 row, separates body from chrome)
+  channelTabsRow  (1 row)
+  inputBar        (1 row)
+```
+
+Set `MESHX_LAYOUT_ASSERT=1` to enable dev-mode invariant panics:
+every `Component.Render` is checked to return exactly the requested
+box, so a regression in cell-counting math surfaces as an immediate
+panic at the offending call site instead of as visible drift two
+rerenders later.
 
 ## Overlays (no drawers)
 

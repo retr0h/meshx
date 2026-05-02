@@ -303,8 +303,17 @@ type model struct {
 
 	input       textinput.Model // always-on bottom input (messages OR /commands)
 	searchInput textinput.Model
-	searchQuery string        // committed search term
-	nodeFilter  string        // callsign filter on scrollback; "" = all
+	searchQuery string // committed search term
+	nodeFilter  string // callsign filter on scrollback; "" = all
+	// replyParent is the packetID `r reply` captured from the row that
+	// was highlighted when the user pressed `r` in nav mode. The
+	// /reply command uses it to thread the outgoing message to the
+	// SPECIFIC message the user pointed at — vs replyTargetFor()'s
+	// fallback of "most recent from this sender", which is wrong when
+	// the same callsign has 5 messages in the log and the user wants
+	// to reply to message #3. Cleared on send so the stash never
+	// bleeds into the next composition.
+	replyParent uint32
 	helpScroll  int           // scroll offset for help overlay
 	splash      splashVariant // which BitchX-style banner is showing this launch
 	tab         *tabState     // non-nil while cycling through Tab completions

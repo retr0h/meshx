@@ -332,6 +332,24 @@ func (m *model) lookupNode(callsign string) *nodeItem {
 	return nil
 }
 
+// whoisHops renders the hop count for a /whois block. "self" gets a
+// dedicated label so the line doesn't read "0 (direct)" which would
+// imply a remote-but-direct peer; remote peers print the cached
+// lastHops count, with 0 surfaced as "direct" so the user doesn't
+// have to remember that 0 means "we hear them on RF without a relay".
+// Falls back to "—" when no packet has carried a hop count yet
+// (cold-start NodeDB drains where the User packet arrives but no
+// MeshPacket has been routed yet).
+func whoisHops(n *nodeItem, isSelf bool) string {
+	if isSelf {
+		return "self (we are the origin)"
+	}
+	if n.lastHops == 0 {
+		return "direct (no relay)"
+	}
+	return fmt.Sprintf("%d (via %d intermediate)", n.lastHops, n.lastHops)
+}
+
 // signalReport renders the real-telemetry signal report for a node
 // using its most recently heard packet's SNR/RSSI/hops. Used by /rs,
 // /cqr, /ping — anywhere we'd otherwise fake a "copy 9/9" line.

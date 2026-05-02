@@ -32,242 +32,136 @@ package meshx
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
+// View composes the screen as a Component tree: a VStack of the chrome
+// regions wrapped around a body region. The frame box is m.w-1 wide
+// (NOT m.w) to dodge terminal pending-wrap (DECAWM auto-margin) — no
+// component is ever asked to render content into the very last column,
+// which is the architectural fix for the duplicate-input-row bug class.
+//
+// Each child of the VStack is sized explicitly:
+//
+//   - status:   1 row
+//   - divider:  1 row
+//   - body:     -1 (flex; takes whatever's left after the others)
+//   - chanRow:  1 row
+//   - inputBar: 1 row
+//
+// Components are responsible for filling their allocated Box exactly.
+// Row + Cell + padCells in box.go enforce that contract; nothing here
+// has to compute m.w-N math by hand.
 func (m model) View() string {
 	if m.w == 0 || m.h == 0 {
 		return ""
 	}
-
-	status := m.renderStatusBar()
-	divider := m.renderTopDivider()
-	chanRow := m.renderChannelStatus()
-	inputRow := m.renderInputRow()
-
-	// Row budget:
-	//   status(1) + top-divider(1) + body(bodyH) + chan-row(1) + input(1) + tail(1)
-	// = 5 + bodyH
-	bodyH := m.h - 5
-	if bodyH < 8 {
-		bodyH = 8
+	out := frameView(m).Render(Box{Width: m.w - 1, Height: m.h})
+	if path := os.Getenv("MESHX_DEBUG_VIEW"); path != "" {
+		if f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644); err == nil {
+			lines := strings.Split(out, "\n")
+			for i, l := range lines {
+				_, _ = fmt.Fprintf(f, "[%2d] w=%d %q\n", i, ansi.StringWidth(l), ansi.Strip(l))
+			}
+			_ = f.Close()
+		}
+		_ = os.Unsetenv("MESHX_DEBUG_VIEW")
 	}
+	return out
+}
 
-	var body string
-	switch m.mode {
-	case modeHelp:
-		body = m.renderHelpView(bodyH)
-	default:
-		body = m.renderIrssiBody(bodyH)
+// frameView builds the top-level VStack for a frame. Body is a
+// ComponentFunc that delegates to renderIrssiBody / renderHelpView
+// — those still produce a complete bordered pane string of exactly
+// the requested size, so they slot into the layout untouched. A
+// follow-up will convert them to native Components with explicit
+// cell budgets per row, which is when message rows become real
+// fixed-slot cards.
+func frameView(m model) Component {
+	body := ComponentFunc(func(box Box) string {
+		var s string
+		switch m.mode {
+		case modeHelp:
+			s = m.renderHelpView(box.Width, box.Height)
+		default:
+			s = m.renderIrssiBody(box.Width, box.Height)
+		}
+		return fitToBox(s, box)
+	})
+	// Spacer rows sandwich the chanRow + inputBar:
+	//   - 1 above chanRow      → keeps chrome off the bottom of the body pane
+	//   - 1 below inputBar     → keeps the input prompt off the very last
+	//                            terminal row so the cursor / typed text isn't
+	//                            jammed against the tmux/iTerm status bar
+	// Costs 2 lines of body real estate; gives the bottom chrome a
+	// readable margin on both sides.
+	return VStack{Children: []SizedChild{
+		{Comp: statusBar{m: m}, Size: 1},
+		{Comp: topDivider{}, Size: 1},
+		{Comp: body, Size: -1},
+		{Comp: Spacer{}, Size: 1},
+		{Comp: channelTabsRow{m: m}, Size: 1},
+		{Comp: inputBar{m: m}, Size: 1},
+		{Comp: Spacer{}, Size: 1},
+	}}
+}
+
+// fitToBox normalizes a pre-rendered pane string to exactly box.Width
+// × box.Height. Right-pads short lines with spaces, truncates over-
+// width lines, drops over-tall content, appends blank lines for
+// short content. The body component renderers (renderIrssiBody etc.)
+// produce strings whose dimensions they computed from box.Height /
+// the legacy width arg; this function ensures they slot into the
+// VStack contract regardless. Once the body renderers are converted
+// to native Components, fitToBox can be deleted.
+func fitToBox(s string, box Box) string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, box.Height)
+	for i := 0; i < box.Height; i++ {
+		var line string
+		if i < len(lines) {
+			line = padCells(lines[i], box.Width)
+		} else {
+			line = strings.Repeat(" ", box.Width)
+		}
+		out[i] = line
 	}
-
-	return status + "\n" + divider + "\n" + body + "\n" + chanRow + "\n" + inputRow
+	return strings.Join(out, "\n")
 }
 
 // renderIrssiBody — main log takes the whole width. When an overlay
 // is active (channels / nodes / nearby / radar), it replaces the
 // log. ESC always closes the overlay and returns to the input bar.
-func (m model) renderIrssiBody(height int) string {
+// renderIrssiBody renders the body region at exactly width × height.
+// Width comes from the parent VStack's Box, NOT m.w — that's the
+// indirection that lets the global frame box (m.w - 1, the safeW
+// margin) propagate down so no row hits the right edge.
+func (m model) renderIrssiBody(width, height int) string {
 	switch m.overlay {
 	case overlayChannels:
-		return m.renderChannelsPane(m.w, height)
+		return m.renderChannelsPane(width, height)
 	case overlayNodes:
-		return m.renderNodesPane(m.w, height)
+		return m.renderNodesPane(width, height)
 	case overlayNearby:
-		return m.renderNearbyPane(m.w, height)
+		return m.renderNearbyPane(width, height)
 	case overlayRadar:
-		return m.renderRadarPane(m.w, height)
+		return m.renderRadarPane(width, height)
 	default:
-		return m.renderMessagesPane(m.w, height)
+		return m.renderMessagesPane(width, height)
 	}
-}
-
-// renderChannelStatus is the irssi lower status line — tmux-pane
-// style: every channel is rendered in a stable position. The current
-// channel gets a highlighted brackets + bold mesh-green, unread
-// counts shown inline, others in quiet cyan. Cycling with Ctrl+N/P
-// or Alt+1/2/3 only changes which one is highlighted — the list
-// doesn't reshuffle, so muscle memory works.
-func (m model) renderChannelStatus() string {
-	label := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	// Active channel uses hot pink — stands out from the mesh-green
-	// borders + callsign + status fields. Max-headroom palette already
-	// has plenty of green/cyan; the pink gives the "currently typing here"
-	// tab a signature color of its own.
-	activeTab := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhPink)).
-		Bold(true)
-	// Brackets render as muted chrome so the inner channel index +
-	// name carry the visual weight — same treatment the [INPUT] /
-	// [NAV] mode tag uses on the right side of this row. Reads as
-	// "[1:#default]" with grey brackets framing a hot-pink label.
-	activeBracket := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	other := lipgloss.NewStyle().Foreground(lipgloss.Color(mhLavender))
-	otherIdx := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	unread := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
-	alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
-
-	// Left side is intentionally empty — the top status bar already
-	// owns the callsign under `//\ retr0h`. Rendering it again here
-	// was a redundancy that pulled the eye to two separate green
-	// elements saying the same thing. A bare space keeps the layout
-	// aligned without carrying visual weight.
-	left := ""
-
-	var tabs []string
-	for i, c := range m.channels {
-		marker := ""
-		if c.unread > 0 {
-			if c.private {
-				marker = " " + alertStyle.Render(fmt.Sprintf("(%d!)", c.unread))
-			} else {
-				marker = " " + unread.Render(fmt.Sprintf("(%d)", c.unread))
-			}
-		}
-		idx := fmt.Sprintf("%d:", i+1)
-		if c.name == m.currentChannel {
-			tab := activeBracket.Render("[") +
-				activeTab.Render(idx+c.name) + marker +
-				activeBracket.Render("]")
-			tabs = append(tabs, tab)
-		} else {
-			tab := " " + otherIdx.Render(idx) + other.Render(c.name) + marker + " "
-			tabs = append(tabs, tab)
-		}
-	}
-	mid := strings.Join(tabs, " ")
-
-	// Mode tag — brackets stay in the muted label color so they read
-	// as chrome, but the inner word swaps color per mode so a glance
-	// at the bottom-right tells you whether typing will work.
-	// Specifically: NAV / SEARCH render in yellow because "you tried
-	// to type and nothing happened" is the most common confusion
-	// point for new users (afreeland reported this), and the
-	// attention-grabbing color makes the mode visible without having
-	// to read the word.
-	modeTag := "INPUT"
-	modeTagColor := meshGreen
-	switch m.mode {
-	case modeNav:
-		modeTag = "NAV"
-		modeTagColor = mhYellow
-	case modeSearch:
-		modeTag = "SEARCH"
-		modeTagColor = mhYellow
-	case modeHelp:
-		modeTag = "HELP"
-		modeTagColor = mhCyan
-	}
-	modeTagStyled := label.Render("[") +
-		lipgloss.NewStyle().
-			Foreground(lipgloss.Color(modeTagColor)).
-			Bold(true).
-			Render(modeTag) +
-		label.Render("]")
-	var right string
-	if m.mode == modeInput {
-		// Byte counter lives in the mode badge while composing — the
-		// status row is fixed-width and flush-right, so the counter
-		// never gets pushed off-screen by long input text. Ramps
-		// through five colors as the composition approaches the wire
-		// cap so pressure is visible before you hit it.
-		//
-		// Counts BODY bytes only via wirePayloadBytes — the verb + any
-		// target arg is meshx chrome that doesn't cost budget.
-		// `/reply bubbingtenny2k ` reads 0/228 until the user starts
-		// typing the actual reply body.
-		n := wirePayloadBytes(m.input.Value())
-		pct := float64(n) / float64(meshtasticMaxTextBytes)
-		counterTxt := fmt.Sprintf("%d/%d", n, meshtasticMaxTextBytes)
-		counterStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-		switch {
-		case n >= meshtasticMaxTextBytes:
-			counterStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhPink)).Bold(true)
-		case pct >= 0.9:
-			counterStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhOrange)).Bold(true)
-		case pct >= 0.75:
-			counterStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhYellow)).Bold(true)
-		case pct >= 0.5:
-			counterStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color(mhFG))
-		}
-		right = counterStyle.Render(counterTxt) + " " + modeTagStyled
-	} else {
-		right = modeTagStyled
-	}
-	if m.flash != "" {
-		// Flash color depends on kind — errors / hints in dim lavender,
-		// successful actions in quiet green. Heuristic: anything that
-		// starts with "unknown", "usage", or "use " is a hint, not a win.
-		flashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhGreen))
-		lower := strings.ToLower(m.flash)
-		if strings.HasPrefix(lower, "unknown") ||
-			strings.HasPrefix(lower, "usage") ||
-			strings.HasPrefix(lower, "use ") ||
-			strings.HasPrefix(lower, "no ") {
-			flashStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained)).Italic(true)
-		}
-		right = flashStyle.Render(m.flash) + "  " + right
-	}
-
-	content := " " + left + "   " + mid
-	pad := m.w - lipgloss.Width(content) - lipgloss.Width(right) - 2
-	if pad < 1 {
-		pad = 1
-	}
-	return content + strings.Repeat(" ", pad) + right + " "
-}
-
-// renderInputRow renders the always-on bottom input bar or the /
-// search prompt. Includes a channel prefix in mesh-green so the user
-// always knows where their typing will go.
-func (m model) renderInputRow() string {
-	amber := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
-	green := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-
-	if m.mode == modeSearch {
-		return " " + amber.Render("/ ") + m.searchInput.View() +
-			"  " + dim.Render("ESC cancel · Enter match")
-	}
-	if m.mode == modeNav {
-		hint := dim.Render(
-			"NAV · j/k · r reply · R resend · w whois · t trace · p ping · P pin · * star · ESC back to input · / search · ? help",
-		)
-		return " " + hint
-	}
-	// Input mode — default.
-	// Input-bar channel prefix stays mesh-green — pink is reserved
-	// for the highlighted active-channel tab in the status row above.
-	// The byte counter lives in the [INPUT] badge on the top status
-	// row so it stays visible regardless of composition length;
-	// nothing here on the right.
-	// Same bracket treatment the channel tabs + mode tag use — grey
-	// brackets framing the colored content. Channel name stays
-	// mesh-green so the input prompt reads "where you're typing"
-	// at a glance.
-	prefix := dim.Render("[") + green.Render(m.currentChannel) +
-		dim.Render("] ") + amber.Render("› ")
-	return " " + prefix + m.input.View()
-}
-
-// renderTopDivider draws a full-width double-line ruler across the
-// screen under the status bar. Pure vintage BBS masthead divider.
-func (m model) renderTopDivider() string {
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen))
-	return style.Render(strings.Repeat("═", m.w))
 }
 
 // renderHelpView draws a full-pane help overlay listing every keybind
 // and every `:` command, organized by category. Any key dismisses it.
-func (m model) renderHelpView(height int) string {
+// Width parameter takes the parent VStack's Box.Width so the help
+// pane stays within the safeW frame.
+func (m model) renderHelpView(width, height int) string {
 	head := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(meshGreen)).
 		Bold(true)
@@ -423,13 +317,31 @@ func (m model) renderHelpView(height int) string {
 	}
 	viewLines = append(viewLines, "", indicator)
 
-	return lipgloss.NewStyle().
-		Border(lipgloss.DoubleBorder()).
-		BorderForeground(lipgloss.Color(meshGreen)).
-		Padding(1, 3).
-		Width(m.w - 4).
-		Height(height - 2).
-		Render(strings.Join(viewLines, "\n"))
+	// Wrap in Bordered so the help overlay obeys the same component-
+	// tree contract as every other pane: an inner box exactly sized
+	// to width × height minus the frame, padded via ansiCells (no
+	// runewidth surprise on keycap/zwj content). Padding [1,3,1,3] —
+	// 1 row top/bottom, 3 cols left/right — matches the original
+	// lipgloss Padding(1,3).
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen))
+	innerComp := ComponentFunc(func(box Box) string {
+		ls := strings.Split(strings.Join(viewLines, "\n"), "\n")
+		out := make([]string, box.Height)
+		for i := 0; i < box.Height; i++ {
+			if i < len(ls) {
+				out[i] = padCells(ls[i], box.Width)
+			} else {
+				out[i] = strings.Repeat(" ", box.Width)
+			}
+		}
+		return strings.Join(out, "\n")
+	})
+	return Bordered{
+		Inner:       innerComp,
+		Chars:       DoubleBorder,
+		BorderStyle: style,
+		Padding:     [4]int{1, 3, 1, 3},
+	}.Render(Box{Width: width, Height: height})
 }
 
 // statusSegment wraps a styled value in the `░▒▓ value ▓▒░` tmux /
@@ -440,172 +352,6 @@ func (m model) renderHelpView(height int) string {
 func statusSegment(content, chromeColor string) string {
 	chrome := lipgloss.NewStyle().Foreground(lipgloss.Color(chromeColor))
 	return chrome.Render("░▒▓ ") + content + chrome.Render(" ▓▒░")
-}
-
-func (m model) renderStatusBar() string {
-	call := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
-	label := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	val := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan)).Bold(true)
-	warn := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
-	ok := lipgloss.NewStyle().Foreground(lipgloss.Color(mhGreen)).Bold(true)
-	pink := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
-	demoTag := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
-
-	// Chrome (the ░▒▓ gradient bars) is always dim drained — the
-	// segment's content carries the semantic color.
-	chrome := mhDrained
-
-	// Build the segment list. Live mode pulls from model state;
-	// demo mode keeps the canned values so screenshots stay juicy.
-	var segs []string
-
-	// Segment 1: brand mark + callsign, both in mesh-green.
-	// Brand segment: `//\ <shortname> <longname>` — shortname first
-	// (Meshtastic's 4-char "badge" that fits on a radio OLED) then
-	// the full callsign. Falls back to just `//\ <longname>` when no
-	// shortname is known (demo, or before MyNodeInfo arrives).
-	brand := call.Render(`//\`) + "  "
-	if sn := m.myShortName(); sn != "" {
-		brand += call.Render(sn) + " " + call.Render(m.myCallsign())
-	} else {
-		brand += call.Render(m.myCallsign())
-	}
-	segs = append(segs, statusSegment(brand, chrome))
-
-	{
-		// One render path for both demo and live mode — demo mode
-		// pre-populates the same model fields below, so every
-		// segment just reads model state. Fields show "—" when the
-		// radio hasn't yet sent them (DeviceMetrics telemetry is
-		// periodic — default every 30 min on a fresh radio).
-		n := m.myNode()
-
-		// Slim unicode icons used throughout the bar. Light-weight
-		// powerline-style glyphs rather than emoji — render at the
-		// same cell width as text, keep color theming clean.
-		//
-		//   ⌂  home / hardware
-		//   ⚙  firmware (cog)
-		//   ⌬  channel (radio ring)
-		//   ⟐  tx power (diamond with dot)
-		//   ⚡  battery
-		//   ≈  channel utilization (airwaves)
-		//   ⌖  role (crosshair)
-		//   ⌘  region (command-like — regulatory code)
-		//   ☖  grid square (shogi piece traditionally used for QTH)
-		//   ⚭  peers (linked-rings)
-		//   ●  online / connecting dot
-
-		// Hardware + firmware.
-		hw := "—"
-		if n != nil && n.hwModel != "" {
-			hw = n.hwModel
-		}
-		fw := shortFirmware(m.radioFirmware)
-		segs = append(segs, statusSegment(
-			label.Render("⌂ ")+val.Render(hw)+"  "+label.Render("⚙ ")+val.Render(fw),
-			chrome,
-		))
-
-		// Channel + modem preset (e.g. "⌬ #default LongFast").
-		chParts := []string{label.Render("⌬ ")}
-		if m.currentChannel != "" {
-			chParts = append(chParts, val.Render(m.currentChannel))
-		} else {
-			chParts = append(chParts, val.Render("—"))
-		}
-		if m.radioModemPreset != "" {
-			chParts = append(chParts, " "+label.Render(m.radioModemPreset))
-		}
-		segs = append(segs, statusSegment(strings.Join(chParts, ""), chrome))
-
-		// TX power in dBm.
-		tx := "—"
-		if m.radioTxPower != 0 {
-			tx = fmt.Sprintf("%d dBm", m.radioTxPower)
-		}
-		segs = append(segs, statusSegment(label.Render("⟐ ")+warn.Render(tx), chrome))
-
-		// Battery + voltage.
-		batt := "—"
-		if m.hasTelemetry {
-			pct := "—"
-			if m.batteryLevel > 0 {
-				if m.batteryLevel > 100 {
-					pct = "pwr"
-				} else {
-					pct = fmt.Sprintf("%d%%", m.batteryLevel)
-				}
-			}
-			if m.batteryVoltage > 0 {
-				batt = fmt.Sprintf("%.2fV %s", m.batteryVoltage, pct)
-			} else {
-				batt = pct
-			}
-		}
-		segs = append(segs, statusSegment(label.Render("⚡ ")+val.Render(batt), chrome))
-
-		// Channel utilization.
-		util := "—"
-		if m.hasTelemetry {
-			util = fmt.Sprintf("%.1f%%", m.channelUtil)
-		}
-		segs = append(segs, statusSegment(label.Render("≈ ")+val.Render(util), chrome))
-
-		// Role (CLIENT / ROUTER / REPEATER / TRACKER …).
-		if m.radioRole != "" {
-			segs = append(segs, statusSegment(label.Render("⌖ ")+val.Render(m.radioRole), chrome))
-		}
-
-		// Region (regulatory domain).
-		if m.radioRegion != "" {
-			segs = append(segs, statusSegment(label.Render("⌘ ")+val.Render(m.radioRegion), chrome))
-		}
-
-		// Grid square (Maidenhead).
-		if m.myGrid != "" {
-			segs = append(segs, statusSegment(label.Render("☖ ")+val.Render(m.myGrid), chrome))
-		}
-
-		// Peer count.
-		segs = append(
-			segs,
-			statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.nodes))), chrome),
-		)
-	}
-
-	// Right-most segment: connection state.
-	var state string
-	switch {
-	case m.isDemo():
-		state = ok.Render("online") + "  " + demoTag.Render("[DEMO]")
-	case m.connected:
-		state = ok.Render("● online")
-	default:
-		state = pink.Render("● connecting")
-	}
-	segs = append(segs, statusSegment(state, chrome))
-
-	content := strings.Join(segs, "")
-
-	// Graceful narrow-terminal fallback: when the bar is too wide,
-	// drop segments one at a time from the center outward until it
-	// fits. Brand (first) and state (last) are preserved so the
-	// user always knows who they are + whether they're connected.
-	for lipgloss.Width(content) > m.w-2 && len(segs) > 2 {
-		mid := len(segs) / 2
-		if mid == 0 || mid == len(segs)-1 {
-			break
-		}
-		segs = append(segs[:mid], segs[mid+1:]...)
-		content = strings.Join(segs, "")
-	}
-
-	pad := m.w - lipgloss.Width(content) - 2
-	if pad < 0 {
-		pad = 0
-	}
-	return " " + content + strings.Repeat(" ", pad) + " "
 }
 
 // paneStyle returns a border-only styled pane container. Focused panes
@@ -693,19 +439,45 @@ func paneInnerWidth(width int) int {
 	return width - 4
 }
 
-func paneStyle(width, height, paneIdx int, focused bool) lipgloss.Style {
-	s := lipgloss.NewStyle().
-		Width(width-2).
-		Height(height-2).
-		Padding(1, 1)
+// renderBorderedPane wraps pre-rendered inner content (each line
+// already padded to width-4 cells per ansiCells) in the same ║/═
+// frame paneStyle draws — but using our Bordered Component instead
+// of lipgloss.Style.Width() / Padding(). Lipgloss measures with
+// runewidth, which under-counts keycap emoji and VS16-promoted glyphs
+// by 1 cell; when lipgloss then pads its inner content to its
+// declared Width, the keycap row ends up 1 visual cell wider than
+// the box and the right ║ frame walks out of column. Bordered uses
+// ansiCells (keycap-aware) for every padding decision, so a row
+// containing "7️⃣" lands the right ║ at the same column as a row of
+// plain text. This is the architectural promise — no overflow ever.
+func renderBorderedPane(
+	inner string, width, height, paneIdx int, focused bool,
+) string {
+	chars := NormalBorder
+	color := mhDrained
 	if focused {
-		return s.
-			Border(lipgloss.DoubleBorder()).
-			BorderForeground(lipgloss.Color(paneAccentColor(paneIdx)))
+		chars = DoubleBorder
+		color = paneAccentColor(paneIdx)
 	}
-	return s.
-		Border(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color(mhDrained))
+	style := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+	innerComp := ComponentFunc(func(box Box) string {
+		lines := strings.Split(inner, "\n")
+		out := make([]string, box.Height)
+		for i := 0; i < box.Height; i++ {
+			if i < len(lines) {
+				out[i] = padCells(lines[i], box.Width)
+			} else {
+				out[i] = strings.Repeat(" ", box.Width)
+			}
+		}
+		return strings.Join(out, "\n")
+	})
+	return Bordered{
+		Inner:       innerComp,
+		Chars:       chars,
+		BorderStyle: style,
+		Padding:     [4]int{1, 1, 1, 1},
+	}.Render(Box{Width: width, Height: height})
 }
 
 func (m model) renderChannelsPane(width, height int) string {
@@ -723,8 +495,10 @@ func (m model) renderChannelsPane(width, height int) string {
 			),
 		)
 	}
-	return paneStyle(width, height, paneChannels, m.focused == paneChannels).
-		Render(strings.Join(lines, "\n"))
+	return renderBorderedPane(
+		strings.Join(lines, "\n"),
+		width, height, paneChannels, m.focused == paneChannels,
+	)
 }
 
 func (m model) renderChannelRow(c channelItem, selected bool, inner int) string {
@@ -847,8 +621,10 @@ func (m model) renderNodesPane(width, height int) string {
 	lines = append(lines, header+count, "", legend, "")
 	lines = append(lines, gridLines...)
 
-	return paneStyle(width, height, paneNodes, m.focused == paneNodes).
-		Render(strings.Join(lines, "\n"))
+	return renderBorderedPane(
+		strings.Join(lines, "\n"),
+		width, height, paneNodes, m.focused == paneNodes,
+	)
 }
 
 // renderUserCell renders one [ @callsign ] bracketed cell in the
@@ -960,16 +736,35 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 func (m model) renderMessagesPane(width, height int) string {
 	chanName := m.currentChannel
 	if chanName == "" {
-		chanName = "#primary"
+		// Pre-sync placeholder: applyChannel labels the firmware
+		// PRIMARY (empty-name LongFast) channel as "#default" once
+		// the radio's ChannelInfo packet arrives, so use the same
+		// label here. Avoids the header flashing "#PRIMARY (271
+		// msgs)" during the NodeDB drain on a freshly-attached BLE
+		// connection — that name doesn't match what any other pane
+		// will show a moment later.
+		chanName = "#default"
 	}
 	header := paneHeader(strings.ToUpper(chanName), paneMessages, m.focused == paneMessages)
 	hint := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
 		Render(fmt.Sprintf("  (%d msgs)", len(m.messages)))
 
-	rowsFree := height - 6
-	if rowsFree < 3 {
-		rowsFree = 3
+	// Total content budget inside the bordered pane: height − 2
+	// (border) − 2 (Padding(1,1)). The pane fills exactly that many
+	// lines; anything less and the lipgloss frame stretches with
+	// trailing blanks before the bottom ╚══╝ — those blank rows are
+	// what looks like dead space at the bottom of the messages pane.
+	contentRows := height - 4
+	if contentRows < 3 {
+		contentRows = 3
+	}
+	// Two of the content rows go to the pane header + blank separator
+	// below it; the rest is the message-row budget tailStartList uses
+	// when deciding how many messages to keep on screen.
+	rowsFree := contentRows - 2
+	if rowsFree < 1 {
+		rowsFree = 1
 	}
 
 	var lines []string
@@ -985,7 +780,18 @@ func (m model) renderMessagesPane(width, height int) string {
 	startIdx := naturalStart
 	scrollback := m.selectedMsg < naturalStart
 	if scrollback {
-		startIdx = m.selectedMsg - rowsFree/3
+		// Pin the cursor at the TOP of the viewport during scrollback
+		// so each `k` scrolls the message list up by exactly one row.
+		// The previous "rowsFree/3" placement jumped the cursor 1/3
+		// down the viewport the instant scrollback activated, which
+		// looked like `k` snapping the screen by ~7 rows on the first
+		// press and then doing nothing on the next several presses
+		// — `j/k` behaved as gross-step scrolls, while `Ctrl+U` and
+		// `G` "felt" like the only working scroll keys. With the
+		// cursor pinned at row 0, a single `k` reveals exactly one
+		// earlier message and the viewport advances 1-for-1 with the
+		// keystroke, which is what irssi/mutt/vim users expect.
+		startIdx = m.selectedMsg
 		if startIdx < 0 {
 			startIdx = 0
 		}
@@ -1056,10 +862,20 @@ func (m model) renderMessagesPane(width, height int) string {
 			pinFirst = msg.group == 0 || i == 0 || m.messages[i-1].group != msg.group
 			pinLast = msg.group == 0 || i+1 >= len(m.messages) || m.messages[i+1].group != msg.group
 		}
-		line := m.renderMessageRow(msg, isSelected, paneInnerWidth(width), bg, pinFirst, pinLast)
-		if faded {
-			line = dimRow(line)
+		// Route through the messageRow Component so the row's output
+		// is forced through the layout contract (every line padded to
+		// paneInnerWidth, total visual rows padded to the precomputed
+		// visual height). The legacy renderMessageRow + dimRow path
+		// is preserved INSIDE the component, but the cell-width
+		// guarantee now lives at the Component boundary instead of
+		// being scattered across each pane caller.
+		row := messageRow{
+			m: m, msg: msg, selected: isSelected, rowBg: bg,
+			pinFirst: pinFirst, pinLast: pinLast, faded: faded,
+			rowsInner: paneInnerWidth(width),
 		}
+		h := messageRowVisualHeight(msg)
+		line := row.Render(Box{Width: paneInnerWidth(width), Height: h})
 		lines = append(lines, line)
 	}
 	// BitchX / irssi gravity — pin the log to the BOTTOM of the
@@ -1106,16 +922,21 @@ func (m model) renderMessagesPane(width, height int) string {
 	// the tail and visually undo the scroll. Trim from the END in
 	// that case so the cursor + earlier-context rows stay on
 	// screen and the (irrelevant) newer rows are what gets clipped.
+	// Trim/pad against the FULL content budget (header + separator
+	// + messages), not just the message budget. Comparing against
+	// rowsFree alone leaves the pane 2 rows under capacity and
+	// renders 2 trailing blanks before ╚══╝ — the dead space the
+	// user reported as "lots of unused spacing at the bottom".
 	if scrollback {
-		for visualRows(lines) > rowsFree && len(lines) > 2 {
+		for visualRows(lines) > contentRows && len(lines) > 2 {
 			lines = lines[:len(lines)-1]
 		}
 	} else {
-		for visualRows(lines) > rowsFree && len(lines) > 2 {
+		for visualRows(lines) > contentRows && len(lines) > 2 {
 			lines = append(lines[:2:2], lines[3:]...)
 		}
 	}
-	if pad := rowsFree - visualRows(lines); pad > 0 {
+	if pad := contentRows - visualRows(lines); pad > 0 {
 		rebuilt := make([]string, 0, len(lines)+pad)
 		rebuilt = append(rebuilt, lines[:2]...) // preserve header + separator
 		for i := 0; i < pad; i++ {
@@ -1124,8 +945,10 @@ func (m model) renderMessagesPane(width, height int) string {
 		rebuilt = append(rebuilt, lines[2:]...)
 		lines = rebuilt
 	}
-	return paneStyle(width, height, paneMessages, m.focused == paneMessages).
-		Render(strings.Join(lines, "\n"))
+	return renderBorderedPane(
+		strings.Join(lines, "\n"),
+		width, height, paneMessages, m.focused == paneMessages,
+	)
 }
 
 // tailStartList is the row-budget calculator for list view — each
@@ -1684,9 +1507,15 @@ func (m model) renderMessageRow(
 	// Corrupted bodies — sanitizeMessageText replaced bad bytes with
 	// '?' and dropped non-printable runes, so the text is still
 	// readable but no longer trustworthy. Re-style the row in dim
-	// lavender italic and prepend a ⚠ marker on the first line so
-	// the user immediately sees "this row had garbage in it" without
-	// us having to throw away the salvageable printable chars.
+	// lavender italic so the user sees "this row had garbage in it"
+	// without us having to throw away the salvageable printable
+	// chars. Marker is pure ASCII "(?) " — earlier iterations used
+	// the U+26A0 ⚠ glyph but that rune is East-Asian-Ambiguous
+	// width (lipgloss.Width reports 1, many terminal fonts render
+	// 2), causing every corrupted row to be one cell wider than
+	// padding budgeted, soft-wrap in the terminal, and desync Tea's
+	// diff renderer with cumulative layout damage on every new
+	// message. ASCII fixes both the styling signal and the width.
 	bodyText := text
 	firstLine := bodyLines[0]
 	if msg.corrupted {
@@ -1694,7 +1523,7 @@ func (m model) renderMessageRow(
 			Foreground(lipgloss.Color(mhLavender)).
 			Background(lipgloss.Color(rowBg)).
 			Italic(true)
-		firstLine = "⚠ " + firstLine
+		firstLine = "(?) " + firstLine
 	}
 	firstStyled := bodyText.Render(padOrTruncate(firstLine, textW))
 	_ = bang // kept in scope for any future command-styling use
@@ -1892,32 +1721,26 @@ func dimRow(s string) string {
 
 // padOrTruncate forces a string to exactly width w display cells:
 // right-pads with spaces if short, truncates with an ellipsis if long.
-// Uses lipgloss.Width for emoji-aware measurement.
+//
+// Uses charmbracelet/x/ansi.StringWidth for measurement — that's the
+// SAME library bubbletea's diff renderer, lipgloss/cellbuf word-wrap,
+// and the standard-renderer's EraseLineRight check all use, so our
+// padding stays self-consistent with everyone downstream. uniseg
+// (and runewidth) under-count VS16-promoted keycaps "2️⃣ 6️⃣ ⚠️"
+// which the terminal AND ansi render as 2 cells — using uniseg here
+// shaved one cell off every keycap row, sliding the right-aligned
+// metrics column left by one and breaking the bordered box layout.
+//
+// Iterates by grapheme cluster so a single emoji is never split: no
+// chopping the digit out of a 2️⃣ keycap, no severing skin-tone
+// modifiers, no halving 🙋🏼‍♂️ ZWJ sequences.
 func padOrTruncate(s string, w int) string {
-	cur := lipgloss.Width(s)
-	if cur == w {
-		return s
-	}
-	if cur < w {
-		return s + strings.Repeat(" ", w-cur)
-	}
-	// Too long — keep w-1 cells + ellipsis.
-	var b strings.Builder
-	used := 0
-	for _, r := range s {
-		rw := lipgloss.Width(string(r))
-		if used+rw > w-1 {
-			break
-		}
-		b.WriteRune(r)
-		used += rw
-	}
-	for used < w-1 {
-		b.WriteRune(' ')
-		used++
-	}
-	b.WriteRune('…')
-	return b.String()
+	// Funnel through padCells so every measurement applies the keycap
+	// correction (VS16 / U+20E3 promote to 2 cells per Unicode TR51).
+	// Without it, "7️⃣" measures 1 by ansi.StringWidth but renders as
+	// 2 in every modern terminal, so padded rows visually overflow by
+	// 1 column on keycap messages and the right ║ frame walks left.
+	return padCells(s, w)
 }
 
 // gutterWidth is the left margin reserved for the selection indicator —
@@ -1957,16 +1780,38 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 		pad := strings.Repeat(" ", gutterWidth)
 		parts := strings.Split(content, "\n")
 		for i, p := range parts {
-			truncated := truncateLine(p, innerW)
-			if neutralBg != "" {
-				truncated = lipgloss.NewStyle().
+			// Pad/truncate the line to exactly innerW cells using our
+			// keycap-corrected ansiCells measurement. Going through
+			// lipgloss.NewStyle().Width(innerW) instead introduces a
+			// lipgloss/runewidth measurement that under-counts keycap
+			// emoji ("7️⃣" reads as 1 cell while every modern terminal
+			// renders 2), so a row whose body contains a keycap ends
+			// up 1 visual cell wider than the frame and the right ║
+			// border walks out of column. padCells is the authoritative
+			// measurement for the layout pipeline.
+			//
+			// Tail-pad coloring: each inner styled span ends in `\e[0m`
+			// which resets EVERYTHING including any outer bg wrapper, so
+			// `lipgloss.Background().Render(line)` doesn't actually tint
+			// the trailing spaces — they end up plain and the zebra row
+			// reads as a styled fragment with a "drop-off" to terminal
+			// background past the body's last character. Solution: emit
+			// the trailing pad with its OWN explicit bg-styled span so
+			// the row is a solid rectangle from gutter to right ║ frame.
+			cur := ansiCells(p)
+			line := p
+			if cur > innerW {
+				line = padCells(p, innerW)
+			} else if cur < innerW && neutralBg != "" {
+				tail := strings.Repeat(" ", innerW-cur)
+				tail = lipgloss.NewStyle().
 					Background(lipgloss.Color(neutralBg)).
-					Width(innerW).
-					MaxWidth(innerW).
-					Inline(true).
-					Render(truncated)
+					Render(tail)
+				line = p + tail
+			} else if cur < innerW {
+				line = p + strings.Repeat(" ", innerW-cur)
 			}
-			parts[i] = pad + truncated
+			parts[i] = pad + line
 		}
 		return strings.Join(parts, "\n")
 	}
@@ -1994,19 +1839,20 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 		bg = "#0e2618" // dim neon-green background for a subtle row pop
 	}
 
-	// Width + MaxWidth clamp to exactly innerW so the bg tint covers
-	// the whole row — no more, no less. Prevents terminal auto-wrap
-	// from punching holes in the highlight block.
+	// Bg tint covers the whole row — no more, no less. We pad to
+	// exactly innerW cells via padCells (keycap-aware) BEFORE handing
+	// to lipgloss, so the lipgloss style only paints; it does not
+	// resize. Going through Width()+MaxWidth() instead lets lipgloss's
+	// runewidth-based measurement undercount keycap emoji and overpad
+	// the row by 1 cell, which lands the right ║ frame outside the
+	// column on rows whose body contains a keycap.
 	lineStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(bg)).
-		Foreground(lipgloss.Color(mhFG)).
-		Width(innerW).
-		MaxWidth(innerW).
-		Inline(true)
+		Foreground(lipgloss.Color(mhFG))
 
 	parts := strings.Split(content, "\n")
 	for i, p := range parts {
-		parts[i] = gutter + lineStyle.Render(truncateLine(p, innerW))
+		parts[i] = gutter + lineStyle.Render(padCells(p, innerW))
 	}
 	return strings.Join(parts, "\n")
 }
@@ -2027,51 +1873,6 @@ func (m model) isStringSearchHit(s string) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(s), m.searchQuery)
-}
-
-// truncateLine cuts a pre-styled string to a visible-cell width. Drops
-// ANSI escape sequences from the visible count so styled content
-// doesn't get prematurely clipped.
-func truncateLine(s string, maxW int) string {
-	if lipgloss.Width(s) <= maxW {
-		return s
-	}
-	// Walk the string honoring CSI escape sequences (ESC [ … m).
-	var out strings.Builder
-	var visible int
-	i := 0
-	for i < len(s) {
-		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
-			// copy through the 'm' terminator
-			end := i + 2
-			for end < len(s) && s[end] != 'm' {
-				end++
-			}
-			if end < len(s) {
-				end++
-			}
-			out.WriteString(s[i:end])
-			i = end
-			continue
-		}
-		r := []rune(s[i:])
-		if len(r) == 0 {
-			break
-		}
-		rw := lipgloss.Width(string(r[0]))
-		if visible+rw > maxW-1 {
-			out.WriteRune('…')
-			// NOTE: deliberately no \x1b[0m here — we rely on the
-			// caller's outer lipgloss style to reset at the end. An
-			// embedded reset would kill the zebra/selected bg tint
-			// for any padding rendered after the truncation point.
-			return out.String()
-		}
-		out.WriteRune(r[0])
-		visible += rw
-		i += len(string(r[0]))
-	}
-	return out.String()
 }
 
 func clamp(v, lo, hi int) int {

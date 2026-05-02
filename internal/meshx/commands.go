@@ -754,6 +754,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			fmt.Sprintf("heard:  %s ago", n.currentLastHeard()),
 			fmt.Sprintf("state:  %s", n.currentState()),
 			fmt.Sprintf("signal: %s", signalReport(n)),
+			fmt.Sprintf("hops:   %s", whoisHops(n, isSelf)),
 		)
 		// Battery + channel-util are only tracked model-wide for
 		// self today. For peers we'd need a per-peer DeviceMetrics
@@ -822,7 +823,18 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// in the wire payload; the threading line above the row
 		// (rendered from replyID) is how "this replies to X" is
 		// surfaced to readers.
-		m.sendBangReply("/reply "+target, body, m.replyTargetFor(target))
+		//
+		// Prefer m.replyParent (captured by `r` in nav mode against
+		// the actually-highlighted row) over replyTargetFor's most-
+		// recent-from-sender fallback, so threading anchors to the
+		// EXACT message the user navigated to — even when the same
+		// callsign has several messages in the log.
+		parent := m.replyParent
+		if parent == 0 {
+			parent = m.replyTargetFor(target)
+		}
+		m.replyParent = 0
+		m.sendBangReply("/reply "+target, body, parent)
 		m.flash = fmt.Sprintf("reply sent to %s", target)
 	case "msg":
 		// /msg <call> <text> — directed message. Meshtastic has no

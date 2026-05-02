@@ -421,17 +421,6 @@ func nickColor(callsign string) string {
 // repeating the accent in the header was extra color noise that
 // made the UI read as mesh-green everywhere at once. The border
 // carries focus; the header carries the label.
-func paneHeader(text string, paneIdx int, focused bool) string {
-	_ = paneIdx
-	s := lipgloss.NewStyle().Bold(true)
-	if focused {
-		s = s.Foreground(lipgloss.Color(mhFG))
-	} else {
-		s = s.Foreground(lipgloss.Color(mhDrained))
-	}
-	return s.Render(strings.ToUpper(text))
-}
-
 // paneInnerWidth returns the content-area width inner renderers
 // should target given a `width` argument from View(). One place to
 // change the math instead of hunting down `width-4` literals.
@@ -481,7 +470,7 @@ func renderBorderedPane(
 }
 
 func (m model) renderChannelsPane(width, height int) string {
-	header := paneHeader("CHANNELS", paneChannels, m.focused == paneChannels)
+	header := paneHeaderCell("CHANNELS", m.focused == paneChannels)
 
 	lines := make([]string, 0, 2+len(m.channels))
 	lines = append(lines, header, "")
@@ -562,7 +551,7 @@ func (m model) renderNodesPane(width, height int) string {
 		}
 	}
 
-	header := paneHeader("NODES", paneNodes, m.focused == paneNodes)
+	header := paneHeaderCell("NODES", m.focused == paneNodes)
 	count := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
 		Render(fmt.Sprintf("  (#mesh: %d/%d · sort: %s)", online, total, m.nodeSort.label()))
@@ -650,7 +639,7 @@ func (m model) renderMessagesPane(width, height int) string {
 		// will show a moment later.
 		chanName = "#default"
 	}
-	header := paneHeader(strings.ToUpper(chanName), paneMessages, m.focused == paneMessages)
+	header := paneHeaderCell(chanName, m.focused == paneMessages)
 	hint := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
 		Render(fmt.Sprintf("  (%d msgs)", len(m.messages)))

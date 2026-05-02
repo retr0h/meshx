@@ -18,9 +18,58 @@ package meshx
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+// paneHeaderCell renders the bold uppercase title that every
+// overlay pane (CHANNELS, NODES, NEARBY, RADAR, #channel, HELP)
+// emits as its first body row. Focused panes render in bright fg;
+// unfocused in dim drained so the user sees at a glance which pane
+// the cursor is bound to via Ctrl+W navigation.
+func paneHeaderCell(text string, focused bool) string {
+	s := lipgloss.NewStyle().Bold(true)
+	if focused {
+		s = s.Foreground(lipgloss.Color(mhFG))
+	} else {
+		s = s.Foreground(lipgloss.Color(mhDrained))
+	}
+	return s.Render(strings.ToUpper(text))
+}
+
+// paneCountSuffix renders a dim "(...)" suffix that sits next to
+// a paneHeaderCell — used for "(304 msgs)" on the messages pane,
+// "(#mesh: 4/12 · sort: heard)" on /nodes, etc. Always dim drained
+// so it reads as metadata, not chrome.
+func paneCountSuffix(text string) string {
+	if text == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Render(text)
+}
+
+// paneEmptyMessage renders an empty-pane placeholder block — the
+// 3-6 line dim/italic explainers /nearby and /radar emit when the
+// user's radio has no GPS fix or no peers have broadcast positions
+// yet. Each line is dim italic so it reads as advisory; an empty
+// string in lines emits a blank row.
+func paneEmptyMessage(lines ...string) string {
+	dim := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhDrained)).
+		Italic(true)
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		if l == "" {
+			out[i] = ""
+		} else {
+			out[i] = dim.Render(l)
+		}
+	}
+	return strings.Join(out, "\n")
+}
 
 // channelRowLine renders one /channels overlay row at exactly
 // contentW cells. The row is a flex-body Component with the channel

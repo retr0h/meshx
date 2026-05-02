@@ -537,9 +537,18 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flash = fmt.Sprintf("N: no more matches for %q", m.searchQuery)
 		}
 	case "r":
-		// Reply to the highlighted message — prefill /reply <sender>.
+		// Reply to the highlighted message — prefill /reply <sender>
+		// AND stash the highlighted row's packetID in m.replyParent.
+		// /reply consumes the stash (when set) instead of falling back
+		// to replyTargetFor's "most-recent from this callsign" lookup,
+		// so a thread anchors to message #3 when that's what the user
+		// pointed at — not the latest from the same sender.
 		target := m.selectedSender()
 		if target != "" {
+			m.replyParent = 0
+			if m.selectedMsg >= 0 && m.selectedMsg < len(m.messages) {
+				m.replyParent = m.messages[m.selectedMsg].packetID
+			}
 			return m, m.prefillInput("/reply " + target + " ")
 		}
 	case "R":

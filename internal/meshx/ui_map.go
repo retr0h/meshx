@@ -168,8 +168,9 @@ func (m model) renderNearbyPane(width, height int) string {
 			dim.Render("     • check position.* in your radio config (Meshtastic app/CLI)"),
 			dim.Render("     • try /sync to force a NodeDB re-dump"),
 		)
-		return paneStyle(width, height, paneNodes, m.focused == paneNodes).
-			Render(strings.Join(lines, "\n"))
+		return renderBorderedPane(
+			strings.Join(lines, "\n"), width, height, paneNodes, m.focused == paneNodes,
+		)
 	}
 
 	plots := m.nearbyRoster()
@@ -190,8 +191,9 @@ func (m model) renderNearbyPane(width, height int) string {
 			dim.Render("   no peers with a GPS fix yet — positions land as"),
 			dim.Render("   Meshtastic Position packets arrive (periodic)."),
 		)
-		return paneStyle(width, height, paneNodes, m.focused == paneNodes).
-			Render(strings.Join(lines, "\n"))
+		return renderBorderedPane(
+			strings.Join(lines, "\n"), width, height, paneNodes, m.focused == paneNodes,
+		)
 	}
 
 	// Scale the per-row bar to the farthest peer so the widest
@@ -367,8 +369,9 @@ func (m model) renderNearbyPane(width, height int) string {
 		_ = plots
 	}
 
-	return paneStyle(width, height, paneNodes, m.focused == paneNodes).
-		Render(strings.Join(lines, "\n"))
+	return renderBorderedPane(
+		strings.Join(lines, "\n"), width, height, paneNodes, m.focused == paneNodes,
+	)
 }
 
 // renderRadarPane — polar scope with peers plotted by (bearing,
@@ -402,8 +405,9 @@ func (m model) renderRadarPane(width, height int) string {
 			dim.Render("     • check position.* in your radio config (Meshtastic app/CLI)"),
 			dim.Render("     • try /sync to force a NodeDB re-dump"),
 		}
-		return paneStyle(width, height, paneNodes, m.focused == paneNodes).
-			Render(strings.Join(lines, "\n"))
+		return renderBorderedPane(
+			strings.Join(lines, "\n"), width, height, paneNodes, m.focused == paneNodes,
+		)
 	}
 
 	plots := m.collectPeerPlots()
@@ -413,8 +417,9 @@ func (m model) renderRadarPane(width, height int) string {
 			dim.Render("   no peers with a GPS fix yet — waiting for"),
 			dim.Render("   Meshtastic Position packets to land."),
 		}
-		return paneStyle(width, height, paneNodes, m.focused == paneNodes).
-			Render(strings.Join(lines, "\n"))
+		return renderBorderedPane(
+			strings.Join(lines, "\n"), width, height, paneNodes, m.focused == paneNodes,
+		)
 	}
 
 	sortPlotsByDistance(plots)
@@ -558,8 +563,9 @@ func (m model) renderRadarPane(width, height int) string {
 	lines = append(lines, header, "")
 	lines = append(lines, bodyRows...)
 	lines = append(lines, legend...)
-	return paneStyle(width, height, paneNodes, m.focused == paneNodes).
-		Render(strings.Join(lines, "\n"))
+	return renderBorderedPane(
+		strings.Join(lines, "\n"), width, height, paneNodes, m.focused == paneNodes,
+	)
 }
 
 // drawRing paints an elliptical ring at the given center + radii

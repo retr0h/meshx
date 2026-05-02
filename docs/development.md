@@ -137,12 +137,75 @@ thin wrapper that resolves a name-or-uuid against `ble_devices` and delegates to
 - **Selection highlight** —
   `wrapSelection(content, selected, isSearchHit, width, rowBg...)` wraps any row
   with a gutter + tinted bg. Used by the message list, channels overlay, and
-  users grid.
-- **Truncation** — `truncateLine` / `padOrTruncate` honor ANSI escapes so styled
-  content doesn't get clipped mid-SGR sequence.
+  users grid. Tail-pads use an explicit bg-styled span (not a lipgloss outer
+  wrap) because each inner SGR ends in `\e[0m` which would reset any outer bg
+  before the trailing spaces — without the explicit span the zebra row drops off
+  after the body's last character.
+- **Truncation** — `padCells` (in `box.go`) is the canonical pad/truncate
+  funnel; it builds on `ansi.Truncate` so styled prefixes survive the cut and
+  ANSI SGR sequences are never split mid-byte.
 - **Pane accents** — `paneAccentColor(paneIdx)` returns the per-pane signature
   color (channels = cyan, messages = mesh-green, nodes = magenta). Used by
   focused-pane borders and the giant pane-number overlay.
+
+### Layout primitives — Component tree
+
+`box.go` and `stack.go` define the layout vocabulary the View() tree is built
+from. Every region of the UI is a `Component` whose `Render(box Box) string`
+returns precisely `box.Height` lines, each precisely `box.Width` cells per
+`ansiCells`. There is no upward negotiation — parents own the math, children
+fill what they're given.
+
+- `Box{Width, Height}` — the cell budget a Component must fill exactly.
+- `Component` — interface; one method, `Render(box Box) string`.
+- `Row` / `Cell` — single-row horizontal layout. Cells declare width (or `-1`
+  for flex); `Row.Render` truncates anything that would overflow the box and
+  pads anything short.
+- `Text`, `Spacer` — leaf renderers (single string filling a box, blank fill).
+- `VStack` / `HStack` — vertical / horizontal stack of `SizedChild` with flex
+  (-1) sharing.
+- `Bordered` — wraps an inner Component in a `╔═══╗` / `┌───┐` frame with
+  optional padding, subtracting border + padding from the inner box. Replaces
+  the legacy lipgloss `paneStyle` so message panes / overlays measure with
+  `ansiCells` (keycap-aware) instead of runewidth (which under-counts VS16 emoji
+  and pushes the right `║` out of column).
+- `Styled` — applies a styler to an already-composed Component without changing
+  cell count.
+
+`ansiCells` is the single source of truth for measurement. It starts from
+`ansi.StringWidth` and promotes any grapheme cluster containing VS16 (U+FE0F) or
+COMBINING ENCLOSING KEYCAP (U+20E3) to 2 cells per Unicode TR51
+emoji-presentation rules — without this, "7️⃣"-bodied rows render 1 cell wider
+than the layout pipeline thinks they are and the right `║` frame walks out of
+column.
+
+Concrete Components live in:
+
+- `components_chrome.go` — `statusBar`, `topDivider`, `channelTabsRow`,
+  `inputBar`. The frame's top + bottom rows.
+- `components_message.go` — `messageRow` enforces the per-row layout contract;
+  the legacy `renderMessageRow` is the source of truth for _content_,
+  `messageRow.Render` is the source of truth for _size_.
+- `ui.go::renderBorderedPane` — the bordered-pane wrapper (messages / channels /
+  nodes / nearby / radar) using `Bordered`.
+
+The frame `View()` builds:
+
+```
+VStack:
+  statusBar       (1 row)
+  topDivider      (1 row)
+  body (flex)     ← renderIrssiBody → renderMessagesPane / overlays
+  Spacer          (1 row, separates body from chrome)
+  channelTabsRow  (1 row)
+  inputBar        (1 row)
+```
+
+Set `MESHX_LAYOUT_ASSERT=1` to enable dev-mode invariant panics: every
+`Component.Render` is checked to return exactly the requested box, so a
+regression in cell-counting math surfaces as an immediate panic at the offending
+call site instead of as visible drift two rerenders later. Run the test suite
+with this flag set in CI.
 
 ## Tab completion
 

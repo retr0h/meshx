@@ -984,6 +984,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioNodeInfoMsg:
 		m.upsertNode(msg)
+		// While the handshake is still in flight (m.connected stays
+		// false until ConfigComplete), surface a live peer count in
+		// the bottom flash so the user sees the NodeDB pull ticking
+		// up instead of staring at a silent "connecting…" spinner.
+		// On ConfigComplete the systemLine path takes over with the
+		// final tally.
+		if !m.connected && m.myNodeNum != 0 {
+			m.flash = fmt.Sprintf("sync: %d peers received", len(m.nodes))
+		}
 		return m, nil
 
 	case radioChannelMsg:

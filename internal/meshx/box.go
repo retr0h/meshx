@@ -459,3 +459,86 @@ type ComponentFunc func(box Box) string
 // closure. Lets a function literal stand in anywhere a Component is
 // expected — same pattern as net/http's HandlerFunc.
 func (f ComponentFunc) Render(box Box) string { return f(box) }
+
+// Centered horizontally centers a single-line or multi-line content
+// block within its parent's Box. Each line of Content is measured
+// via ansiCells (the canonical keycap-aware width) and padded with
+// (Box.Width - lineW)/2 leading spaces so the visible content's
+// midpoint lands at the box's midpoint.
+//
+// This is the "center globally" primitive: hand it a Box of any
+// width and it centers the content against THAT width, regardless
+// of how deeply nested the parent is. A pane that wants its splash
+// art pane-centered just wraps the art in Centered and feeds it the
+// pane's inner Box; a modal that wants a single-line title centered
+// does the same. Multi-line content centers each line independently
+// — the right call for ASCII-art banners where each line has its
+// own width and you want every line to share the same midpoint.
+//
+// FillStyle styles the leading + trailing pad on each line; CellPad
+// stays styled by the content's own ANSI codes since lipgloss spans
+// reset at \e[0m. Set FillStyle to a row-bg styler when the parent
+// expects the row background to extend through the whole Box.
+type Centered struct {
+	Content   string
+	FillStyle styler
+	// VAlign: AlignLeft (top), AlignCenter (vertical center),
+	// AlignRight (bottom). Defaults to top — extra Box.Height beyond
+	// content lines pad below.
+	VAlign Align
+}
+
+// Render fills box with Content horizontally + vertically centered.
+// Content is split on '\n'; each line is padded to box.Width with
+// equal leading + trailing space. Vertical alignment positions the
+// content block within box.Height; surrounding rows are blank
+// (FillStyle-tinted) lines.
+func (c Centered) Render(box Box) string {
+	if box.Empty() {
+		return ""
+	}
+	lines := strings.Split(c.Content, "\n")
+	contentH := len(lines)
+	if contentH > box.Height {
+		contentH = box.Height
+		lines = lines[:contentH]
+	}
+	topPad, bottomPad := 0, box.Height-contentH
+	switch c.VAlign {
+	case AlignCenter:
+		topPad = (box.Height - contentH) / 2
+		bottomPad = box.Height - contentH - topPad
+	case AlignRight:
+		topPad = box.Height - contentH
+		bottomPad = 0
+	}
+	blank := strings.Repeat(" ", box.Width)
+	if c.FillStyle != nil {
+		blank = c.FillStyle.Render(blank)
+	}
+	out := make([]string, 0, box.Height)
+	for i := 0; i < topPad; i++ {
+		out = append(out, blank)
+	}
+	for _, line := range lines {
+		w := ansiCells(line)
+		if w >= box.Width {
+			out = append(out, padCells(line, box.Width))
+			continue
+		}
+		gap := box.Width - w
+		left := gap / 2
+		right := gap - left
+		leftPad := strings.Repeat(" ", left)
+		rightPad := strings.Repeat(" ", right)
+		if c.FillStyle != nil {
+			leftPad = c.FillStyle.Render(leftPad)
+			rightPad = c.FillStyle.Render(rightPad)
+		}
+		out = append(out, leftPad+line+rightPad)
+	}
+	for i := 0; i < bottomPad; i++ {
+		out = append(out, blank)
+	}
+	return strings.Join(out, "\n")
+}

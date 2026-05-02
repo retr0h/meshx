@@ -502,19 +502,11 @@ func (m model) renderChannelsPane(width, height int) string {
 }
 
 func (m model) renderChannelRow(c channelItem, selected bool, inner int) string {
-	name := c.name
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
-	if c.private {
-		nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta))
+	contentW := inner - gutterWidth
+	if contentW < 1 {
+		contentW = 1
 	}
-	unread := ""
-	if c.unread > 0 {
-		unread = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(mhYellow)).
-			Bold(true).
-			Render(fmt.Sprintf(" %d", c.unread))
-	}
-	row := nameStyle.Render(name) + unread
+	row := channelRowLine(c.name, c.private, c.unread, contentW)
 	return wrapSelection(row, selected, m.isStringSearchHit(c.name), inner)
 }
 
@@ -688,39 +680,23 @@ func (m model) renderUserCell(n nodeItem, selected bool, cellW int) string {
 		nameColor = mhMagenta
 	}
 
-	sigilStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(sigilColor)).Bold(true)
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(nameColor))
+	bracketColor := mhDrained
 	if selected {
-		nameStyle = nameStyle.Bold(true)
+		bracketColor = mhMagenta
 	}
-	bracketStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	if selected {
-		bracketStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta)).Bold(true)
-	}
-
-	// Compute how many cells the name can occupy. cellW = "[ S name  ] "
-	// where S = sigil. Fixed chrome: "[ " (2) + sigil (1) + " " (1) + " ]" (2) = 6.
-	nameBudget := cellW - 6
-	if nameBudget < 3 {
-		nameBudget = 3
-	}
-	// When the node has a shortname (Meshtastic 4-char badge),
-	// prefix it before the longname: "💀 retr0h". Disambiguates
-	// rows that share a longname (e.g. two "retr0h" radios with
-	// distinct shortnames) and matches the iPhone app's
-	// "Longname (!hex)" treatment — short identifier first,
-	// full identifier after. Falls back to longname alone when
-	// the peer doesn't broadcast a shortname.
+	// Display name: "shortname longname" when the peer broadcasts
+	// a Meshtastic 4-char shortname, longname alone otherwise.
+	// Disambiguates rows that share a longname (two "retr0h" radios
+	// with distinct shortnames) and matches the iPhone app's
+	// "shortname (!hex)" treatment — short identifier first.
 	display := n.callsign
 	if n.shortName != "" {
 		display = n.shortName + " " + n.callsign
 	}
-	name := padOrTruncate(display, nameBudget)
-
-	cell := bracketStyle.Render("[") +
-		" " + sigilStyle.Render(sigil) + " " +
-		nameStyle.Render(name) +
-		" " + bracketStyle.Render("]")
+	cell := userCellLine(
+		sigil, sigilColor, display,
+		bracketColor, nameColor, selected, cellW,
+	)
 
 	// If a search query is active and this cell's callsign matches,
 	// wrap in the same dim-green hit bg that rows use — gives users
@@ -1087,19 +1063,27 @@ func (m model) renderNoticeRow(
 	}
 	styled := bodyStyle.Render(bodyContent)
 
-	// style.center routes through the noticeCenteredRowLine Component,
-	// which pane-centers prefix + bodyContent against contentW. The
-	// Component owns the geometry — it knows about accent/pinEnd
-	// chrome and lets Row's flex distribution land the body at exactly
-	// contentW/2 - bw/2 cells from the gutter, regardless of pane
-	// width or chrome asymmetry. Non-centered styled rows keep `-!-`
-	// flush at the body cell's left edge via the regular noticeRowLine
-	// path so the per-row chrome stacks consistently across notices.
-	body := sys.Render(prefix) + styled
+	// style.center routes through the global Centered Component, which
+	// pane-centers content against the FULL contentW (not the body
+	// cell's smaller width). It owns the centering math entirely —
+	// pass it a Box of any width and the content's midpoint lands on
+	// the box's midpoint, no manual chrome accounting in the caller.
+	//
+	// For splash rows we drop the accent + time chrome on this row
+	// shape: pane-centered art can't co-exist with one-sided chrome
+	// because the chrome offsets the visible center. The `-!-`
+	// prefix gets centered together with the art, treated as part of
+	// the centered block. Non-centered styled rows keep accent +
+	// time + `-!-` flush via noticeRowLine.
 	if style.center {
-		line := noticeCenteredRowLine(parts, body, contentW)
+		bg := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
+		body := sys.Render(prefix) + styled
+		line := Centered{Content: body, FillStyle: bg}.Render(
+			Box{Width: contentW, Height: 1},
+		)
 		return wrapSelection(line, selected, false, inner, rowBg)
 	}
+	body := sys.Render(prefix) + styled
 	line := noticeRowLine(parts, body, contentW)
 	return wrapSelection(line, selected, false, inner, rowBg)
 }

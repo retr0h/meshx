@@ -124,6 +124,28 @@ func (s statusBar) Render(box Box) string {
 		statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.nodes))), chrome),
 	)
 
+	// Notification-state badges. Two distinct hardware paths share one
+	// visual gutter: 🔕 for the meshX terminal ding (toggled by /mute,
+	// reads m.dingMuted) and ⊘ buzzer for the radio's external-
+	// notification module (toggled in /config, reads
+	// m.radioBuzzerEnabled). Only render when SILENCED — a screen full
+	// of "everything's on" badges is noise. The "buzzer off" badge is
+	// dropped in demo mode because we don't have a real radio config
+	// to mirror; without that guard the demo would always claim the
+	// buzzer is off and confuse the user.
+	if m.dingMuted {
+		segs = append(segs, statusSegment(
+			label.Render("🔕 ")+pink.Render("ding"),
+			chrome,
+		))
+	}
+	if !m.isDemo() && !m.radioBuzzerEnabled {
+		segs = append(segs, statusSegment(
+			label.Render("⊘ ")+pink.Render("buzzer"),
+			chrome,
+		))
+	}
+
 	// Right-most segment: connection state.
 	var state string
 	switch {

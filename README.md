@@ -104,6 +104,7 @@ meshX sits at the intersection of three lineages:
 - [ ] 🔐 **PSK import** — `/channel add <meshtastic://url>` to paste a shared-channel link and join without manually typing the PSK
 - [ ] 🗺️ **QR code share** — `/channel share <name>` emits the meshtastic:// URL as ASCII QR for phone-side scanning
 - [ ] 🎨 **Low-color / no-truecolor fallback palette** — detect `$COLORTERM` / `$TERM` and swap the neon maxheadroom hex values for a 16-color ANSI ladder when the terminal doesn't support 24-bit color; ASCII fallback (`===` / `---`) for the `░▒▓█` chrome on terminals without unicode block support
+- [ ] 📡 **`meshx serve` — daemon mode + multi-consumer fan-out** — refactor the pump from a single-consumer `tea.Msg` channel into a tiny pub/sub hub the TUI subscribes to like any other client, then add `meshx serve` to expose the firehose over TCP (`:4403`-compatible) and/or REST/SSE/WebSocket. Unblocks OpenWebUI / Home Assistant / logging tools running alongside the TUI without fighting for the exclusive USB lock. We already own the radio (Client interface, all three transports, SQLite persistence) — this is an export, not a rewrite, and removes the need for `meshtasticd` on Mac/BLE setups
 
 ## 📚 Docs
 

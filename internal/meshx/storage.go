@@ -23,11 +23,13 @@ package meshx
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -35,6 +37,97 @@ import (
 	// SQLite driver registration — we talk to it via database/sql.
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// bootNotes is the process-level diagnostics buffer for the very
+// first openStorage call (which is the ONE call that actually runs
+// goose migrations — every subsequent call sees a fully-migrated DB
+// and produces nothing interesting). Notes captured here include
+// every "OK 010_xxx.sql (Xms)" apply line plus the trailing
+// "successfully migrated" summary that goose emits during the upgrade
+// path on a freshly-pulled binary.
+//
+// Capturing globally is what lets the TUI surface the migration
+// trace via systemLine even when the migration itself was triggered
+// upstream by a CLI helper that opened storage first (e.g. RunBLE
+// resolves the friendly-name → uuid via openSharedStorage before
+// handing off to RunRadio). Without this buffer those upstream
+// migrations would log silently and the TUI's later openStorage
+// would only see the boring "no migrations to run" line.
+//
+// Drained by consumeBootNotes — the slice resets on every consume so
+// the same notes don't get displayed twice across multiple frontends
+// in the same process (CLI prints to stderr, TUI surfaces via
+// systemLine; whichever consumes first gets them).
+var bootNotes struct {
+	mu    sync.Mutex
+	notes []string
+}
+
+// recordBootNotes appends the migration trace from a runMigrations
+// call to the process-level buffer. Called from openStorage right
+// after goose finishes; safe to call concurrently though in practice
+// only ever runs from the first openStorage of the process.
+func recordBootNotes(notes []string) {
+	if len(notes) == 0 {
+		return
+	}
+	bootNotes.mu.Lock()
+	defer bootNotes.mu.Unlock()
+	bootNotes.notes = append(bootNotes.notes, notes...)
+}
+
+// consumeBootNotes drains and returns the captured migration trace.
+// Returns nil when nothing is buffered. Callers display the result
+// however they like (systemLine for the TUI, fmt.Fprintln(stderr)
+// for CLI subcommands, an SSE startup event for the future daemon)
+// — the buffer is single-consumer so once drained the slice is
+// gone, preventing double-display.
+func consumeBootNotes() []string {
+	bootNotes.mu.Lock()
+	defer bootNotes.mu.Unlock()
+	out := bootNotes.notes
+	bootNotes.notes = nil
+	return out
+}
+
+// legacyRadioID is the placeholder UUID migration 009 used to seed
+// pre-existing single-radio data. Migration 010 rewrites it to
+// `radioIDFromNodeNum(my_node_num)` for any radio whose handshake
+// has populated my_node_num; the application-level claimRadioIdentity
+// covers the remaining case (placeholder still present because the
+// radio hasn't finished a handshake yet). We keep the constant so
+// claimRadioIdentity can recognize the legacy placeholder and
+// upgrade it on first MyNodeInfo arrival.
+const legacyRadioID = "00000000-0000-0000-0000-000000000001"
+
+// radioIDFromNodeNum returns the canonical Meshtastic identity string
+// for a radio: "0x" + lower-cased 8-hex-digit zero-padded node num.
+// Matches what the Meshtastic phone app, Python CLI, and the firmware
+// itself all surface (e.g. "0x103e034d"). Used as the primary key in
+// the radios table once a handshake reveals my_node_num.
+func radioIDFromNodeNum(myNodeNum uint32) string {
+	return fmt.Sprintf("0x%08x", myNodeNum)
+}
+
+// pendingRadioID returns the placeholder ID for a connection whose
+// my_node_num isn't known yet — the gap between transport.Dial
+// returning and MyNodeInfo arriving. The form is self-describing
+// ("pending:<transport>:<addr>") so a developer poking at the DB
+// or the daemon's API mid-handshake can tell at a glance that the
+// row is unresolved. Replaced by `radioIDFromNodeNum(my_node_num)`
+// the moment MyNodeInfo arrives — see claimRadioIdentity.
+func pendingRadioID(transport, addr string) string {
+	return fmt.Sprintf("pending:%s:%s", transport, addr)
+}
+
+// isPlaceholderRadioID reports whether id is one of the placeholder
+// shapes claimRadioIdentity should rewrite on first handshake — the
+// legacy migration-009 seed UUID, or any "pending:…" string minted
+// pre-handshake by resolveRadioByConnection. Real radio IDs ("0xNN…")
+// fall through unchanged.
+func isPlaceholderRadioID(id string) bool {
+	return id == legacyRadioID || strings.HasPrefix(id, "pending:")
+}
 
 // embedMigrations ships every SQL file under migrations/ into the
 // binary so goose can apply them against a user's ~/.meshx/meshx.db
@@ -84,6 +177,11 @@ func openStorage(path string) (*sql.DB, []string, error) {
 		_ = db.Close()
 		return nil, notes, err
 	}
+	// Stash the trace in the process-level boot buffer so any frontend
+	// (TUI, CLI helper, future daemon) can surface migration apply
+	// lines even when this openStorage was triggered by an upstream
+	// caller that didn't itself surface notes — see consumeBootNotes.
+	recordBootNotes(notes)
 	return db, notes, nil
 }
 
@@ -190,15 +288,15 @@ func backfillFromNum(db *sql.DB) (int, error) {
 // stale rows as `✗` (and can hit `R` to resend them) rather than `…`
 // ghosts that nothing will ever ack. Returns the count updated so
 // the caller can surface it as a systemLine. Safe on nil db.
-func expireStalePendingMessages(db *sql.DB, ttl time.Duration) (int, error) {
+func expireStalePendingMessages(db *sql.DB, radioID string, ttl time.Duration) (int, error) {
 	if db == nil {
 		return 0, nil
 	}
 	cutoff := time.Now().Add(-ttl)
 	res, err := db.Exec(
 		`UPDATE messages SET status = 'fail'
-         WHERE status = 'pending' AND created_at < ?`,
-		cutoff,
+         WHERE radio_id = ? AND status = 'pending' AND created_at < ?`,
+		radioID, cutoff,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("expire stale pending: %w", err)
@@ -214,7 +312,7 @@ func expireStalePendingMessages(db *sql.DB, ttl time.Duration) (int, error) {
 // and entries without any wire origin (demo seeds, local-only) are
 // skipped — they'd be stale on replay anyway. Failure is logged but
 // non-fatal: losing history is preferable to crashing the UI.
-func saveMessage(db *sql.DB, channel string, msg messageItem) error {
+func saveMessage(db *sql.DB, radioID, channel string, msg messageItem) error {
 	if db == nil {
 		return nil
 	}
@@ -237,13 +335,13 @@ func saveMessage(db *sql.DB, channel string, msg messageItem) error {
 	// to them, so those still append freely.
 	_, err := db.Exec(`
         INSERT INTO messages
-        (channel, time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (radio_id, channel, time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(packet_id) WHERE packet_id > 0 DO UPDATE SET
             status = excluded.status,
             hops   = excluded.hops,
             snr    = excluded.snr`,
-		channel, msg.time, msg.from, msg.text, mine, msg.bang, msg.status.String(),
+		radioID, channel, msg.time, msg.from, msg.text, mine, msg.bang, msg.status.String(),
 		msg.hops, msg.snr, msg.packetID, msg.replyID, msg.fromNum,
 	)
 	if err != nil {
@@ -259,22 +357,35 @@ func saveMessage(db *sql.DB, channel string, msg messageItem) error {
 // "node 0x…" callsigns are skipped; the point is to preserve
 // the RESOLVED name, not the fallback. Failure is logged but
 // non-fatal.
-func saveNode(db *sql.DB, nodeNum uint32, longName, shortName, hwModel string) error {
+func saveNode(
+	db *sql.DB,
+	radioID string,
+	nodeNum uint32,
+	longName, shortName, hwModel string,
+) error {
 	if db == nil {
 		return nil
 	}
 	if longName == "" && shortName == "" {
 		return nil
 	}
+	// ON CONFLICT(node_num) — the existing unique index is on node_num
+	// alone, which means TWO radios reporting the same peer share one
+	// row. That's intentional for now: same Meshtastic peer => same
+	// identity regardless of which of the user's radios heard it. If
+	// per-radio peer state ever matters (different RSSI per radio,
+	// per-radio mute), the unique index becomes (node_num, radio_id)
+	// in a future migration.
 	_, err := db.Exec(`
-        INSERT INTO nodes (node_num, long_name, short_name, hw_model, last_seen)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO nodes (radio_id, node_num, long_name, short_name, hw_model, last_seen)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(node_num) DO UPDATE SET
+            radio_id   = excluded.radio_id,
             long_name  = excluded.long_name,
             short_name = excluded.short_name,
             hw_model   = excluded.hw_model,
             last_seen  = CURRENT_TIMESTAMP`,
-		nodeNum, longName, shortName, hwModel,
+		radioID, nodeNum, longName, shortName, hwModel,
 	)
 	if err != nil {
 		return fmt.Errorf("insert node: %w", err)
@@ -298,12 +409,14 @@ type cachedNode struct {
 // pre-populate m.nodes / m.nodesByNum with real callsigns AND the
 // user's sticky favorite / muted preferences, so the star next to
 // a node and the "⊘ muted" state survive restarts.
-func loadNodes(db *sql.DB) ([]cachedNode, error) {
+func loadNodes(db *sql.DB, radioID string) ([]cachedNode, error) {
 	if db == nil {
 		return nil, nil
 	}
 	rows, err := db.Query(
-		`SELECT node_num, long_name, short_name, hw_model, favorite, muted FROM nodes`,
+		`SELECT node_num, long_name, short_name, hw_model, favorite, muted
+         FROM nodes WHERE radio_id = ?`,
+		radioID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query nodes: %w", err)
@@ -336,7 +449,9 @@ func loadNodes(db *sql.DB) ([]cachedNode, error) {
 // saveNode fills them in later; saveNode's ON CONFLICT UPDATE
 // explicitly does NOT touch favorite / muted so this pref never
 // gets clobbered.
-func saveNodePrefs(db *sql.DB, nodeNum uint32, favorite, muted bool) error {
+func saveNodePrefs(
+	db *sql.DB, radioID string, nodeNum uint32, favorite, muted bool,
+) error {
 	if db == nil {
 		return nil
 	}
@@ -348,12 +463,13 @@ func saveNodePrefs(db *sql.DB, nodeNum uint32, favorite, muted bool) error {
 		mu = 1
 	}
 	_, err := db.Exec(`
-        INSERT INTO nodes (node_num, favorite, muted)
-        VALUES (?, ?, ?)
+        INSERT INTO nodes (radio_id, node_num, favorite, muted)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(node_num) DO UPDATE SET
+            radio_id = excluded.radio_id,
             favorite = excluded.favorite,
             muted    = excluded.muted`,
-		nodeNum, fav, mu,
+		radioID, nodeNum, fav, mu,
 	)
 	if err != nil {
 		return fmt.Errorf("save node prefs: %w", err)
@@ -362,34 +478,58 @@ func saveNodePrefs(db *sql.DB, nodeNum uint32, favorite, muted bool) error {
 }
 
 // getSetting returns the persisted value for `key` or ("", false) when
-// the row is missing. Used for /mute (key="ding_muted") and /config's
-// radio buzzer pref (key="radio_buzzer"). Treats a nil db (demo mode
-// or storage open failure) as "no row" so callers fall back to default
-// without branching on storage state.
-func getSetting(db *sql.DB, key string) (string, bool) {
+// the row is missing. radioID scopes the lookup: pass "" for global
+// (meshx-client) prefs like /mute's "ding_muted"; pass a radio UUID
+// for per-radio prefs (none today; reserved for things like per-
+// radio default channel or per-radio nicknames). Treats nil db as
+// "no row" so demo mode and storage-open failures don't branch at
+// the call site.
+func getSetting(db *sql.DB, radioID, key string) (string, bool) {
 	if db == nil {
 		return "", false
 	}
 	var v string
-	if err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v); err != nil {
+	var err error
+	if radioID == "" {
+		err = db.QueryRow(
+			`SELECT value FROM settings WHERE key = ? AND radio_id IS NULL`,
+			key,
+		).Scan(&v)
+	} else {
+		err = db.QueryRow(
+			`SELECT value FROM settings WHERE key = ? AND radio_id = ?`,
+			key, radioID,
+		).Scan(&v)
+	}
+	if err != nil {
 		return "", false
 	}
 	return v, true
 }
 
-// putSetting writes `value` under `key`, upserting when the row already
-// exists. Nil db is a silent no-op so demo mode and storage-open failures
-// don't have to special-case at the call site. Failure is returned so
-// callers can route through storagePersist for the same one-shot
-// "persistence degraded" warning every other write goes through.
-func putSetting(db *sql.DB, key, value string) error {
+// putSetting writes `value` under `(key, radioID)`, upserting when the
+// row already exists. Pass "" for radioID to write a global pref.
+//
+// The settings PRIMARY KEY today is just (key) — see migration 007.
+// Multi-radio per-key support requires migration to a composite PK
+// (key, COALESCE(radio_id, '__global__')); deferred until a per-
+// radio setting actually exists. For now, attempting a per-radio
+// setting + a global setting under the same key would conflict on
+// the existing PK; not a problem because no caller does that today.
+func putSetting(db *sql.DB, radioID, key, value string) error {
 	if db == nil {
 		return nil
 	}
+	var rid any
+	if radioID != "" {
+		rid = radioID
+	}
 	_, err := db.Exec(`
-        INSERT INTO settings (key, value) VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		key, value,
+        INSERT INTO settings (key, value, radio_id) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value    = excluded.value,
+            radio_id = excluded.radio_id`,
+		key, value, rid,
 	)
 	if err != nil {
 		return fmt.Errorf("put setting %s: %w", key, err)
@@ -403,16 +543,19 @@ func putSetting(db *sql.DB, key, value string) error {
 // channel" — used at boot before the handshake resolves which
 // channel the user is on. A limit of 0 returns nothing; negative
 // means "no cap".
-func loadMessages(db *sql.DB, channel string, limit int) ([]messageItem, error) {
+func loadMessages(
+	db *sql.DB, radioID, channel string, limit int,
+) ([]messageItem, error) {
 	if db == nil {
 		return nil, nil
 	}
 	query := `
         SELECT time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num, created_at
-        FROM messages`
-	var args []any
+        FROM messages
+        WHERE radio_id = ?`
+	args := []any{radioID}
 	if channel != "" {
-		query += " WHERE channel = ?"
+		query += " AND channel = ?"
 		args = append(args, channel)
 	}
 	query += " ORDER BY id DESC"
@@ -613,4 +756,199 @@ func forgetBLEDevice(db *sql.DB, uuid string) error {
 		return fmt.Errorf("forget ble device: %w", err)
 	}
 	return nil
+}
+
+// parseRadioDest splits a meshx Dial dest string into transport +
+// addr components for radio identity lookup. Handles the three
+// schemes transport.Dial recognizes:
+//
+//	"ble:<uuid>"            → ("ble", "<uuid>")
+//	"host:port"             → ("tcp", "host:port")    (port is numeric)
+//	"/dev/cu.usbserial-…"   → ("usb", "/dev/cu.usbserial-…")  (anything else)
+//
+// Empty dest returns ("unknown", "unknown") — same placeholder the
+// 009 migration seeds, so demo-mode / never-connected radios still
+// have a stable identity.
+func parseRadioDest(dest string) (transport, addr string) {
+	dest = strings.TrimSpace(dest)
+	if dest == "" {
+		return "unknown", "unknown"
+	}
+	if rest, ok := strings.CutPrefix(dest, "ble:"); ok {
+		return "ble", rest
+	}
+	if i := strings.LastIndex(dest, ":"); i > 0 {
+		// Numeric tail = TCP host:port; non-numeric tail (e.g. a
+		// Windows COM path containing ":") falls through to usb.
+		if _, err := strconv.Atoi(dest[i+1:]); err == nil {
+			return "tcp", dest
+		}
+	}
+	return "usb", dest
+}
+
+// resolveRadioByConnection returns the radio_id for the given
+// (transport, addr) connection — either the canonical
+// `radioIDFromNodeNum` form for radios we've handshaken with before
+// (cache hit on radios.my_node_num), or a `pendingRadioID` placeholder
+// for fresh connections whose handshake hasn't completed yet. The
+// placeholder gets rewritten to the canonical form by
+// claimRadioIdentity once MyNodeInfo arrives.
+//
+// Steady state: a radio that's connected at least once before sits in
+// radios with id="0xNNNNNNNN" and an exact (transport, addr) match.
+// Cache lookup returns instantly; history loads against the real
+// identity before the handshake even starts.
+//
+// First connect to a never-seen-before radio: no exact match. We
+// insert a placeholder row keyed on `pendingRadioID(transport, addr)`
+// so the storage calls this session issues land somewhere consistent;
+// when MyNodeInfo lands, claimRadioIdentity rewrites the placeholder
+// across radios + every FK column in one transaction.
+//
+// Demo mode (db == nil): returns ("", nil) — callers treat empty
+// radioID as "no persistence" and skip storage writes entirely.
+func resolveRadioByConnection(
+	db *sql.DB, transport, addr string,
+) (string, error) {
+	if db == nil {
+		return "", nil
+	}
+	// Exact (transport, addr) hit — return whatever id is on the row.
+	// For an upgraded DB that's "0xNNNNNNNN"; for an in-flight pending
+	// connection that's the same placeholder we'd otherwise mint.
+	var id string
+	err := db.QueryRow(
+		`SELECT id FROM radios WHERE transport = ? AND addr = ?`,
+		transport, addr,
+	).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("lookup radio: %w", err)
+	}
+
+	// No row for this (transport, addr). Two sub-cases to handle:
+	//
+	// 1. Legacy seeded radios.id='00…01' from migration 009 still
+	//    sitting in placeholder state (transport='unknown'). Claim it
+	//    by rewriting transport+addr in place — keeps the seed row
+	//    pointing at the radio that connects first, so historical FKs
+	//    (which all reference 00…01 until claimRadioIdentity runs)
+	//    stay correctly attributed.
+	//
+	// 2. Genuine new radio. Insert a fresh placeholder row keyed on
+	//    pendingRadioID(transport, addr); claimRadioIdentity rewrites
+	//    it to the canonical 0xNN form on MyNodeInfo arrival.
+	var legacyAddr string
+	err = db.QueryRow(
+		`SELECT addr FROM radios WHERE id = ?`, legacyRadioID,
+	).Scan(&legacyAddr)
+	if err == nil && legacyAddr == "unknown" {
+		_, err = db.Exec(
+			`UPDATE radios SET transport = ?, addr = ?, last_seen = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+			transport, addr, legacyRadioID,
+		)
+		if err != nil {
+			return "", fmt.Errorf("claim legacy radio: %w", err)
+		}
+		return legacyRadioID, nil
+	}
+
+	pending := pendingRadioID(transport, addr)
+	_, err = db.Exec(
+		`INSERT INTO radios (id, name, transport, addr, last_seen)
+         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		pending, "radio", transport, addr,
+	)
+	if err != nil {
+		return "", fmt.Errorf("insert pending radio: %w", err)
+	}
+	return pending, nil
+}
+
+// claimRadioIdentity rewrites a placeholder radio_id (the legacy 009
+// seed UUID, or any "pending:…" string) to the canonical
+// `radioIDFromNodeNum(myNodeNum)` form, propagating the change across
+// every foreign-key column (messages, nodes, settings) and the radios
+// row itself. Returns the new canonical id.
+//
+// Called from the radioMyInfoMsg handler the moment the radio's own
+// node num arrives. No-op when oldID is already canonical (steady
+// state — we've handshaken with this radio before; nothing to claim).
+//
+// All four UPDATEs run in one transaction so a crash mid-rewrite
+// can't leave dangling FKs. Idempotent on retry: if oldID has
+// already been rewritten, every WHERE clause matches zero rows.
+func claimRadioIdentity(
+	db *sql.DB, oldID string, myNodeNum uint32,
+) (string, error) {
+	newID := radioIDFromNodeNum(myNodeNum)
+	if !isPlaceholderRadioID(oldID) {
+		// Already canonical (we've connected to this radio before, or
+		// migration 010 already rewrote it). Just refresh my_node_num
+		// + last_seen so the radios row reflects the current handshake.
+		if db != nil {
+			_, _ = db.Exec(
+				`UPDATE radios SET my_node_num = ?, last_seen = CURRENT_TIMESTAMP
+                 WHERE id = ?`,
+				myNodeNum, oldID,
+			)
+		}
+		return newID, nil
+	}
+	if db == nil {
+		return newID, nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("claim begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// If the canonical row already exists (extremely unlikely — would
+	// require a previous claim from a different placeholder for the
+	// same node num, e.g. user paired the same radio over BLE then
+	// USB without restart in between), merge by deleting the
+	// placeholder before reassigning FKs. Without this guard the
+	// UPDATE radios SET id=newID would PK-conflict.
+	var canonExists int
+	err = tx.QueryRow(
+		`SELECT COUNT(*) FROM radios WHERE id = ?`, newID,
+	).Scan(&canonExists)
+	if err != nil {
+		return "", fmt.Errorf("claim probe: %w", err)
+	}
+	if canonExists > 0 {
+		if _, err := tx.Exec(`DELETE FROM radios WHERE id = ?`, oldID); err != nil {
+			return "", fmt.Errorf("claim drop placeholder: %w", err)
+		}
+	} else {
+		if _, err := tx.Exec(
+			`UPDATE radios
+             SET id = ?, my_node_num = ?, last_seen = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+			newID, myNodeNum, oldID,
+		); err != nil {
+			return "", fmt.Errorf("claim radios: %w", err)
+		}
+	}
+
+	// Cascade to the FK columns. SQLite doesn't enforce these as real
+	// foreign keys (the migration ALTER ADDs can't declare them as FKs
+	// once columns already exist), so we do the cascade in app code.
+	for _, table := range []string{"messages", "nodes", "settings"} {
+		if _, err := tx.Exec(
+			fmt.Sprintf(`UPDATE %s SET radio_id = ? WHERE radio_id = ?`, table),
+			newID, oldID,
+		); err != nil {
+			return "", fmt.Errorf("claim %s: %w", table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("claim commit: %w", err)
+	}
+	return newID, nil
 }

@@ -509,6 +509,14 @@ type model struct {
 	// schema and the open / save helpers.
 	db *sql.DB
 
+	// radioID is the UUID identifying which radio this session is
+	// bound to. Resolved at newModel time via resolveOrCreateRadio
+	// against (transport, addr) parsed from the dial dest. Every
+	// storage call passes this through so multi-radio data stays
+	// scoped per-radio. Demo mode and pre-storage-open paths use
+	// defaultRadioID so call sites never have to special-case.
+	radioID string
+
 	// initialFocusCmd captures the tea.Cmd returned by
 	// textinput.Focus() in newModel — the bubbles cursor blink
 	// chain is driven by a cmd-per-tick loop, and the FIRST cmd
@@ -896,17 +904,37 @@ func newModel(demo *Demo, dest string) model {
 		// db) just leaves m.db nil, and the session runs in-memory
 		// for that boot. Losing history is preferable to crashing.
 		if path, err := defaultStoragePath(); err == nil {
-			if db, notes, err := openStorage(path); err == nil {
+			// openStorage's returned notes are also stashed in the
+			// process-level bootNotes buffer; consumeBootNotes below
+			// is the single source of truth for what we surface, so
+			// ignoring the return here avoids the same migration
+			// trace getting displayed twice.
+			if db, _, err := openStorage(path); err == nil {
 				m.db = db
-				// Hydrate persisted prefs early — /mute (terminal ding)
-				// and /config's radio buzzer state. Both default "on"
-				// to match stock-radio + fresh-install behaviour, so
-				// missing rows just leave the model defaults from
-				// above untouched.
-				if v, ok := getSetting(db, "ding_muted"); ok {
+				// Bind this session to a radio identity before any
+				// storage call references radioID. resolveRadioByConnection
+				// returns the canonical "0xNNNNNNNN" form for radios
+				// we've handshaken with before (cache hit on
+				// radios.my_node_num); for never-seen-before connections
+				// it returns a "pending:<transport>:<addr>" placeholder
+				// the radioMyInfoMsg handler swaps out via
+				// claimRadioIdentity once the handshake reveals the
+				// real my_node_num.
+				transport, addr := parseRadioDest(dest)
+				if rid, err := resolveRadioByConnection(db, transport, addr); err == nil {
+					m.radioID = rid
+				}
+				// Hydrate persisted prefs early — /mute (terminal ding,
+				// global) and /config's radio buzzer state (per-radio).
+				// Both default "on" to match stock-radio + fresh-install
+				// behaviour, so missing rows just leave the model
+				// defaults from above untouched. ding_muted is a meshx-
+				// CLIENT preference (terminal beep); pass "" for radioID
+				// so it's stored once globally rather than once per radio.
+				if v, ok := getSetting(db, "", "ding_muted"); ok {
 					m.dingMuted = v == "on"
 				}
-				if v, ok := getSetting(db, "radio_buzzer"); ok {
+				if v, ok := getSetting(db, m.radioID, "radio_buzzer"); ok {
 					m.radioBuzzerEnabled = v != "off"
 				}
 				// Load the cached NodeDB FIRST — every peer we've
@@ -920,7 +948,7 @@ func newModel(demo *Demo, dest string) model {
 				// NodeDB — the radio itself forgets NodeInfo after
 				// a while, so a client that trusts only the radio's
 				// live dump has amnesia on every reconnect.
-				if cached, err := loadNodes(db); err == nil {
+				if cached, err := loadNodes(db, m.radioID); err == nil {
 					for _, n := range cached {
 						name := n.longName
 						if name == "" {
@@ -958,13 +986,13 @@ func newModel(demo *Demo, dest string) model {
 				// resend from history. 5 minutes is plenty for any
 				// in-flight ACK the radio might deliver on this
 				// launch; anything older is dead.
-				expired, _ := expireStalePendingMessages(db, 5*time.Minute)
+				expired, _ := expireStalePendingMessages(db, m.radioID, 5*time.Minute)
 				// Primary channel is what the radio tells us, but at
 				// boot we don't have it yet — replay under the name
 				// we'll default to (empty string key until a channel
 				// arrives). Load is by `currentChannel` so messages
 				// migrate as the handshake resolves the channel name.
-				if past, err := loadMessages(db, "", 500); err == nil {
+				if past, err := loadMessages(db, m.radioID, "", 500); err == nil {
 					baseIdx := len(m.messages)
 					m.messages = append(m.messages, past...)
 					m.selectedMsg = len(m.messages) - 1
@@ -1057,12 +1085,17 @@ func newModel(demo *Demo, dest string) model {
 					}
 				}
 				backfilled := len(touched)
-				// Emit storage notes AFTER NodeDB + message replay so
-				// they land at the tail of the log (bottom-pinned in
-				// the pane) where the user naturally looks for the
-				// latest activity — not buried above a wall of
-				// replayed chat.
-				for _, n := range notes {
+				// Drain the migration trace from the process-level
+				// boot buffer. Goose's apply lines + "successfully
+				// migrated" / "no migrations to run" summary all flow
+				// through this single sink regardless of who triggered
+				// the upgrade — RunBLE's pre-handoff openSharedStorage,
+				// the TUI's own openStorage, or (future) the daemon.
+				// Emit AFTER NodeDB + message replay so they land at
+				// the tail of the log (bottom-pinned in the pane)
+				// where the user looks for latest activity, not buried
+				// above a wall of replayed chat.
+				for _, n := range consumeBootNotes() {
 					m.systemLine("storage: " + n)
 				}
 				if backfilled > 0 {
@@ -1297,6 +1330,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioMyInfoMsg:
 		m.myNodeNum = msg.nodeNum
+		// First MyNodeInfo of the session locks in the radio's
+		// canonical identity — "0x" + hex(my_node_num), the same
+		// shape the Meshtastic phone app + Python CLI use. If
+		// m.radioID is still a placeholder (a "pending:…" string
+		// minted pre-handshake by resolveRadioByConnection, or the
+		// legacy migration-009 seed UUID), claimRadioIdentity does
+		// the atomic rewrite across radios + every FK column
+		// (messages, nodes, settings) in one transaction. Already-
+		// canonical IDs (we've handshaken with this radio before)
+		// just refresh my_node_num + last_seen.
+		if newID, err := claimRadioIdentity(m.db, m.radioID, msg.nodeNum); err == nil {
+			m.radioID = newID
+		} else {
+			m.storagePersist(err)
+		}
 		// MyInfo = first frame of the handshake. Reset the received
 		// counter to 0 and emit the start-of-sync notice so the
 		// user sees node-list progress instead of staring at an
@@ -1380,7 +1428,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.radioBuzzerEnabled {
 			v = "on"
 		}
-		m.storagePersist(putSetting(m.db, "radio_buzzer", v))
+		m.storagePersist(putSetting(m.db, m.radioID, "radio_buzzer", v))
 		return m, nil
 
 	case tracerouteTimeoutMsg:

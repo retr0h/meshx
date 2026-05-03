@@ -165,6 +165,10 @@ var helpEntries = map[string]helpEntry{
 		usage:   "/mute",
 		summary: "toggle the meshX terminal ding (BEL on incoming text). Persists across restarts. The radio's own buzzer is unaffected — for that, use /config → \"radio buzzer\"",
 	},
+	// /dingtest is intentionally NOT listed here. It's a hidden
+	// diagnostic that fires the BEL verification path. Available
+	// from the dispatcher; surfacing it in /help or completion
+	// would leak debug surface to normal users.
 	"me": {
 		usage:   "/me <action>",
 		summary: "IRC-style action — broadcasts \"* <action>\" on the current channel; receivers see it as your row with the leading \"* \" marker",

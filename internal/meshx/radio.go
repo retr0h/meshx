@@ -386,22 +386,29 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		m.channels[msg.channel].unread++
 	}
 
-	// Terminal ding — open /dev/tty directly and write a BEL byte
-	// when the message came from someone else and the user hasn't
-	// /muted it. /dev/tty (not stderr) because bubbletea's alt-
-	// screen mode can swallow BEL on some setups when stderr isn't
-	// the controlling TTY. Opening /dev/tty bypasses any FD
-	// redirection — the byte hits the terminal directly. iTerm +
-	// macOS Terminal both honor BEL (visual / audible per their
-	// own preferences); /mute silences this without touching the
-	// radio's onboard buzzer. Open + write + close per message is
-	// cheap at Meshtastic's wire rates (a few packets per second
-	// at most).
+	// Terminal ding — fire BEL when the message came from someone
+	// else and the user hasn't /muted it. ringTerminalBell handles
+	// the /dev/tty open/write/close so /dingtest can share the
+	// exact same path for verification.
 	if !mine && !m.dingMuted {
-		if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
-			_, _ = tty.Write([]byte{'\a'})
-			_ = tty.Close()
-		}
+		ringTerminalBell()
+	}
+}
+
+// ringTerminalBell writes a single BEL byte (0x07) to /dev/tty,
+// bypassing bubbletea's alt-screen FD redirection. iTerm + macOS
+// Terminal interpret BEL as audible / visual bell per their own
+// preferences. Used by applyTextMessage on inbound chat (when not
+// muted) and by /dingtest as a manual verification surface.
+//
+// Errors are deliberately swallowed — if /dev/tty isn't openable
+// (e.g. running under a CI runner with no controlling terminal)
+// the bell silently no-ops; no point surfacing an error the user
+// can't act on.
+func ringTerminalBell() {
+	if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
+		_, _ = tty.Write([]byte{'\a'})
+		_ = tty.Close()
 	}
 }
 

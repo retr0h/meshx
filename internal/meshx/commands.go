@@ -1437,6 +1437,18 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// gone; /info already covers "what does meshx know" and
 		// /config is now the consistent path for radio-side knobs.
 		m.openOverlay(overlayConfig)
+	case "dingtest":
+		// Manual BEL verification — fires the exact code path
+		// applyTextMessage uses on inbound chat. If you don't hear /
+		// see the bell after running this, the /mute toggle isn't
+		// the culprit — your terminal has BEL silenced (Terminal.app
+		// or iTerm Profile → Audible/Visual bell preferences).
+		ringTerminalBell()
+		state := "on"
+		if m.dingMuted {
+			state = "off (silenced by /mute — BEL was still emitted, but inbound chat suppresses)"
+		}
+		m.flash = "/dingtest: BEL emitted to /dev/tty — ding pref: " + state
 	case "mute":
 		// Toggle the meshX terminal ding (BEL on inbound text).
 		// Persists to settings.ding_muted so the pref survives

@@ -135,6 +135,25 @@ type (
 		replyID  uint32
 	}
 
+	// radioPingReplyMsg arrives when a REPLY_APP packet lands —
+	// Meshtastic's built-in echo service bounces whatever payload it
+	// receives back to the sender. We use it as a real ping: send a
+	// REPLY_APP packet to a target, measure the round trip when the
+	// echo lands. requestID correlates back to m.pendingPing.packetID
+	// (firmware that echoes the original Data may also set
+	// Data.request_id; otherwise fromNum match against the target
+	// nodeNum is the fallback). hops is the actual hop count of the
+	// reply path; snr / rssi are the receive metrics meshx surfaces
+	// alongside RTT.
+	radioPingReplyMsg struct {
+		requestID uint32
+		fromNum   uint32
+		hops      int
+		snr       string
+		rssi      string
+		at        time.Time
+	}
+
 	// radioModuleBuzzerMsg arrives when the radio sends a ModuleConfig
 	// envelope carrying its ExternalNotification submodule. Captured
 	// during the WantConfigId handshake (the radio dumps every module
@@ -747,6 +766,22 @@ func (p *pump) translate(msg *pb.FromRadio) []tea.Msg {
 				enabled:            ext.GetEnabled(),
 				alertMessageBuzzer: ext.GetAlertMessageBuzzer(),
 				snapshot:           ext,
+			}}
+		case pb.PortNum_REPLY_APP:
+			// Echo of an outbound /ping. The firmware's REPLY_APP
+			// service bounces whatever payload it receives back to
+			// the sender — we don't care about the body; we only
+			// need the round-trip metadata. request_id correlates
+			// back to m.pendingPing when firmware echoes it; the
+			// fromNum fallback in applyPing handles the (older)
+			// case where it doesn't.
+			return []tea.Msg{radioPingReplyMsg{
+				requestID: dec.GetRequestId(),
+				fromNum:   p.GetFrom(),
+				hops:      int(p.GetHopStart()) - int(p.GetHopLimit()),
+				snr:       fmt.Sprintf("%.1f", p.GetRxSnr()),
+				rssi:      fmt.Sprintf("%d", p.GetRxRssi()),
+				at:        time.Unix(int64(p.GetRxTime()), 0),
 			}}
 		case pb.PortNum_TRACEROUTE_APP:
 			// Reply to a /tr request. Payload is a RouteDiscovery

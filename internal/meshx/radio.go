@@ -484,6 +484,49 @@ func (m *model) applyTraceroute(msg radioTracerouteMsg) {
 	m.pendingTraceroute = nil
 }
 
+// applyPing consumes a REPLY_APP echo for our outbound /ping.
+// Correlates against m.pendingPing via request_id; falls back to
+// fromNum match when the firmware doesn't echo request_id (older
+// builds). Surfaces an RTT + hop + signal systemBlock and clears
+// the pending slot. Also refreshes the node's lastSNR / lastRSSI /
+// lastHops cache off the live measurement so /whois on the same
+// peer immediately renders fresh telemetry.
+func (m *model) applyPing(msg radioPingReplyMsg) {
+	if m.pendingPing == nil {
+		return
+	}
+	switch {
+	case msg.requestID != 0 && msg.requestID == m.pendingPing.packetID:
+	case msg.requestID == 0 && msg.fromNum == m.pendingPing.targetNum:
+	default:
+		return
+	}
+	tgt := m.pendingPing.targetCall
+	rtt := msg.at.Sub(m.pendingPing.requestedAt)
+	if rtt < 0 {
+		rtt = time.Since(m.pendingPing.requestedAt)
+	}
+	lines := []string{
+		fmt.Sprintf("rtt:     %s", rtt.Round(100*time.Millisecond)),
+		fmt.Sprintf("hops:    %d", msg.hops),
+		fmt.Sprintf("snr:     %s dB", msg.snr),
+		fmt.Sprintf("rssi:    %s", msg.rssi),
+	}
+	if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx < len(m.nodes) {
+		m.nodes[idx].lastHops = msg.hops
+		if msg.snr != "" {
+			m.nodes[idx].lastSNR = msg.snr
+		}
+		if msg.rssi != "" {
+			m.nodes[idx].lastRSSI = msg.rssi
+		}
+		m.nodes[idx].lastHeardAt = time.Now()
+	}
+	m.systemBlock(fmt.Sprintf("ping %s", tgt), lines...)
+	m.flash = fmt.Sprintf("ping: %s — %d hop%s in %s", tgt, msg.hops, plural(msg.hops), rtt.Round(100*time.Millisecond))
+	m.pendingPing = nil
+}
+
 // applyRouting flips the status of the local messageItem whose
 // packetID matches the Routing reply's request_id. NONE → "ack"
 // (delivery succeeded), anything else → "fail" (the errorName

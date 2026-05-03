@@ -346,6 +346,43 @@ func newTraceroutePacket(targetNum uint32) (*pb.ToRadio, uint32, error) {
 	}, pid, nil
 }
 
+// newPingPacket builds a REPLY_APP MeshPacket addressed to
+// `targetNum`. Meshtastic's REPLY_APP service is a built-in echo:
+// the firmware automatically bounces whatever payload it receives
+// back to the sender, which is the closest thing to ICMP echo the
+// mesh has. WantAck so we still get a Routing receipt, WantResponse
+// so the firmware actually relays the echo back. Returns the
+// envelope plus the generated packetID the model stashes in
+// m.pendingPing for correlation.
+func newPingPacket(targetNum uint32) (*pb.ToRadio, uint32, error) {
+	pid := randPacketID()
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			Id:       pid,
+			To:       targetNum,
+			WantAck:  true,
+			HopLimit: 7,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum:      pb.PortNum_REPLY_APP,
+				Payload:      []byte("ping"),
+				WantResponse: true,
+			}},
+		}},
+	}, pid, nil
+}
+
+// pingTimeoutSeconds bounds how long /ping waits for the REPLY_APP
+// echo before declaring the request lost. Same 30s ballpark /tr
+// uses — enough for a multi-hop round trip on slow modem presets,
+// not so long the user thinks the command silently no-opped.
+const pingTimeoutSeconds = 30
+
+func pingTimeoutCmd(packetID uint32) tea.Cmd {
+	return tea.Tick(pingTimeoutSeconds*time.Second, func(time.Time) tea.Msg {
+		return pingTimeoutMsg{packetID: packetID}
+	})
+}
+
 // tracerouteTimeoutSeconds bounds how long /tr waits for a
 // TRACEROUTE_APP reply before declaring the request lost. 30s covers
 // a 6-hop round trip on a slow LongFast mesh with retries — same
@@ -985,31 +1022,67 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.systemLine(fmt.Sprintf("ping: node %s unknown", target))
 			return nil
 		}
-		// Pinging ourselves yields meaningless telemetry (0s / 0.0 dB
-		// because we never rx our own packets). Refuse with a note
-		// rather than emitting a card full of zeros.
-		if nodeNum := m.nodeNumOf(target); nodeNum != 0 && nodeNum == m.myNodeNum {
+		// Pinging ourselves yields meaningless telemetry (firmware
+		// won't echo a packet back to its own node). Refuse with a
+		// note rather than emitting a request that will silently
+		// timeout.
+		if n.nodeNum != 0 && n.nodeNum == m.myNodeNum {
 			m.systemLine("ping: that's you — /whois for your own config")
 			return nil
 		}
-		lines := []string{
-			fmt.Sprintf("last heard: %s ago", n.currentLastHeard()),
-			fmt.Sprintf("signal:     %s", signalReport(n)),
-		}
-		// Include peer battery + distance if we've received Device
-		// Metrics + Position for them. Both are optional — Meshtastic
-		// peers don't always broadcast telemetry or a GPS fix.
-		if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
-			if pos, ok := m.peerPositions[nodeNum]; ok && m.myGrid != "" {
-				if km := haversineKm(m.myLatitude, m.myLongitude, pos.latitude, pos.longitude); km > 0 {
-					lines = append(
-						lines,
-						fmt.Sprintf("distance:   %.1f km  (grid %s)", km, pos.grid),
-					)
+		// Demo / offline fall back to cached telemetry — same shape
+		// /tr uses. Tag the result so the user knows the radio
+		// wasn't actually queried.
+		if m.isDemo() || m.pump == nil {
+			lines := []string{
+				fmt.Sprintf("last heard: %s ago (cached)", n.currentLastHeard()),
+				fmt.Sprintf("signal:     %s", signalReport(n)),
+				"note:       live ping needs a real radio connection",
+			}
+			if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
+				if pos, ok := m.peerPositions[nodeNum]; ok && m.myGrid != "" {
+					if km := haversineKm(m.myLatitude, m.myLongitude, pos.latitude, pos.longitude); km > 0 {
+						lines = append(lines,
+							fmt.Sprintf("distance:   %.1f km", km),
+						)
+					}
 				}
 			}
+			m.systemBlock(fmt.Sprintf("ping %s", n.callsign), lines...)
+			return nil
 		}
-		m.systemBlock(fmt.Sprintf("ping %s", n.callsign), lines...)
+		// One ping in flight at a time. Same shape as pendingTraceroute.
+		if m.pendingPing != nil {
+			m.flash = fmt.Sprintf(
+				"ping: already pinging %s — wait or it'll auto-timeout",
+				m.pendingPing.targetCall,
+			)
+			return nil
+		}
+		envelope, pid, err := newPingPacket(n.nodeNum)
+		if err != nil {
+			m.flash = fmt.Sprintf("ping: build failed: %v", err)
+			return nil
+		}
+		if !m.pump.Enqueue(envelope) {
+			m.flash = "ping: dropped — outbound buffer full"
+			return nil
+		}
+		m.pendingPing = &pendingPing{
+			packetID:    pid,
+			targetNum:   n.nodeNum,
+			targetCall:  n.callsign,
+			requestedAt: time.Now(),
+		}
+		m.flash = fmt.Sprintf(
+			"ping: pinging %s (waiting up to %ds)",
+			n.callsign, pingTimeoutSeconds,
+		)
+		m.systemLine(fmt.Sprintf(
+			"ping %s — request sent (id 0x%x), awaiting echo",
+			n.callsign, pid,
+		))
+		return pingTimeoutCmd(pid)
 	case "w", "whois":
 		target := rest
 		if target == "" {

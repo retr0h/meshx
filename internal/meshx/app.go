@@ -197,6 +197,24 @@ type pendingTraceroute struct {
 	requestedAt time.Time
 }
 
+// pendingPing is the in-flight /ping request — same correlation
+// shape as pendingTraceroute. packetID matches the inbound
+// REPLY_APP echo's request_id; fromNum match against targetNum is
+// the fallback for older firmware that doesn't echo request_id.
+type pendingPing struct {
+	packetID    uint32
+	targetNum   uint32
+	targetCall  string
+	requestedAt time.Time
+}
+
+// pingTimeoutMsg fires N seconds after a /ping goes out — same
+// pattern as tracerouteTimeoutMsg. packetID guards against stale
+// ticks colliding with a fresh /ping.
+type pingTimeoutMsg struct {
+	packetID uint32
+}
+
 // tracerouteTimeoutMsg fires N seconds after a /tr request goes out;
 // if it still matches m.pendingTraceroute (i.e. no reply arrived)
 // the handler emits a "no reply" systemBlock and clears the pending
@@ -545,6 +563,12 @@ type model struct {
 	// when the matching reply lands or by tracerouteTimeoutMsg when
 	// the deadline elapses with no reply.
 	pendingTraceroute *pendingTraceroute
+	// pendingPing tracks an in-flight /ping request — Meshtastic's
+	// REPLY_APP echo service bounces our outbound packet back to us
+	// and we measure RTT against this struct's requestedAt. Same
+	// one-in-flight contract as pendingTraceroute; same correlation
+	// path (request_id with a fromNum fallback for older firmware).
+	pendingPing *pendingPing
 	// reconnect is non-nil while the pump is in its retry loop. Each
 	// radioReconnectingMsg refreshes the struct; noticeTickMsg uses it
 	// to repaint the flash with a live "in Ns" countdown so the user
@@ -1214,6 +1238,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioTracerouteMsg:
 		m.applyTraceroute(msg)
+		return m, nil
+
+	case radioPingReplyMsg:
+		m.applyPing(msg)
+		return m, nil
+
+	case pingTimeoutMsg:
+		// Same shape as tracerouteTimeoutMsg — surface "no reply"
+		// only when the matching ping is still in flight.
+		if m.pendingPing != nil && m.pendingPing.packetID == msg.packetID {
+			tgt := m.pendingPing.targetCall
+			m.systemBlock(
+				fmt.Sprintf("ping %s", tgt),
+				fmt.Sprintf("result:  no echo within %ds", pingTimeoutSeconds),
+				"note:    target may be offline, out of range, or behind a dead relay",
+			)
+			m.flash = fmt.Sprintf("ping: no echo from %s", tgt)
+			m.pendingPing = nil
+		}
 		return m, nil
 
 	case radioModuleBuzzerMsg:

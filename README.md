@@ -101,8 +101,9 @@ meshX sits at the intersection of three lineages:
 
 ## 🗺️ Roadmap
 
-- [ ] 🔐 **PSK import** — `/channel add <meshtastic://url>` to paste a shared-channel link and join without manually typing the PSK
-- [ ] 🗺️ **QR code share** — `/channel share <name>` emits the meshtastic:// URL as ASCII QR for phone-side scanning
+- [x] 🔐 **PSK import** — `/channel add <meshtastic://url>` paste a shared-channel link and join without manually typing the PSK ✓
+- [x] 🗺️ **QR code share** — `/channel share <name>` emits the meshtastic:// URL as ASCII QR for phone-side scanning (uses `▀` half-block for ~1:1 module aspect) ✓
+- [x] 🔑 **Channel mint + delete** — `/channel new <name>` generates a random AES256 PSK locally and pushes via `AdminMessage_SetChannel`; `/channel del <name>` disables a slot. PSK never lands on disk ✓
 - [ ] 🎨 **Low-color / no-truecolor fallback palette** — detect `$COLORTERM` / `$TERM` and swap the neon maxheadroom hex values for a 16-color ANSI ladder when the terminal doesn't support 24-bit color; ASCII fallback (`===` / `---`) for the `░▒▓█` chrome on terminals without unicode block support
 - [ ] 🔀 **Pump pub/sub refactor** — turn the single-consumer `tea.Msg` channel into a small fan-out hub so the TUI subscribes like any other client; prerequisite for the daemon mode below
 - [ ] 📡 **`meshx serve` — daemon mode** — expose the radio firehose over TCP (`:4403`-compatible) and/or REST/SSE/WebSocket so OpenWebUI / Home Assistant / loggers can run alongside the TUI without fighting the exclusive USB / BLE lock; replaces the need for `meshtasticd` on Mac + BLE setups

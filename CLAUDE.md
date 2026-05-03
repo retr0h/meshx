@@ -244,8 +244,8 @@ Full list in `docs/commands.md`. The ham set:
 `/cq  /cqr  /rs  /73  /88  /qsl  /qth  /grid  /sked  /qrz  /qrm  /qsb  /sk  /wx  /mesh  /k`
 
 Operational: `/msg  /reply(/r)  /ping  /tr(/traceroute)  /whois(/w)
-/join  /channel  /channels  /nodes(/users/names)  /search  /config
-/clear  /help  /exit(/quit/q)`
+/join  /channel(list|new|share|add|del)  /channels  /nodes(/users/names)
+/search  /config  /clear  /help  /exit(/quit/q)`
 
 ## Code Standards
 
@@ -266,4 +266,7 @@ Operational: `/msg  /reply(/r)  /ping  /tr(/traceroute)  /whois(/w)
       fav + scan + connect subcommands)
 - [x] Notice TTL + pin with `⌜ ⌟` corners and fade
 - [x] Stale-pending message sweep on startup; `R` resends pending OR fail
-- [ ] PSK import via `/channel add <meshtastic://url>`
+- [x] Channel lifecycle: `/channel new` (mint w/ random PSK) + `/channel share`
+      (ASCII QR via half-block) + `/channel add <meshtastic://url>` (PSK import)
+      + `/channel del` (disable). PSK is RAM-only — never persisted to
+      `~/.meshx/meshx.db`. Hidden `/qrtest` for renderer iteration.

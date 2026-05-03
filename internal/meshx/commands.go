@@ -1931,33 +1931,22 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// Hidden diagnostic — same renderer /channel share uses, so
 		// you can iterate on QR layout (quiet zone, half-block math,
 		// scanability under your terminal's font / cell aspect)
-		// without minting and deleting real channels. With no arg,
-		// encodes a sample meshtastic://e/#... URL using a fixed
-		// "test" channel + a known dummy PSK so the bytes are stable
-		// run-to-run; with an arg, encodes that string verbatim so
-		// you can test arbitrary QR payloads (other URLs, plain
-		// text). Like /dingtest, intentionally NOT in /help — debug
-		// surface only.
+		// without minting real channels. With no arg, encodes a plain
+		// text string that scans to inert text in any QR app — phones
+		// see the text and do NOT offer to add a channel. With an
+		// arg, encodes that string verbatim so you can smoke-test
+		// arbitrary payloads (real meshtastic:// URLs, longer text).
+		// Like /dingtest, intentionally NOT in /help — debug surface
+		// only.
 		payload := rest
 		if payload == "" {
-			// Stable fake — name "qrtest" + a 16-byte all-zero PSK.
-			// Real apps will treat it as a valid (if uninteresting)
-			// channel-share URL, so your phone scanner will recognize
-			// the meshtastic:// shape AND the Meshtastic app will
-			// even try to parse it. Good end-to-end smoke test.
-			settings := &pb.ChannelSettings{
-				Name: "qrtest",
-				Psk: []byte{
-					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-				},
-			}
-			url, err := buildChannelShareURL(settings, nil)
-			if err != nil {
-				m.flash = fmt.Sprintf("/qrtest: build url failed: %v", err)
-				return nil
-			}
-			payload = url
+			// Plain text on purpose — NOT a meshtastic://e/#... URL.
+			// The phone scanner will display this text and do
+			// nothing else; we don't want a render-check command to
+			// trick the recipient's Meshtastic app into prompting
+			// "add channel qrtest?" with a fake PSK. To smoke-test
+			// the full share path, run /qrtest <a real URL> instead.
+			payload = "meshx /qrtest — render check, scans to plain text only"
 		}
 		qr, err := renderQRASCII(payload)
 		if err != nil {
@@ -1965,9 +1954,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		qrLines := strings.Split(qr, "\n")
-		lines := make([]string, 0, len(qrLines)+2)
+		lines := make([]string, 0, len(qrLines)+4)
 		lines = append(lines,
 			fmt.Sprintf("payload: %s", payload),
+			fmt.Sprintf("size:    %d bytes", len(payload)),
+			"note:    scans to plain text — does NOT add a channel",
 			"",
 		)
 		lines = append(lines, qrLines...)

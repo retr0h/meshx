@@ -18,7 +18,8 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// Package pump bridges a transport.Client and the Bubble Tea runtime.
+// Package pump bridges a Transport (any wire impl returned from
+// transport.Dial) and the Bubble Tea runtime.
 // One goroutine reads FromRadio frames and publishes typed event
 // values via program.Send(); another drains outbound ToRadio envelopes
 // from the consumer and writes them to the device.
@@ -66,6 +67,23 @@ const (
 	maxReconnectBackoff = 30 * time.Second
 )
 
+// Transport is the wire-level bridge the pump consumes — a
+// bidirectional stream of Meshtastic protobuf envelopes. Declared
+// here at the consumer seam (osapi-io pattern), implemented
+// structurally by transport.Serial / transport.TCP / transport.BLE
+// returned from transport.Dial. Twins meshx.Store / meshx.Pump:
+// each consumer narrows the producer's surface to just the methods
+// it actually calls.
+type Transport interface {
+	// Run pumps FromRadio frames to `out` and reads ToRadio envelopes
+	// from `in`. Blocks until ctx is cancelled or the connection
+	// fails. Returns the first error encountered.
+	Run(ctx context.Context, out chan<- *pb.FromRadio, in <-chan *pb.ToRadio) error
+	// Close shuts down the underlying connection. Always called from
+	// runSession's defer; safe to call on a half-open client.
+	Close() error
+}
+
 // reconnectBackoff returns the delay before the Nth retry. attempt
 // is 1-indexed (the first retry uses attempt=1 → 1s).
 func reconnectBackoff(attempt int) time.Duration {
@@ -85,7 +103,7 @@ func reconnectBackoff(attempt int) time.Duration {
 
 // Pump is the running transport ↔ tea bridge.
 type Pump struct {
-	client  transport.Client
+	client  Transport
 	program *tea.Program
 
 	// Destination string from the original Dial — re-used by the
@@ -99,7 +117,7 @@ type Pump struct {
 
 	// Outbound ToRadio envelopes — consumer code enqueues to send.
 	// Survives across reconnects: the channel itself is stable while
-	// the underlying transport.Client gets swapped out.
+	// the underlying Transport gets swapped out.
 	outbound chan *pb.ToRadio
 
 	// Cancellation for the running goroutines.

@@ -203,7 +203,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		fromRaw = m.myCallsign()
 		shortName = m.myShortName()
 	} else {
-		if idx, ok := m.nodesByNum[msg.FromNum]; ok &&
+		if idx, ok := m.NodesByNum[msg.FromNum]; ok &&
 			idx >= 0 && idx < len(m.nodes) {
 			shortName = m.nodes[idx].shortName
 		}

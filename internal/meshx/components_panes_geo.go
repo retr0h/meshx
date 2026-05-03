@@ -61,7 +61,7 @@ type peerPlot struct {
 //
 // Uses nodeNum as a deterministic tiebreaker on equal distances —
 // without it, collocated peers (think two radios at the same
-// tower) iterate in map order from m.peerPositions and can swap
+// tower) iterate in map order from m.PeerPositions and can swap
 // slots between renders, making j/k feel "jumpy" when the cursor
 // lands on a row that just got reordered beneath it.
 func sortPlotsByDistance(plots []peerPlot) {
@@ -98,10 +98,10 @@ func (m model) nearbyRoster() []peerPlot {
 // nearbyRoster to anchor self at the top of the list. Returns nil
 // when MyNodeInfo hasn't arrived (no nodeItem for self yet).
 func (m model) selfPlot() *peerPlot {
-	if m.myNodeNum == 0 {
+	if m.MyNodeNum == 0 {
 		return nil
 	}
-	idx, ok := m.nodesByNum[m.myNodeNum]
+	idx, ok := m.NodesByNum[m.MyNodeNum]
 	if !ok || idx >= len(m.nodes) {
 		return nil
 	}
@@ -113,23 +113,23 @@ func (m model) selfPlot() *peerPlot {
 	}
 }
 
-// collectPeerPlots walks m.nodes + m.peerPositions and returns a
+// collectPeerPlots walks m.nodes + m.PeerPositions and returns a
 // plot entry for every peer we have BOTH a position fix AND a
-// nodeItem for. Skips self (m.myNodeNum) since the two peer-surface
+// nodeItem for. Skips self (m.MyNodeNum) since the two peer-surface
 // overlays each handle self explicitly — /nearby via
 // nearbyRoster's prepend, /radar via the centered glyph. Order is
 // unspecified — callers sort (usually via sortPlotsByDistance).
 func (m model) collectPeerPlots() []peerPlot {
-	plots := make([]peerPlot, 0, len(m.peerPositions))
-	for num, pos := range m.peerPositions {
-		if num == m.myNodeNum {
+	plots := make([]peerPlot, 0, len(m.PeerPositions))
+	for num, pos := range m.PeerPositions {
+		if num == m.MyNodeNum {
 			continue
 		}
-		idx, ok := m.nodesByNum[num]
+		idx, ok := m.NodesByNum[num]
 		if !ok || idx >= len(m.nodes) {
 			continue
 		}
-		km := haversineKm(m.myLatitude, m.myLongitude, pos.latitude, pos.longitude)
+		km := haversineKm(m.MyLatitude, m.MyLongitude, pos.Latitude, pos.Longitude)
 		if km <= 0 {
 			continue
 		}
@@ -137,7 +137,7 @@ func (m model) collectPeerPlots() []peerPlot {
 		plots = append(plots, peerPlot{
 			node:     n,
 			distKm:   km,
-			bearing:  bearingDeg(m.myLatitude, m.myLongitude, pos.latitude, pos.longitude),
+			bearing:  bearingDeg(m.MyLatitude, m.MyLongitude, pos.Latitude, pos.Longitude),
 			directRF: n.lastHops <= 1,
 		})
 	}
@@ -168,7 +168,7 @@ func (p nearbyPane) Render(box Box) string {
 	// broken when the user's radio hadn't broadcast a Position
 	// packet yet (cold-boot, GPS off in firmware, indoor with no
 	// sky view, etc.).
-	if m.myLatitude == 0 && m.myLongitude == 0 {
+	if m.MyLatitude == 0 && m.MyLongitude == 0 {
 		body := header + paneCountSuffix("  (waiting for own GPS fix)") +
 			"\n\n" + paneEmptyMessage(
 			"   no GPS fix on this radio yet — /nearby needs your own",
@@ -187,7 +187,7 @@ func (p nearbyPane) Render(box Box) string {
 	plots := m.nearbyRoster()
 
 	peerCount := len(plots)
-	if m.myNodeNum != 0 {
+	if m.MyNodeNum != 0 {
 		peerCount-- // self doesn't count toward the "N with GPS fix" tally
 	}
 	count := paneCountSuffix(fmt.Sprintf(
@@ -268,7 +268,7 @@ func (p nearbyPane) Render(box Box) string {
 		if isSel {
 			rowBg = selectionRowBg
 		}
-		isSelf := m.myNodeNum != 0 && p.node.nodeNum == m.myNodeNum
+		isSelf := m.MyNodeNum != 0 && p.node.nodeNum == m.MyNodeNum
 
 		// Distance bar + dist + bearing columns are domain rendering
 		// (numbers + scale), not peer-state styling. distanceBarCell /
@@ -338,7 +338,7 @@ func (p radarPane) Render(box Box) string {
 
 	// No self-fix — there's no centre to plot peers around. Same
 	// in-pane explainer /nearby uses for the same reason.
-	if m.myLatitude == 0 && m.myLongitude == 0 {
+	if m.MyLatitude == 0 && m.MyLongitude == 0 {
 		body := header + "\n\n" + paneEmptyMessage(
 			"   no GPS fix on this radio yet — /radar needs your own",
 			"   position to plot peers around you.",

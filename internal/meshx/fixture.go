@@ -126,7 +126,7 @@ func DefaultDemo() *Demo {
 		// real radio; everyone else is made up.
 		Nodes: []nodeItem{
 			// Index 0 is "me" — matches NodeNum above so myNode()
-			// resolves via m.nodesByNum[0x103d20cd] = 0.
+			// resolves via m.NodesByNum[0x103d20cd] = 0.
 			{
 				callsign: "retr0h", shortName: "💀", state: stateOnline, fav: true,
 				lastHeard: "now", heardRank: 0, lastSNR: "0.0", lastRSSI: "0",
@@ -270,7 +270,7 @@ func DefaultDemo() *Demo {
 				Status: mdl.StatusAck,
 			}},
 			// Ghost peer — fromNum populated but NOT in m.nodes /
-			// m.nodesByNum, so displayFrom falls back to msg.From and
+			// m.NodesByNum, so displayFrom falls back to msg.From and
 			// renderMessageRow adds the 👻 prefix + drained color.
 			{Message: mdl.Message{
 				Time: "14:17", From: "node 0x6f66d09d", FromNum: 0x6f66d09d,

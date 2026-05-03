@@ -110,7 +110,7 @@ func (m model) senderUnresolved(msg messageItem) bool {
 	if msg.Mine || msg.FromNum == 0 {
 		return false
 	}
-	idx, ok := m.nodesByNum[msg.FromNum]
+	idx, ok := m.NodesByNum[msg.FromNum]
 	if !ok || idx < 0 || idx >= len(m.nodes) {
 		return false
 	}
@@ -127,7 +127,7 @@ func (m model) displayFrom(msg messageItem) string {
 	if msg.FromNum == 0 {
 		return msg.From
 	}
-	if idx, ok := m.nodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
+	if idx, ok := m.NodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
 		if cs := m.nodes[idx].callsign; cs != "" {
 			return cs
 		}

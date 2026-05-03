@@ -120,7 +120,7 @@ func (p nodesPane) Render(box Box) string {
 			}
 			n := sorted[idx]
 			selected := idx == m.selectedNd && m.focused == paneNodes
-			isSelf := m.myNodeNum != 0 && n.nodeNum == m.myNodeNum
+			isSelf := m.MyNodeNum != 0 && n.nodeNum == m.MyNodeNum
 			cell := userCellLine(n, isSelf, selected, cellW)
 			// Search-hit highlight — only when not currently selected
 			// (selection wins). Same dim-green tint /nearby and the
@@ -403,8 +403,8 @@ func (m model) configEntries() []configEntry {
 	// AdminMessage_GetModuleConfigRequest fired at ConfigComplete), we
 	// show "(querying)" so the user doesn't trust a default-true guess
 	// — same shape the rest of the panel uses for not-yet-known fields.
-	buzzerSaved := boolToOnOff(m.radioBuzzerEnabled)
-	if !m.radioBuzzerKnown && !m.isDemo() {
+	buzzerSaved := boolToOnOff(m.RadioBuzzerEnabled)
+	if !m.RadioBuzzerKnown && !m.isDemo() {
 		buzzerSaved = "querying…"
 	}
 	out := []configEntry{
@@ -445,20 +445,20 @@ func (m model) configEntries() []configEntry {
 	if n := m.myNode(); n != nil {
 		add("hw", n.hwModel)
 	}
-	add("firmware", m.radioFirmware)
-	if m.currentChannel != "" {
-		add("channel", m.currentChannel)
+	add("firmware", m.RadioFirmware)
+	if m.CurrentChannel != "" {
+		add("channel", m.CurrentChannel)
 	}
-	add("modem preset", m.radioModemPreset)
-	add("region", m.radioRegion)
-	add("role", m.radioRole)
-	if m.radioTxPower != 0 {
-		add("tx power", fmt.Sprintf("%d dBm", m.radioTxPower))
+	add("modem preset", m.RadioModemPreset)
+	add("region", m.RadioRegion)
+	add("role", m.RadioRole)
+	if m.RadioTxPower != 0 {
+		add("tx power", fmt.Sprintf("%d dBm", m.RadioTxPower))
 	}
-	add("grid", m.myGrid)
-	if m.hasTelemetry {
-		add("battery", fmt.Sprintf("%.2f V (%d%%)", m.batteryVoltage, m.batteryLevel))
-		add("chan use", fmt.Sprintf("%.1f%%", m.channelUtil))
+	add("grid", m.MyGrid)
+	if m.HasTelemetry {
+		add("battery", fmt.Sprintf("%.2f V (%d%%)", m.BatteryVoltage, m.BatteryLevel))
+		add("chan use", fmt.Sprintf("%.1f%%", m.ChannelUtil))
 	}
 	add("peers", fmt.Sprintf("%d known", len(m.nodes)))
 	return out
@@ -792,7 +792,7 @@ func tailStartList(msgs []messageItem, rowsBudget int) int {
 // a function only so the diff stays local; the matching one-line
 // Render method up top is the canonical Component entry point.
 func messagesPaneRender(m model, width, height int) string {
-	chanName := m.currentChannel
+	chanName := m.CurrentChannel
 	if chanName == "" {
 		// Pre-sync placeholder: applyChannel labels the firmware
 		// PRIMARY (empty-name LongFast) channel as "#default" once

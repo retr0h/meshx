@@ -85,8 +85,10 @@ meshx/
 │   │   ├── commands.go           # consumer-issued outbound: SendText, SetOwner, SetBuzzer, RequestSync, …
 │   │   ├── config.go             # modeled radio configs (ExternalNotification today; Owner / LoRa / Device next)
 │   │   └── enums.go              # Region, ModemPreset, DeviceRole, ChannelRole, RoutingError typed strings
+│   ├── session/                  # canonical per-radio session state — no Bubble Tea import
+│   │   └── session.go            # Session struct + PendingPing/Traceroute, PeerPosition/EnvMetrics, ReconnectState
 │   ├── pump/                     # transport ↔ tea bridge (concrete *pump.Pump)
-│   │   ├── pump.go               # New / Stop + run loop with reconnect policy
+│   │   ├── pump.go               # Transport (consumer interface) + New / Stop + run loop with reconnect policy
 │   │   ├── translate.go          # FromRadio → []model.X (proto→model inbound boundary)
 │   │   ├── outbound.go           # (*Pump).Send(model.Command) + envelope builders (model→proto outbound)
 │   │   ├── channel_url.go        # ParseChannelShareURL / BuildChannelShareURL (model.ChannelInfo ↔ meshtastic://)
@@ -95,7 +97,7 @@ meshx/
 │   │   ├── sqlite.go             # CRUD against model.Message / model.CachedNode / model.BLEDevice
 │   │   └── migrations/           # goose SQL migrations (001…010)
 │   └── transport/
-│       ├── client.go             # Client interface + Dial dispatcher
+│       ├── client.go             # Client interface + Dial dispatcher (cmd/probe still uses Client; pump consumes via its own pump.Transport)
 │       ├── serial.go             # USB-serial transport
 │       ├── tcp.go                # TCP transport (port 4403)
 │       ├── ble.go                # Bluetooth LE transport

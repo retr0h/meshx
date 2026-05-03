@@ -320,6 +320,190 @@ func newAdminSetBuzzer(
 	}, nil
 }
 
+// meshtasticChannelSlots is the firmware's hard cap on simultaneous
+// channels. Slot 0 is always PRIMARY; 1..7 are SECONDARY. /channel
+// new + add allocate into the first DISABLED slot >= 1; PRIMARY is
+// off-limits because the radio refuses to operate without one.
+const meshtasticChannelSlots = 8
+
+// newAdminSetChannel builds an AdminMessage.SetChannel ToRadio
+// envelope for a single channel slot. Same wire path as setOwner /
+// newAdminSetBuzzer — admin packet addressed to our own node, the
+// radio applies it locally and rebroadcasts NodeInfo so peers see the
+// new channel name. role is one of pb.Channel_PRIMARY (slot 0 only),
+// pb.Channel_SECONDARY (1..7), or pb.Channel_DISABLED (delete).
+//
+// settings can be nil for the disable case — the radio frees the slot
+// and wipes the PSK either way. For add / new, settings carries the
+// PSK + name + uplink/downlink flags.
+func newAdminSetChannel(
+	myNodeNum uint32,
+	index int32,
+	role pb.Channel_Role,
+	settings *pb.ChannelSettings,
+) (*pb.ToRadio, error) {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetChannel{
+			SetChannel: &pb.Channel{
+				Index:    index,
+				Settings: settings,
+				Role:     role,
+			},
+		},
+	}
+	payload, err := proto.Marshal(admin)
+	if err != nil {
+		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
+	}
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			To:      myNodeNum,
+			WantAck: true,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum: pb.PortNum_ADMIN_APP,
+				Payload: payload,
+			}},
+		}},
+	}, nil
+}
+
+// findFreeChannelSlot returns the first slot index >= 1 that is
+// DISABLED (or beyond the radio's reported set), suitable for /channel
+// new + /channel add to allocate into. Returns -1 if all 7 secondary
+// slots are taken — caller should flash "no free slots, /channel del
+// something first."
+//
+// Slot 0 is intentionally skipped — that's PRIMARY's home and the
+// firmware refuses to operate without one. Adding via slot 0 would
+// silently nuke the user's primary channel; refuse and let them
+// /channel del + /channel new explicitly if they really want to
+// replace the primary.
+func (m *model) findFreeChannelSlot() int {
+	for i := 1; i < meshtasticChannelSlots; i++ {
+		if i >= len(m.channels) {
+			return i
+		}
+		if m.channels[i].role == "DISABLED" || m.channels[i].role == "" {
+			return i
+		}
+	}
+	return -1
+}
+
+// findChannelByName looks up a channel slot by user-typed name. The
+// renderer prefixes names with "#" / "*…*" for display; we accept the
+// bare name, the prefixed form, or a leading "#" — whatever the user
+// types should resolve. Case-sensitive because PSK lookup ultimately
+// matches on bytes. Returns -1 if not found or DISABLED.
+func (m *model) findChannelByName(typed string) int {
+	want := strings.TrimSpace(typed)
+	want = strings.TrimPrefix(want, "#")
+	want = strings.Trim(want, "*")
+	for i, c := range m.channels {
+		if c.role == "DISABLED" {
+			continue
+		}
+		bare := strings.TrimPrefix(c.name, "#")
+		bare = strings.Trim(bare, "*")
+		if bare == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// channelAdd accepts a meshtastic://e/#... or
+// https://meshtastic.org/e/#... URL, decodes the embedded ChannelSet,
+// and pushes each channel into the first free secondary slot via
+// AdminMessage_SetChannel. Skips channels whose name already exists
+// on the radio (additive only — never overwrites). Refuses to push
+// into slot 0 (PRIMARY) so a malformed share link can't nuke the
+// user's primary channel.
+func (m *model) channelAdd(rawURL string) tea.Cmd {
+	if m.isDemo() {
+		m.flash = "/channel add takes effect on a real radio (demo mode)"
+		return nil
+	}
+	if m.pump == nil {
+		m.flash = "/channel add needs a live radio connection"
+		return nil
+	}
+	cs, err := parseChannelShareURL(rawURL)
+	if err != nil {
+		m.flash = "/channel add: " + err.Error()
+		return nil
+	}
+	added, skipped := 0, 0
+	var summary []string
+	for _, s := range cs.GetSettings() {
+		name := s.GetName()
+		if name == "" {
+			// Empty-name in a share URL means "default channel" —
+			// almost certainly a mistake (sharing the well-known
+			// LongFast channel that everyone is already on). Skip
+			// rather than silently overwrite slot 0 / dupe LongFast.
+			summary = append(summary, "skip: <empty name> (would clobber default)")
+			skipped++
+			continue
+		}
+		if m.findChannelByName(name) >= 0 {
+			summary = append(summary, fmt.Sprintf("skip: %q already on radio", name))
+			skipped++
+			continue
+		}
+		slot := m.findFreeChannelSlot()
+		if slot < 0 {
+			summary = append(summary,
+				fmt.Sprintf("skip: %q — no free slots (max %d, /channel del to free one)",
+					name, meshtasticChannelSlots-1))
+			skipped++
+			continue
+		}
+		envelope, err := newAdminSetChannel(
+			m.myNodeNum, int32(slot), pb.Channel_SECONDARY, s,
+		)
+		if err != nil {
+			summary = append(summary, fmt.Sprintf("fail: %q — %v", name, err))
+			skipped++
+			continue
+		}
+		if !m.pump.Enqueue(envelope) {
+			summary = append(summary, fmt.Sprintf("fail: %q — outbound buffer full", name))
+			skipped++
+			continue
+		}
+		// Optimistically populate the slot so a follow-up /channel new
+		// finds the next free slot rather than re-using this one. The
+		// radio's ChannelInfo broadcast will overwrite this row with
+		// the canonical state shortly.
+		display := "#" + name
+		if len(s.GetPsk()) > 0 {
+			display = "*" + name + "*"
+		}
+		m.channels[slot] = channelItem{
+			name:    display,
+			private: len(s.GetPsk()) > 0,
+			index:   slot,
+			role:    "SECONDARY",
+			psk:     s.GetPsk(),
+		}
+		summary = append(summary, fmt.Sprintf("add:  %s → slot %d", display, slot))
+		added++
+	}
+	if added == 0 && skipped == 0 {
+		m.flash = "/channel add: nothing to do"
+		return nil
+	}
+	header := fmt.Sprintf("/channel add — %d added, %d skipped", added, skipped)
+	m.systemBlock(header, summary...)
+	if added > 0 {
+		m.flash = fmt.Sprintf("added %d channel%s", added, plural(added))
+	} else {
+		m.flash = "no channels added — see log"
+	}
+	return nil
+}
+
 // newAdminReboot builds an AdminMessage.RebootSeconds envelope. The
 // firmware reboots after `secs` seconds — 5 gives the radio time to
 // finish flushing pending writes (queued ACKs, NodeDB persistence)
@@ -1418,7 +1602,28 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.openOverlay(overlayChannels)
 			return nil
 		}
-		m.flash = "usage: /channel list  |  /channel add <meshtastic://url>"
+		// /channel add <url>
+		// Accept either a meshtastic://e/#... deep link or an
+		// https://meshtastic.org/e/#... universal link. The fragment
+		// after `#` is a base64-url ChannelSet protobuf — see
+		// channel_url.go for the codec. PSK never touches the network;
+		// the URL is a portable PSK envelope, not a server call.
+		sub := rest
+		arg := ""
+		if i := strings.IndexByte(rest, ' '); i >= 0 {
+			sub = rest[:i]
+			arg = strings.TrimSpace(rest[i+1:])
+		}
+		switch sub {
+		case "add":
+			if arg == "" {
+				m.flash = "usage: /channel add <meshtastic://url>"
+				return nil
+			}
+			return m.channelAdd(arg)
+		default:
+			m.flash = "usage: /channel list  |  /channel add <meshtastic://url>"
+		}
 	case "nick":
 		// /nick (no args) — read-only display of the current
 		// longname. /nick <name> — immediate write of User.long_name

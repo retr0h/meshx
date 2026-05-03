@@ -386,15 +386,22 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		m.channels[msg.channel].unread++
 	}
 
-	// Terminal ding — write a BEL byte to stderr when the message
-	// came from someone else and the user hasn't /muted it. Stderr
-	// (not stdout) so the byte bypasses bubbletea's alt-screen
-	// buffer; the terminal still interprets BEL because it's TTY-
-	// level, not screen-level. iTerm + macOS Terminal both honor
-	// the bell (visual / audible per their own preferences); /mute
-	// silences this without touching the radio's onboard buzzer.
+	// Terminal ding — open /dev/tty directly and write a BEL byte
+	// when the message came from someone else and the user hasn't
+	// /muted it. /dev/tty (not stderr) because bubbletea's alt-
+	// screen mode can swallow BEL on some setups when stderr isn't
+	// the controlling TTY. Opening /dev/tty bypasses any FD
+	// redirection — the byte hits the terminal directly. iTerm +
+	// macOS Terminal both honor BEL (visual / audible per their
+	// own preferences); /mute silences this without touching the
+	// radio's onboard buzzer. Open + write + close per message is
+	// cheap at Meshtastic's wire rates (a few packets per second
+	// at most).
 	if !mine && !m.dingMuted {
-		_, _ = os.Stderr.Write([]byte{'\a'})
+		if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
+			_, _ = tty.Write([]byte{'\a'})
+			_ = tty.Close()
+		}
 	}
 }
 

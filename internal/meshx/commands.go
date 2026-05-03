@@ -259,8 +259,18 @@ func newAdminSetBuzzer(
 	} else {
 		ext = &pb.ModuleConfig_ExternalNotificationConfig{}
 	}
+	// Set ALL three message-alert output paths together. Meshtastic
+	// firmware fires whichever path the hardware has wired — a
+	// piezo on output_buzzer, a vibra motor on output_vibra, or a
+	// simple LED on output. Setting just AlertMessageBuzzer left
+	// radios with the notification on a different pin silent. Bell
+	// paths (alert_bell_*) stay at whatever the snapshot had — that
+	// flag is for the BEL character on incoming text, separate from
+	// the message-arrival alert /config exposes.
 	ext.Enabled = enabled
+	ext.AlertMessage = enabled
 	ext.AlertMessageBuzzer = enabled
+	ext.AlertMessageVibra = enabled
 	admin := &pb.AdminMessage{
 		PayloadVariant: &pb.AdminMessage_SetModuleConfig{
 			SetModuleConfig: &pb.ModuleConfig{

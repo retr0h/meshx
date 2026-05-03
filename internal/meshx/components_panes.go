@@ -278,7 +278,10 @@ func (p helpPane) Render(box Box) string {
 		kv("/reboot", "AdminMessage reboot — radio restarts in 5s"),
 		kv("/who", "alias for /nodes"),
 		kv("/whoami", "alias for /info"),
-		kv("/lastlog [call|text]", "jump to the most recent message — last from <call>, or body match"),
+		kv(
+			"/lastlog [call|text]",
+			"jump to the most recent message — last from <call>, or body match",
+		),
 		kv("/search <pattern>", "highlight matching rows; n / N to next / prev, Esc clears"),
 		kv("/clear", "clear local scrollback (does not unsend)"),
 		kv("/help", "open this help"),

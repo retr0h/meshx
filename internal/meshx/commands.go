@@ -412,6 +412,69 @@ func (m *model) findChannelByName(typed string) int {
 	return -1
 }
 
+// channelDel disables a channel slot via AdminMessage_SetChannel
+// with role=DISABLED and nil settings — the radio frees the slot and
+// wipes the PSK. Refuses to delete the PRIMARY (slot 0) because the
+// firmware requires one to operate; the user can /channel rename or
+// /config the primary instead.
+//
+// No confirmation prompt — the cost of an accidental /channel del is
+// just /channel add the URL again (if you have it), and forcing y/n
+// on every channel-management command would feel patronizing for what
+// is fundamentally a local-state edit. If we ever ship /channel
+// backup, we can add a "deleted N channels" undo window.
+func (m *model) channelDel(typed string) tea.Cmd {
+	if m.isDemo() {
+		m.flash = "/channel del takes effect on a real radio (demo mode)"
+		return nil
+	}
+	if m.pump == nil {
+		m.flash = "/channel del needs a live radio connection"
+		return nil
+	}
+	idx := m.findChannelByName(typed)
+	if idx < 0 {
+		m.flash = fmt.Sprintf("/channel del: no channel matching %q", typed)
+		return nil
+	}
+	if m.channels[idx].role == "PRIMARY" {
+		m.flash = "/channel del: cannot delete the primary channel — use /config to rename"
+		return nil
+	}
+	envelope, err := newAdminSetChannel(
+		m.myNodeNum, int32(idx), pb.Channel_DISABLED, nil,
+	)
+	if err != nil {
+		m.flash = fmt.Sprintf("/channel del failed: %v", err)
+		return nil
+	}
+	if !m.pump.Enqueue(envelope) {
+		m.flash = "/channel del dropped — outbound buffer full"
+		return nil
+	}
+	deletedName := m.channels[idx].name
+	// Optimistically clear the slot — the radio's ChannelInfo
+	// rebroadcast will reconfirm, but the UI shouldn't keep showing a
+	// channel the user just deleted while waiting for that round trip.
+	m.channels[idx] = channelItem{
+		index: idx,
+		role:  "DISABLED",
+	}
+	if m.currentChannel == deletedName {
+		// User deleted the channel they were on. Snap back to the
+		// primary so the input bar has a valid target.
+		for _, c := range m.channels {
+			if c.role == "PRIMARY" {
+				m.currentChannel = c.name
+				break
+			}
+		}
+	}
+	m.systemLine(fmt.Sprintf("channel %s deleted (slot %d freed)", deletedName, idx))
+	m.flash = fmt.Sprintf("deleted %s", deletedName)
+	return nil
+}
+
 // channelAdd accepts a meshtastic://e/#... or
 // https://meshtastic.org/e/#... URL, decodes the embedded ChannelSet,
 // and pushes each channel into the first free secondary slot via
@@ -1621,8 +1684,14 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 				return nil
 			}
 			return m.channelAdd(arg)
+		case "del", "delete", "rm":
+			if arg == "" {
+				m.flash = "usage: /channel del <name>"
+				return nil
+			}
+			return m.channelDel(arg)
 		default:
-			m.flash = "usage: /channel list  |  /channel add <meshtastic://url>"
+			m.flash = "usage: /channel list  |  /channel add <url>  |  /channel del <name>"
 		}
 	case "nick":
 		// /nick (no args) — read-only display of the current

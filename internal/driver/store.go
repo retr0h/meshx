@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package tui
+package driver
 
 import (
 	"time"
@@ -26,18 +26,15 @@ import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
-// Store is the storage surface the meshx package consumes — the
-// concrete implementation lives in internal/meshx/storage as
-// *storage.Sqlite, cast to this interface at construction in
-// newModel. Defined here (where it's consumed) per the osapi-io
-// pattern: each consumer declares only the methods it actually calls,
-// so a future daemon package can declare its own (likely larger)
-// interface without bloating the TUI's view of storage.
+// Store is the storage surface the Driver consumes — the concrete
+// implementation lives in internal/meshx/storage as *storage.Sqlite,
+// cast to this interface at construction in cmd/. Defined here
+// (where it's consumed) per the osapi-io pattern: each consumer
+// declares only the methods it actually calls, so a future remote
+// client (MR-5) can declare a smaller surface without bloating the
+// Driver's view of storage.
 //
 // Methods correspond 1:1 with *storage.Sqlite's exported methods.
-// The compile-time check `var _ Store = (*storage.Sqlite)(nil)` in
-// app.go's RunRadio path catches any drift the moment a method is
-// added or renamed.
 type Store interface {
 	// identity
 	ResolveRadioByConnection(transport, addr string) (string, error)

@@ -656,9 +656,9 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			)
 		})
 		if persistNum != 0 {
-			if m.store != nil {
+			if m.driver.Store != nil {
 				m.storagePersist(
-					m.store.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute),
+					m.driver.Store.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute),
 				)
 			}
 		}
@@ -678,9 +678,9 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			persistMute = n.state == stateMuted
 		})
 		if persistNum != 0 {
-			if m.store != nil {
+			if m.driver.Store != nil {
 				m.storagePersist(
-					m.store.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute),
+					m.driver.Store.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute),
 				)
 			}
 		}

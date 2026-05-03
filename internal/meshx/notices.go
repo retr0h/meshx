@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
 // notices.go is the single home for every "tell the user something"
@@ -105,10 +107,12 @@ type noticeStyle struct {
 func buildNotice(text string, style noticeStyle) messageItem {
 	s := style // copy so the pointer lives past the caller's scope
 	return messageItem{
-		time:   timeNowHHMM(),
-		text:   "-!- " + text,
-		status: statusNotice,
-		style:  &s,
+		Message: mdl.Message{
+			Time:   timeNowHHMM(),
+			Text:   "-!- " + text,
+			Status: mdl.StatusNotice,
+		},
+		style: &s,
 	}
 }
 
@@ -168,9 +172,9 @@ func (m *model) noticeCard(rows ...noticeRow) {
 		n := buildNotice(r.text, r.style)
 		n.group = gid
 		if i == 0 {
-			n.time = t
+			n.Time = t
 		} else {
-			n.time = ""
+			n.Time = ""
 		}
 		n.expireAt = &e
 		m.messages = append(m.messages, n)

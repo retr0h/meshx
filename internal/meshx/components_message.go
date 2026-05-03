@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
 // messageRow renders one messageItem at exactly box.Width cells per
@@ -41,7 +42,7 @@ type messageRow struct {
 }
 
 // Render returns box.Height lines × box.Width cells. Dispatches by
-// msg.status to the right per-row renderer (noticeRowRender for the
+// msg.Status to the right per-row renderer (noticeRowRender for the
 // `-!-` colored info lines and the SQLite/whois system blocks;
 // chatRowRender for regular chat). Optional dimRow fade is applied
 // when the row falls outside the active /F filter.
@@ -54,8 +55,8 @@ func (r messageRow) Render(box Box) string {
 		innerW = box.Width
 	}
 	var raw string
-	switch r.msg.status {
-	case statusNotice, statusSystem:
+	switch r.msg.Status {
+	case mdl.StatusNotice, mdl.StatusSystem:
 		raw = noticeRowRender(
 			r.m, r.msg, r.selected, innerW, r.rowBg, r.pinFirst, r.pinLast,
 		)
@@ -111,7 +112,7 @@ func noticeRowRender(
 	bodyFg = lerpHex(bodyFg, rowBg, fade)
 	lav := lerpHex(mhLavender, rowBg, fade)
 
-	parts := noticeRowFor(rowBg, msg.time, pinFirst, pinLast, fade)
+	parts := noticeRowFor(rowBg, msg.Time, pinFirst, pinLast, fade)
 	contentW := inner - gutterWidth
 	if contentW < 20 {
 		contentW = 20
@@ -123,11 +124,11 @@ func noticeRowRender(
 		Italic(true)
 
 	// Fast path — default styling: one sys.Render over the whole
-	// msg.text gives the terminal a single uninterrupted ANSI span,
+	// msg.Text gives the terminal a single uninterrupted ANSI span,
 	// painted as one clean lavender-italic band. Every storage /
 	// whois / identified line lands here.
 	if style.fg == "" && !style.center && !style.bold {
-		body := sys.Render(msg.text)
+		body := sys.Render(msg.Text)
 		line := noticeRowLine(parts, body, contentW)
 		return wrapSelection(line, selected, false, inner, rowBg)
 	}
@@ -138,7 +139,7 @@ func noticeRowRender(
 	// Keeping the prefix uniform across every notice row is what
 	// makes the splash banner visually stack with regular `-!-`.
 	const prefix = "-!- "
-	bodyContent := strings.TrimPrefix(msg.text, prefix)
+	bodyContent := strings.TrimPrefix(msg.Text, prefix)
 
 	bodyStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(rowBg)).
@@ -205,10 +206,10 @@ func chatRowRender(
 	// other Meshtastic clients see something sensible too — meshx
 	// just chooses a richer presentation when we recognize the
 	// pattern.
-	isAction := msg.bang == "" && msg.status != statusSystem &&
-		strings.HasPrefix(msg.text, "* ") && len(msg.text) > 2
+	isAction := msg.Bang == "" && msg.Status != mdl.StatusSystem &&
+		strings.HasPrefix(msg.Text, "* ") && len(msg.Text) > 2
 
-	bodyLines := strings.Split(msg.text, "\n")
+	bodyLines := strings.Split(msg.Text, "\n")
 	if len(bodyLines) == 0 {
 		bodyLines = []string{""}
 	}
@@ -241,7 +242,7 @@ func chatRowRender(
 		Foreground(lipgloss.Color(mhFG)).
 		Background(lipgloss.Color(rowBg))
 	bodyForFirst := bodyLines[0]
-	if msg.corrupted {
+	if msg.Corrupted {
 		bodyText = lipgloss.NewStyle().
 			Foreground(lipgloss.Color(mhLavender)).
 			Background(lipgloss.Color(rowBg)).
@@ -272,10 +273,10 @@ func chatRowRender(
 	if msg.acks != "" {
 		row += "\n" + chatAckLine(parts, msg.acks, sys, contentW)
 	}
-	if msg.replyID != 0 {
-		if parent := m.findMessageByPacketID(msg.replyID); parent != nil {
+	if msg.ReplyID != 0 {
+		if parent := m.findMessageByPacketID(msg.ReplyID); parent != nil {
 			row = chatThreadingQuote(
-				m.displayFrom(*parent), parent.time, parent.text,
+				m.displayFrom(*parent), parent.Time, parent.Text,
 				rowBg, contentW,
 			) + "\n" + row
 		}
@@ -294,11 +295,11 @@ func chatRowRender(
 // would leave the messageRow Component padding a blank row above
 // — visible as a phantom gap between two unrelated messages).
 func messageRowVisualHeight(m model, msg messageItem) int {
-	h := 1 + strings.Count(msg.text, "\n")
+	h := 1 + strings.Count(msg.Text, "\n")
 	if msg.acks != "" {
 		h++
 	}
-	if msg.replyID != 0 && m.findMessageByPacketID(msg.replyID) != nil {
+	if msg.ReplyID != 0 && m.findMessageByPacketID(msg.ReplyID) != nil {
 		h++
 	}
 	return h

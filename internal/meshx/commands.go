@@ -65,7 +65,7 @@ func (m *model) sendPlainMessage(text string) {
 // for threading. Used by /reply, /msg, /me — anything that's
 // semantically "regular chat with a directed flavor," NOT a /bang
 // command. Routes through the same TEXT_MESSAGE_APP path sendBang
-// uses; the only difference is msg.bang stays empty so the chat row
+// uses; the only difference is msg.Bang stays empty so the chat row
 // renders with the magenta `›` "mine" marker instead of the yellow
 // `*` bang flag.
 func (m *model) sendPlainReply(text string, replyToID uint32) {
@@ -77,19 +77,19 @@ func (m *model) sendPlainReply(text string, replyToID uint32) {
 			ReplyID: replyToID,
 		})
 	}
-	item := messageItem{
-		time: timeNowHHMM(), from: "me", mine: true, text: text,
-		status: statusPending, packetID: pid,
-		replyID: replyToID,
-		fromNum: m.myNodeNum,
-		sentAt:  time.Now(),
-	}
+	item := messageItem{Message: mdl.Message{
+		Time: timeNowHHMM(), From: "me", Mine: true, Text: text,
+		Status: mdl.StatusPending, PacketID: pid,
+		ReplyID: replyToID,
+		FromNum: m.myNodeNum,
+		SentAt:  time.Now(),
+	}}
 	m.messages = append(m.messages, item)
 	m.selectedMsg = len(m.messages) - 1
 	m.flash = fmt.Sprintf("sent in %s", m.currentChannel)
 
 	if m.store != nil {
-		m.storagePersist(m.store.SaveMessage(m.radioID, m.currentChannel, messageItemToModel(item)))
+		m.storagePersist(m.store.SaveMessage(m.radioID, m.currentChannel, item.Message))
 	}
 }
 
@@ -838,18 +838,18 @@ func (m *model) activate() tea.Cmd {
 		if m.selectedMsg < len(m.messages) {
 			msg := m.messages[m.selectedMsg]
 			switch {
-			case msg.status == statusSystem:
+			case msg.Status == mdl.StatusSystem:
 				m.flash = "system message — no metadata"
-			case msg.mine:
+			case msg.Mine:
 				m.flash = fmt.Sprintf("to %s  ·  hop %d  ·  ACK %s",
-					m.currentChannel, msg.hops, ackWord(msg.status))
+					m.currentChannel, msg.Hops, ackWord(msg.Status))
 			default:
-				parts := []string{"from " + msg.from}
-				if msg.hops > 0 {
-					parts = append(parts, fmt.Sprintf("hop %d", msg.hops))
+				parts := []string{"from " + msg.From}
+				if msg.Hops > 0 {
+					parts = append(parts, fmt.Sprintf("hop %d", msg.Hops))
 				}
-				if msg.snr != "" {
-					parts = append(parts, "SNR "+msg.snr+" dB")
+				if msg.SNR != "" {
+					parts = append(parts, "SNR "+msg.SNR+" dB")
 				}
 				m.flash = strings.Join(parts, "  ·  ")
 			}
@@ -858,11 +858,11 @@ func (m *model) activate() tea.Cmd {
 	return nil
 }
 
-func ackWord(status messageStatus) string {
+func ackWord(status mdl.MessageStatus) string {
 	switch status {
-	case statusAck:
+	case mdl.StatusAck:
 		return "ok"
-	case statusFail:
+	case mdl.StatusFail:
 		return "timeout"
 	default:
 		return "pending"
@@ -1438,7 +1438,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		m.replyParent = 0
 		// Plain chat with a Data.reply_id — NOT a /bang command. The
-		// renderer reads msg.bang to decide between yellow `*` and
+		// renderer reads msg.Bang to decide between yellow `*` and
 		// magenta `›` flag glyphs; we want `›` here so a reply
 		// looks like the regular outbound chat it actually is.
 		m.sendPlainReply(body, parent)
@@ -1675,7 +1675,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// IRC ASCII-action convention. /me waves → broadcasts the
 		// literal "* waves" as a TEXT_MESSAGE_APP packet on the
 		// current channel. Routes through sendPlainMessage (NOT
-		// sendBang) so msg.bang stays empty — chatRowRender's
+		// sendBang) so msg.Bang stays empty — chatRowRender's
 		// action detection requires that to render the row as
 		// "* <nick> <action>" in italic, instead of the bang flag
 		// /cq, /73, etc. produce. Wire format is just "* <action>"
@@ -1910,10 +1910,10 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			// First pass: prefer matches in the from column — that's
 			// what "the last message FROM gleep" means semantically.
 			for i := len(m.messages) - 1; i >= 0; i-- {
-				if m.messages[i].status == statusSystem {
+				if m.messages[i].Status == mdl.StatusSystem {
 					continue
 				}
-				if strings.Contains(strings.ToLower(m.messages[i].from), needle) {
+				if strings.Contains(strings.ToLower(m.messages[i].From), needle) {
 					idx = i
 					break
 				}
@@ -1922,10 +1922,10 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			// /lastlog "morning" find the last message containing it.
 			if idx < 0 {
 				for i := len(m.messages) - 1; i >= 0; i-- {
-					if m.messages[i].status == statusSystem {
+					if m.messages[i].Status == mdl.StatusSystem {
 						continue
 					}
-					if strings.Contains(strings.ToLower(m.messages[i].text), needle) {
+					if strings.Contains(strings.ToLower(m.messages[i].Text), needle) {
 						idx = i
 						break
 					}
@@ -1940,7 +1940,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.selectedMsg = idx
 		m.mode = modeNav
 		hit := m.messages[idx]
-		m.flash = fmt.Sprintf("lastlog: %s — %s", hit.time, hit.from)
+		m.flash = fmt.Sprintf("lastlog: %s — %s", hit.Time, hit.From)
 	case "search":
 		if rest == "" {
 			// Toggle behavior — clear an active query, otherwise
@@ -2006,10 +2006,10 @@ func (m *model) sendBang(bang, body string) {
 // the same replyID so the renderer can draw a quoted-parent line
 // above the reply.
 func (m *model) sendBangReply(bang, body string, replyToID uint32) {
-	status := statusAck
+	status := mdl.StatusAck
 	var pid uint32
 	if !m.isDemo() {
-		status = statusPending // flipped by mdl.Routing handler
+		status = mdl.StatusPending // flipped by mdl.Routing handler
 	}
 	if m.pump != nil {
 		pid, _ = m.pump.Send(mdl.SendText{
@@ -2018,18 +2018,18 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 			ReplyID: replyToID,
 		})
 	}
-	item := messageItem{
-		time:     timeNowHHMM(),
-		from:     "me",
-		mine:     true,
-		bang:     bang,
-		text:     body,
-		status:   status,
-		replyID:  replyToID,
-		packetID: pid,
-		fromNum:  m.myNodeNum,
-		sentAt:   time.Now(),
-	}
+	item := messageItem{Message: mdl.Message{
+		Time:     timeNowHHMM(),
+		From:     "me",
+		Mine:     true,
+		Bang:     bang,
+		Text:     body,
+		Status:   status,
+		ReplyID:  replyToID,
+		PacketID: pid,
+		FromNum:  m.myNodeNum,
+		SentAt:   time.Now(),
+	}}
 	m.messages = append(m.messages, item)
 	m.selectedMsg = len(m.messages) - 1
 	m.focused = paneMessages
@@ -2037,7 +2037,7 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	// Persist the outgoing so the log survives restart. Skipped in
 	// demo mode (m.db is always nil there).
 	if m.store != nil {
-		m.storagePersist(m.store.SaveMessage(m.radioID, m.currentChannel, messageItemToModel(item)))
+		m.storagePersist(m.store.SaveMessage(m.radioID, m.currentChannel, item.Message))
 	}
 }
 
@@ -2053,11 +2053,11 @@ func (m *model) replyTargetFor(call string) uint32 {
 	target := strings.ToLower(strings.TrimSpace(call))
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		msg := m.messages[i]
-		if msg.mine || msg.status == statusSystem || msg.packetID == 0 {
+		if msg.Mine || msg.Status == mdl.StatusSystem || msg.PacketID == 0 {
 			continue
 		}
-		if strings.Contains(strings.ToLower(msg.from), target) {
-			return msg.packetID
+		if strings.Contains(strings.ToLower(msg.From), target) {
+			return msg.PacketID
 		}
 	}
 	return 0

@@ -20,6 +20,10 @@
 
 package meshx
 
+import (
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
+)
+
 // Demo is meshx's tier-1 fixture primitive. When the model holds a
 // non-nil `*Demo`, the app is running in demo mode — every renderer
 // and command that needs "what's my radio identity" consults this
@@ -174,95 +178,97 @@ func DefaultDemo() *Demo {
 		//   6. A failed /73 — shows the pink ✗ status variant.
 		// Ten distinct UI features per screenshot.
 		Messages: []messageItem{
-			{
-				time: "14:09", from: "TangoBravo_7", fromNum: 0x5a00aa01,
-				text: "just booted, saying hi 👋", hops: 3, snr: "-5.2",
-			},
-			{
-				time: "14:10", from: "retr0h", mine: true, bang: "/cq",
-				text: "CQ CQ CQ de retr0h via meshx (github.com/retr0h/meshx) — " +
+			{Message: mdl.Message{
+				Time: "14:09", From: "TangoBravo_7", FromNum: 0x5a00aa01,
+				Text: "just booted, saying hi 👋", Hops: 3, SNR: "-5.2",
+			}},
+			{Message: mdl.Message{
+				Time: "14:10", From: "retr0h", Mine: true, Bang: "/cq",
+				Text: "CQ CQ CQ de retr0h via meshx (github.com/retr0h/meshx) — " +
 					"testing signals, please ack",
-				status: statusAck, packetID: 7001,
-			},
-			{
-				time: "14:11", from: "TangoBravo_7", fromNum: 0x5a00aa01,
-				bang: "/cqr",
-				text: "copy 9/9 from Cascadia, SNR -5.2 hop 3",
-				hops: 3, snr: "-5.2", packetID: 7002, replyID: 7001,
-			},
-			{
-				time: "14:12", from: "MeshLab - plrmsh.io", fromNum: 0x5a00aa02,
-				text: "strong copy from my side too — nice tx",
-				hops: 2, snr: "5.5",
-			},
-			{
-				time: "14:13", from: "Helmsdeep", fromNum: 0x5a00aa03,
-				text: "anyone going to the club meetup saturday?",
-				hops: 2, snr: "-5.0",
-			},
+				Status: mdl.StatusAck, PacketID: 7001,
+			}},
+			{Message: mdl.Message{
+				Time: "14:11", From: "TangoBravo_7", FromNum: 0x5a00aa01,
+				Bang: "/cqr",
+				Text: "copy 9/9 from Cascadia, SNR -5.2 hop 3",
+				Hops: 3, SNR: "-5.2", PacketID: 7002, ReplyID: 7001,
+			}},
+			{Message: mdl.Message{
+				Time: "14:12", From: "MeshLab - plrmsh.io", FromNum: 0x5a00aa02,
+				Text: "strong copy from my side too — nice tx",
+				Hops: 2, SNR: "5.5",
+			}},
+			{Message: mdl.Message{
+				Time: "14:13", From: "Helmsdeep", FromNum: 0x5a00aa03,
+				Text: "anyone going to the club meetup saturday?",
+				Hops: 2, SNR: "-5.0",
+			}},
 			// /whois card — systemBlock emits rows sharing one group
 			// id so the zebra stripe treats them as one visual card.
 			// Hand-seeded with group=1 and matching timestamps so the
 			// render loop groups them the same way.
-			{time: "14:14", text: "-!- whois TangoBravo_7", status: statusSystem, group: 1},
-			{time: "14:14", text: "-!-    hw:     RAK4631", status: statusSystem, group: 1},
-			{time: "14:14", text: "-!-    fw:     2.6.11", status: statusSystem, group: 1},
-			{time: "14:14", text: "-!-    heard:  3m ago", status: statusSystem, group: 1},
-			{time: "14:14", text: "-!-    state:  online", status: statusSystem, group: 1},
+			{Message: mdl.Message{Time: "14:14", Text: "-!- whois TangoBravo_7", Status: mdl.StatusSystem}, group: 1},
+			{Message: mdl.Message{Time: "14:14", Text: "-!-    hw:     RAK4631", Status: mdl.StatusSystem}, group: 1},
+			{Message: mdl.Message{Time: "14:14", Text: "-!-    fw:     2.6.11", Status: mdl.StatusSystem}, group: 1},
+			{Message: mdl.Message{Time: "14:14", Text: "-!-    heard:  3m ago", Status: mdl.StatusSystem}, group: 1},
+			{Message: mdl.Message{Time: "14:14", Text: "-!-    state:  online", Status: mdl.StatusSystem}, group: 1},
 			{
-				time:   "14:14",
-				text:   "-!-    signal: hop 3, SNR -5.2 dB, RSSI -92 dBm",
-				status: statusSystem,
-				group:  1,
+				Message: mdl.Message{
+					Time:   "14:14",
+					Text:   "-!-    signal: hop 3, SNR -5.2 dB, RSSI -92 dBm",
+					Status: mdl.StatusSystem,
+				},
+				group: 1,
 			},
-			{time: "14:14", text: "-!-    end of /whois", status: statusSystem, group: 1},
-			{
-				time: "14:16", from: "retr0h", mine: true,
-				text:   "running the 30w build again, let me know if it's too loud",
-				status: statusAck,
-			},
+			{Message: mdl.Message{Time: "14:14", Text: "-!-    end of /whois", Status: mdl.StatusSystem}, group: 1},
+			{Message: mdl.Message{
+				Time: "14:16", From: "retr0h", Mine: true,
+				Text:   "running the 30w build again, let me know if it's too loud",
+				Status: mdl.StatusAck,
+			}},
 			// Ghost peer — fromNum populated but NOT in m.nodes /
-			// m.nodesByNum, so displayFrom falls back to msg.from and
+			// m.nodesByNum, so displayFrom falls back to msg.From and
 			// renderMessageRow adds the 👻 prefix + drained color.
-			{
-				time: "14:17", from: "node 0x6f66d09d", fromNum: 0x6f66d09d,
-				text: "anyone in the east valley?", hops: 4, snr: "-9.1",
-				packetID: 7010,
-			},
+			{Message: mdl.Message{
+				Time: "14:17", From: "node 0x6f66d09d", FromNum: 0x6f66d09d,
+				Text: "anyone in the east valley?", Hops: 4, SNR: "-9.1",
+				PacketID: 7010,
+			}},
 			// Multi-line canary — real radios embed \n in telemetry
 			// reports (like solar-node end-of-day summaries). Keeps
 			// the hanging-indent layout honest when we re-render
 			// demo mode after touching renderMessageRow.
-			{
-				time: "14:17", from: "mmca solar test", fromNum: 0x5a00aa03,
-				text: "End of Day Report:\nMax Power: 1375.2576 mW at Pot setting: 133, Voltage: 6.0160 V, Current: 228.6000 mA\nWas the battery fully charged during the day? Yes",
-				hops: 4, snr: "-3.5",
-				status: statusAck,
-			},
-			{
-				time: "14:18", from: "MeshLab - plrmsh.io", fromNum: 0x5a00aa02,
-				text: "6 🐰", hops: 2, snr: "5.5", replyID: 7010,
-			},
+			{Message: mdl.Message{
+				Time: "14:17", From: "mmca solar test", FromNum: 0x5a00aa03,
+				Text: "End of Day Report:\nMax Power: 1375.2576 mW at Pot setting: 133, Voltage: 6.0160 V, Current: 228.6000 mA\nWas the battery fully charged during the day? Yes",
+				Hops: 4, SNR: "-3.5",
+				Status: mdl.StatusAck,
+			}},
+			{Message: mdl.Message{
+				Time: "14:18", From: "MeshLab - plrmsh.io", FromNum: 0x5a00aa02,
+				Text: "6 🐰", Hops: 2, SNR: "5.5", ReplyID: 7010,
+			}},
 			// Real meshx event — fires from upsertNode when a
 			// previously "node 0x…" placeholder finally has its
 			// NodeInfo packet arrive and we can resolve the
 			// longname. Lavender-italic drained — "this happened
 			// behind the scenes, FYI."
-			{
-				time: "14:19", from: "",
-				text:   "-!- identified BoarSense 1f4a (was node 0xe7f4aa01)",
-				status: statusSystem,
-			},
-			{
-				time: "14:21", from: "retr0h", mine: true,
-				text: "brb lunch 🌮", status: statusAck,
-			},
+			{Message: mdl.Message{
+				Time: "14:19", From: "",
+				Text:   "-!- identified BoarSense 1f4a (was node 0xe7f4aa01)",
+				Status: mdl.StatusSystem,
+			}},
+			{Message: mdl.Message{
+				Time: "14:21", From: "retr0h", Mine: true,
+				Text: "brb lunch 🌮", Status: mdl.StatusAck,
+			}},
 			// Failed send — renders with pink ✗ in the status col,
 			// shows the fail variant of the status column.
-			{
-				time: "14:23", from: "retr0h", mine: true, bang: "/73",
-				text: "73 👋", status: statusFail,
-			},
+			{Message: mdl.Message{
+				Time: "14:23", From: "retr0h", Mine: true, Bang: "/73",
+				Text: "73 👋", Status: mdl.StatusFail,
+			}},
 		},
 	}
 }

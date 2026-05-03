@@ -588,7 +588,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if target != "" {
 			m.replyParent = 0
 			if m.selectedMsg >= 0 && m.selectedMsg < len(m.messages) {
-				m.replyParent = m.messages[m.selectedMsg].packetID
+				m.replyParent = m.messages[m.selectedMsg].PacketID
 			}
 			return m, m.prefillInput("/reply " + target + " ")
 		}
@@ -724,17 +724,17 @@ func (m model) selectedSender() string {
 			return ""
 		}
 		msg := m.messages[m.selectedMsg]
-		if msg.mine || msg.from == "" {
+		if msg.Mine || msg.From == "" {
 			return ""
 		}
 		// If the sender's callsign collides with another node in
 		// m.nodes, prefer its node num so /whois /tr /ping land
 		// exactly on the peer that sent THIS message, not another
 		// radio that happens to share the longname.
-		if msg.fromNum != 0 && m.isCallsignAmbiguous(msg.from) {
-			return fmt.Sprintf("!%08x", msg.fromNum)
+		if msg.FromNum != 0 && m.isCallsignAmbiguous(msg.From) {
+			return fmt.Sprintf("!%08x", msg.FromNum)
 		}
-		return msg.from
+		return msg.From
 	case paneNodes:
 		// The displayed slice depends on which overlay is open —
 		// /nearby sorts by distance, /radar's "closest list" uses
@@ -1051,7 +1051,7 @@ func (m model) msgMatchesFilter(msg messageItem) bool {
 	if m.nodeFilter == "" {
 		return true
 	}
-	return msg.from == m.nodeFilter
+	return msg.From == m.nodeFilter
 }
 
 func (m *model) jumpSelection(to int) {
@@ -1160,7 +1160,7 @@ func (m *model) jumpToSearchHit(dir int) (bool, int) {
 		cur = &m.selectedNd
 	default:
 		for _, msg := range m.messages {
-			items = append(items, msg.from+" "+msg.text)
+			items = append(items, msg.From+" "+msg.Text)
 		}
 		cur = &m.selectedMsg
 	}

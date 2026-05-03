@@ -30,6 +30,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
+
+	"github.com/retr0h/meshx/internal/meshx/pubsub"
 )
 
 // clientTag is the meshx self-identifier we splice into `/cq` beacons
@@ -509,6 +511,14 @@ type model struct {
 	// schema and the open / save helpers.
 	db *sql.DB
 
+	// radioID is the UUID identifying which radio this session is
+	// bound to. Resolved at newModel time via resolveOrCreateRadio
+	// against (transport, addr) parsed from the dial dest. Every
+	// storage call passes this through so multi-radio data stays
+	// scoped per-radio. Demo mode and pre-storage-open paths use
+	// defaultRadioID so call sites never have to special-case.
+	radioID string
+
 	// initialFocusCmd captures the tea.Cmd returned by
 	// textinput.Focus() in newModel — the bubbles cursor blink
 	// chain is driven by a cmd-per-tick loop, and the FIRST cmd
@@ -541,6 +551,14 @@ type model struct {
 	// machine-gun the messages pane. In-memory operation continues
 	// normally — losing persistence is preferable to crashing.
 	storageAlerted bool
+
+	// hub is the in-process fan-out broker for FromRadio events. The
+	// pump publishes here; the TUI is one subscriber that forwards
+	// events into program.Send (see RunRadio's forwarder goroutine).
+	// PR #3's `meshx serve` daemon adds another subscriber that
+	// writes SSE; nothing else about pump or model needs to change
+	// when that lands. Nil in demo mode (no real radio, no events).
+	hub *pubsub.Hub
 
 	// programSlot holds the *tea.Program once the bubbletea runtime is
 	// up. The pump goroutine needs program.Send(), but tea.NewProgram
@@ -742,6 +760,16 @@ func RunRadio(dest string) error {
 			_ = m.db.Close()
 		}
 	}()
+
+	// Spin up the pubsub hub BEFORE the bubbletea program. The pump
+	// will publish every translated FromRadio event here; subscribers
+	// (one for now — the TUI; daemon mode will add another in PR #3)
+	// each get their own buffered channel and consume independently.
+	// Closing the hub on shutdown closes every subscriber channel so
+	// forwarder goroutines exit cleanly.
+	m.hub = pubsub.NewHub()
+	defer m.hub.Close()
+
 	// Allocate the program slot BEFORE handing the model to NewProgram —
 	// tea takes the model by value, but m.programSlot is a pointer so
 	// every copy of the model (the one tea holds, the ones produced by
@@ -752,6 +780,27 @@ func RunRadio(dest string) error {
 	program := tea.NewProgram(m, tea.WithAltScreen())
 	slot.p = program
 	defer func() { slot.p = nil }()
+
+	// TUI subscriber: drain hub events for our radio and forward them
+	// into the bubbletea Update loop via program.Send. We filter on
+	// RadioID even though only one radio publishes today — the filter
+	// is correct now and ready for multi-radio without changes.
+	// Buffer 64 sized for bursty handshake traffic; if it overflows
+	// the hub drops rather than blocks the pump (see hub.Publish).
+	events, unsubscribe := m.hub.Subscribe(64)
+	defer unsubscribe()
+	go func() {
+		for evt := range events {
+			if evt.RadioID != m.radioID {
+				// Multi-radio: events from other radios get filtered
+				// out at the TUI's edge — only the focused radio's
+				// events drive the Update loop. PR #4 will let the
+				// user re-target this filter at runtime.
+				continue
+			}
+			program.Send(evt.Body)
+		}
+	}()
 
 	_, err := program.Run()
 	return err
@@ -890,6 +939,10 @@ func newModel(demo *Demo, dest string) model {
 	}
 
 	if demo == nil {
+		// Default radio identity for the pre-storage-open window —
+		// ensures every storage call below has a non-empty radioID
+		// even if the resolution step below fails for some reason.
+		m.radioID = defaultRadioID
 		// Live-radio mode — open the persistence store and replay the
 		// last chunk of history so the log survives restarts. We fail
 		// open: any storage error (missing $HOME, bad perms, corrupt
@@ -898,15 +951,28 @@ func newModel(demo *Demo, dest string) model {
 		if path, err := defaultStoragePath(); err == nil {
 			if db, notes, err := openStorage(path); err == nil {
 				m.db = db
-				// Hydrate persisted prefs early — /mute (terminal ding)
-				// and /config's radio buzzer state. Both default "on"
-				// to match stock-radio + fresh-install behaviour, so
-				// missing rows just leave the model defaults from
-				// above untouched.
-				if v, ok := getSetting(db, "ding_muted"); ok {
+				// Bind this session to a Radio row before any storage
+				// call references radioID. resolveOrCreateRadio claims
+				// the migration's seeded default UUID the first time
+				// any radio connects, so historical rows (which carry
+				// radio_id = defaultRadioID after the migration)
+				// remain correctly attributed to whatever radio comes
+				// online first.
+				transport, addr := parseRadioDest(dest)
+				if rid, err := resolveOrCreateRadio(db, transport, addr); err == nil {
+					m.radioID = rid
+				}
+				// Hydrate persisted prefs early — /mute (terminal ding,
+				// global) and /config's radio buzzer state (per-radio).
+				// Both default "on" to match stock-radio + fresh-install
+				// behaviour, so missing rows just leave the model
+				// defaults from above untouched. ding_muted is a meshx-
+				// CLIENT preference (terminal beep); pass "" for radioID
+				// so it's stored once globally rather than once per radio.
+				if v, ok := getSetting(db, "", "ding_muted"); ok {
 					m.dingMuted = v == "on"
 				}
-				if v, ok := getSetting(db, "radio_buzzer"); ok {
+				if v, ok := getSetting(db, m.radioID, "radio_buzzer"); ok {
 					m.radioBuzzerEnabled = v != "off"
 				}
 				// Load the cached NodeDB FIRST — every peer we've
@@ -920,7 +986,7 @@ func newModel(demo *Demo, dest string) model {
 				// NodeDB — the radio itself forgets NodeInfo after
 				// a while, so a client that trusts only the radio's
 				// live dump has amnesia on every reconnect.
-				if cached, err := loadNodes(db); err == nil {
+				if cached, err := loadNodes(db, m.radioID); err == nil {
 					for _, n := range cached {
 						name := n.longName
 						if name == "" {
@@ -958,13 +1024,13 @@ func newModel(demo *Demo, dest string) model {
 				// resend from history. 5 minutes is plenty for any
 				// in-flight ACK the radio might deliver on this
 				// launch; anything older is dead.
-				expired, _ := expireStalePendingMessages(db, 5*time.Minute)
+				expired, _ := expireStalePendingMessages(db, m.radioID, 5*time.Minute)
 				// Primary channel is what the radio tells us, but at
 				// boot we don't have it yet — replay under the name
 				// we'll default to (empty string key until a channel
 				// arrives). Load is by `currentChannel` so messages
 				// migrate as the handshake resolves the channel name.
-				if past, err := loadMessages(db, "", 500); err == nil {
+				if past, err := loadMessages(db, m.radioID, "", 500); err == nil {
 					baseIdx := len(m.messages)
 					m.messages = append(m.messages, past...)
 					m.selectedMsg = len(m.messages) - 1
@@ -1288,7 +1354,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = m.reconnectFlashText()
 		m.flashSeen = m.flash
 		m.flashSeenAt = time.Now()
-		m.pump = startPump(msg.dest, m.programSlot.p)
+		m.pump = startPump(msg.dest, m.radioID, m.hub)
 		return m, nil
 
 	case pumpAttachedMsg:
@@ -1297,6 +1363,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioMyInfoMsg:
 		m.myNodeNum = msg.nodeNum
+		// Stamp the radio's own node num onto its persisted row. Best-
+		// effort; the value is denormalized convenience data — useful
+		// for `meshx ble list` style tooling later, not load-bearing
+		// for any query the model issues today.
+		m.storagePersist(updateRadioMyNodeNum(m.db, m.radioID, msg.nodeNum))
 		// MyInfo = first frame of the handshake. Reset the received
 		// counter to 0 and emit the start-of-sync notice so the
 		// user sees node-list progress instead of staring at an
@@ -1380,7 +1451,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.radioBuzzerEnabled {
 			v = "on"
 		}
-		m.storagePersist(putSetting(m.db, "radio_buzzer", v))
+		m.storagePersist(putSetting(m.db, m.radioID, "radio_buzzer", v))
 		return m, nil
 
 	case tracerouteTimeoutMsg:

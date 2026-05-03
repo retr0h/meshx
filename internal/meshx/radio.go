@@ -207,7 +207,9 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	// launch — same behavior as the official phone app. Placeholder
 	// "node 0x…" callsigns (both longname and shortname empty) are
 	// skipped inside saveNode itself.
-	m.storagePersist(saveNode(m.db, msg.nodeNum, msg.longName, msg.shortName, msg.hwModel))
+	m.storagePersist(
+		saveNode(m.db, m.radioID, msg.nodeNum, msg.longName, msg.shortName, msg.hwModel),
+	)
 
 	if idx, ok := m.nodesByNum[msg.nodeNum]; ok {
 		// Preserve fav flag across updates.
@@ -388,7 +390,7 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 			if prev.status == statusPending {
 				prev.status = statusAck
 			}
-			m.storagePersist(saveMessage(m.db, channelName, *prev))
+			m.storagePersist(saveMessage(m.db, m.radioID, channelName, *prev))
 			return nil
 		}
 	}
@@ -412,7 +414,7 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 	}
 
 	// Persist the incoming message so it survives a restart.
-	m.storagePersist(saveMessage(m.db, channelName, item))
+	m.storagePersist(saveMessage(m.db, m.radioID, channelName, item))
 
 	// Bump unread count on non-active channels.
 	if msg.channel < len(m.channels) && m.channels[msg.channel].name != m.currentChannel && !mine {
@@ -643,7 +645,7 @@ func (m *model) applyRouting(msg radioRoutingMsg) {
 			m.messages[i].status = statusFail
 			m.flash = "delivery failed: " + msg.errorName + "  (R to resend)"
 		}
-		m.storagePersist(saveMessage(m.db, m.currentChannel, m.messages[i]))
+		m.storagePersist(saveMessage(m.db, m.radioID, m.currentChannel, m.messages[i]))
 		return
 	}
 }

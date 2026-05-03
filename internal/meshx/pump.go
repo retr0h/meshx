@@ -30,6 +30,7 @@ import (
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/retr0h/meshx/internal/meshx/pubsub"
 	"github.com/retr0h/meshx/internal/meshx/transport"
 )
 
@@ -301,10 +302,14 @@ type (
 	radioDisconnectedMsg struct{}
 )
 
-// pump is the glue between a transport.Client and the Bubble Tea
-// runtime. One goroutine reads FromRadio frames and publishes them
-// as tea.Msg via program.Send(); another drains outboundToRadio and
-// writes them to the device.
+// pump is the glue between a transport.Client and the in-process
+// pubsub hub. One goroutine reads FromRadio frames, translates them
+// into typed radio*Msg events, and publishes each via hub.Publish
+// tagged with the pump's RadioID; another drains outboundToRadio and
+// writes them to the device. The pump itself doesn't know who's
+// subscribed — the TUI consumes via a hub subscription that forwards
+// into program.Send (see RunRadio); the future HTTP daemon (PR #3)
+// adds a second subscriber that writes SSE.
 //
 // The pump owns the reconnect policy. When `client.Run` returns an
 // error the pump closes the dead client, sleeps with exponential
@@ -313,8 +318,20 @@ type (
 // the attempt counter resets, so a long-stable connection that
 // hiccups gets a fresh budget.
 type pump struct {
-	client  transport.Client
-	program *tea.Program
+	client transport.Client
+
+	// hub is where translated FromRadio events are published. Every
+	// event carries the pump's RadioID so subscribers (the TUI today,
+	// the HTTP daemon in PR #3) can filter to a specific radio when
+	// the daemon eventually multiplexes more than one. The pump
+	// itself never knows about subscribers — they come and go via
+	// hub.Subscribe/Unsubscribe in their own goroutines.
+	hub *pubsub.Hub
+
+	// radioID stamped on every published event. Resolved by the
+	// caller (newModel → resolveOrCreateRadio) and passed through at
+	// startPump time so the pump doesn't reach into storage.
+	radioID string
 
 	// Destination string from the original Dial — re-used by the
 	// reconnect loop. Stash it so the pump doesn't need to plumb the
@@ -371,7 +388,13 @@ func reconnectBackoff(attempt int) time.Duration {
 // loop, and a doomed dest (radio off, bad UUID) flows through the
 // same indefinite-retry path as a mid-session drop. Call p.Stop()
 // to tear down.
-func startPump(dest string, program *tea.Program) *pump {
+//
+// hub receives every translated FromRadio event tagged with radioID;
+// the caller is responsible for subscribing to the hub and forwarding
+// events to their consumer (e.g. the TUI subscribes and forwards into
+// program.Send). Decoupling the pump from *tea.Program is what lets
+// the daemon (PR #3) consume the same events from HTTP handlers.
+func startPump(dest, radioID string, hub *pubsub.Hub) *pump {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	p := &pump{
@@ -379,7 +402,8 @@ func startPump(dest string, program *tea.Program) *pump {
 		// == nil" branch performs the first dial. That keeps initial
 		// connect and reconnect on the same code path.
 		client:   nil,
-		program:  program,
+		hub:      hub,
+		radioID:  radioID,
 		dest:     dest,
 		outbound: make(chan *pb.ToRadio, 16),
 		cancel:   cancel,
@@ -401,6 +425,14 @@ func (p *pump) Stop() {
 	}
 }
 
+// publish is the single sink for FromRadio events the pump translated
+// into the radio*Msg vocabulary. Wraps the typed message in a
+// pubsub.Event tagged with this pump's RadioID so multi-radio
+// subscribers (the future HTTP daemon) can filter cleanly.
+func (p *pump) publish(body any) {
+	p.hub.Publish(pubsub.Event{RadioID: p.radioID, Body: body})
+}
+
 // Enqueue is how model code sends a ToRadio from the Update goroutine.
 // Non-blocking — drops the message (flashing a hint is the caller's
 // responsibility) if the outbound buffer is full, which should never
@@ -416,7 +448,8 @@ func (p *pump) Enqueue(msg *pb.ToRadio) bool {
 
 // run is the main pump loop. Spawns the transport Run goroutine,
 // pumps outbound messages, translates inbound FromRadio frames into
-// tea.Msg and ships them via program.Send().
+// typed radio*Msg events, and ships them via p.publish (which wraps
+// pubsub.Hub.Publish).
 //
 // When $MESHX_DEBUG is set (to a file path, or to "1" for a default
 // path), every pump event is appended to that file — the TUI's
@@ -481,7 +514,7 @@ func (p *pump) run(ctx context.Context) {
 				// Don't auto-redial; the user probably did this on
 				// purpose and the pump goroutine should exit.
 				dbgf("clean disconnect — not retrying")
-				p.program.Send(radioDisconnectedMsg{})
+				p.publish(radioDisconnectedMsg{})
 				return
 			}
 			sessErr = err
@@ -493,7 +526,7 @@ func (p *pump) run(ctx context.Context) {
 		attempt++
 		backoff := reconnectBackoff(attempt)
 		dbgf("retry %d in %s after: %v", attempt, backoff, sessErr)
-		p.program.Send(radioReconnectingMsg{
+		p.publish(radioReconnectingMsg{
 			attempt: attempt,
 			after:   backoff,
 			err:     sessErr,
@@ -562,8 +595,8 @@ func (p *pump) runSession(
 				continue
 			}
 			for _, tm := range tms {
-				dbgf("[%d] sending %T to tea", totalIn, tm)
-				p.program.Send(tm)
+				dbgf("[%d] publishing %T", totalIn, tm)
+				p.publish(tm)
 			}
 		}
 	}

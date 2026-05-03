@@ -240,16 +240,16 @@ func (m *model) applyChannel(msg radioChannelMsg) {
 	// Grow the slice up to msg.index regardless of role so the slot is
 	// addressable for delete + re-apply later.
 	for len(m.channels) <= msg.index {
-		m.channels = append(m.channels, channelItem{role: "DISABLED"})
+		m.channels = append(m.channels, channelItem{role: roleDisabled})
 	}
-	if msg.role == "DISABLED" {
+	if msg.role == roleDisabled {
 		// Preserve any unread accumulated before the slot was disabled
 		// (rare but possible if a /channel del raced an inbound packet)
 		// and mark the slot empty so /channel new can re-use it.
 		prevUnread := m.channels[msg.index].unread
 		m.channels[msg.index] = channelItem{
 			index:  msg.index,
-			role:   "DISABLED",
+			role:   roleDisabled,
 			unread: prevUnread,
 		}
 		return

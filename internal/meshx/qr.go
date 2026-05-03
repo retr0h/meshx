@@ -35,6 +35,7 @@ package meshx
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/skip2/go-qrcode"
@@ -66,7 +67,7 @@ func renderQRASCII(data string) (string, error) {
 	}
 	q, err := qrcode.New(data, qrcode.Medium)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("qr encode: %w", err)
 	}
 	// Disable the library's default border so we apply our own quiet
 	// zone with the same half-block math as the body. The library's
@@ -136,7 +137,15 @@ func halfBlockEncode(grid [][]bool) string {
 	if len(grid) == 0 {
 		return ""
 	}
+	// Pre-size the builder: each cell renders to a single rune (block
+	// or space), and each row-pair adds one trailing newline. Block
+	// runes are 3 bytes in UTF-8, so 3*W*H/2 + H/2 newlines is the
+	// upper bound. Avoids repeated underlying-array reallocation as
+	// the QR fills.
+	w := len(grid[0])
+	rowPairs := (len(grid) + 1) / 2
 	var sb strings.Builder
+	sb.Grow(rowPairs * (3*w + 1))
 	for y := 0; y < len(grid); y += 2 {
 		topRow := grid[y]
 		var botRow []bool

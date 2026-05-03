@@ -36,6 +36,8 @@ package meshx
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	mathrand "math/rand"
 	"strings"
@@ -44,6 +46,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 	"google.golang.org/protobuf/proto"
+)
+
+// Channel role string constants. The pump stringifies pb.Channel_Role
+// at the radioChannelMsg boundary (FromRadio_Channel decoder); these
+// keep the comparison sites in this file from being typo-bait.
+const (
+	roleDisabled  = "DISABLED"
+	rolePrimary   = "PRIMARY"
+	roleSecondary = "SECONDARY"
 )
 
 func (m *model) sendPlainMessage(text string) {
@@ -385,7 +396,7 @@ func (m *model) findFreeChannelSlot() int {
 		if i >= len(m.channels) {
 			return i
 		}
-		if m.channels[i].role == "DISABLED" || m.channels[i].role == "" {
+		if m.channels[i].role == roleDisabled || m.channels[i].role == "" {
 			return i
 		}
 	}
@@ -398,20 +409,26 @@ func (m *model) findFreeChannelSlot() int {
 // types should resolve. Case-sensitive because PSK lookup ultimately
 // matches on bytes. Returns -1 if not found or DISABLED.
 func (m *model) findChannelByName(typed string) int {
-	want := strings.TrimSpace(typed)
-	want = strings.TrimPrefix(want, "#")
-	want = strings.Trim(want, "*")
+	want := bareChannelName(strings.TrimSpace(typed))
 	for i, c := range m.channels {
-		if c.role == "DISABLED" {
+		if c.role == roleDisabled {
 			continue
 		}
-		bare := strings.TrimPrefix(c.name, "#")
-		bare = strings.Trim(bare, "*")
-		if bare == want {
+		if bareChannelName(c.name) == want {
 			return i
 		}
 	}
 	return -1
+}
+
+// bareChannelName strips the renderer's display prefixes from a
+// channel name — `#` for unkeyed channels, `*…*` for PSK-protected.
+// Used by findChannelByName + channelShare so the user-typed name and
+// the radio-side ChannelSettings.Name stay in sync regardless of
+// which form the user happens to type.
+func bareChannelName(s string) string {
+	s = strings.TrimPrefix(s, "#")
+	return strings.Trim(s, "*")
 }
 
 // channelShare round-trips a local channel back into a meshtastic://
@@ -426,13 +443,21 @@ func (m *model) findChannelByName(typed string) int {
 // scanning this can see the screen and only that person" reminder so
 // users don't routinely paste the URL into group chats.
 func (m *model) channelShare(typed string) tea.Cmd {
+	if m.isDemo() {
+		m.flash = "/channel share takes effect on a real radio (demo mode)"
+		return nil
+	}
+	if m.pump == nil {
+		m.flash = "/channel share needs a live radio connection"
+		return nil
+	}
 	idx := m.findChannelByName(typed)
 	if idx < 0 {
 		m.flash = fmt.Sprintf("/channel share: no channel matching %q", typed)
 		return nil
 	}
 	c := m.channels[idx]
-	if c.role == "PRIMARY" && len(c.psk) == 0 {
+	if c.role == rolePrimary && len(c.psk) == 0 {
 		// Sharing the default LongFast channel as a meshtastic:// URL
 		// is technically valid but useless — every Meshtastic radio is
 		// on it by default. Refuse rather than emit a QR no one needs
@@ -440,21 +465,16 @@ func (m *model) channelShare(typed string) tea.Cmd {
 		m.flash = "/channel share: the default channel is on every radio — nothing to share"
 		return nil
 	}
-	// Reconstruct ChannelSettings from what we have. Name comes off
-	// the displayed string with the renderer's #/* prefix peeled; PSK
-	// is the live RAM copy.
-	bare := strings.TrimPrefix(c.name, "#")
-	bare = strings.Trim(bare, "*")
 	settings := &pb.ChannelSettings{
-		Name: bare,
+		Name: bareChannelName(c.name),
 		Psk:  c.psk,
 	}
-	url, err := buildChannelShareURL(settings, nil)
+	shareURL, err := buildChannelShareURL(settings, nil)
 	if err != nil {
 		m.flash = fmt.Sprintf("/channel share failed: %v", err)
 		return nil
 	}
-	qr, err := renderQRASCII(url)
+	qr, err := renderQRASCII(shareURL)
 	if err != nil {
 		m.flash = fmt.Sprintf("/channel share: qr render failed: %v", err)
 		return nil
@@ -467,7 +487,7 @@ func (m *model) channelShare(typed string) tea.Cmd {
 		"",
 	)
 	lines = append(lines, qrLines...)
-	lines = append(lines, "", "url: "+url)
+	lines = append(lines, "", "url: "+shareURL)
 	m.systemBlock(header, lines...)
 	m.flash = fmt.Sprintf("share QR for %s — visible in log", c.name)
 	return nil
@@ -526,14 +546,19 @@ func (m *model) channelNew(name string) tea.Cmd {
 		m.flash = fmt.Sprintf("/channel new: rand.Read failed: %v", err)
 		return nil
 	}
+	// Id randomized so the channel hash collides minimally with other
+	// meshes using the same name. Per the proto's note: any 32-bit-
+	// random uint is fine for collision avoidance among the small
+	// number of meshtastic users.
+	channelID, err := randUint32()
+	if err != nil {
+		m.flash = fmt.Sprintf("/channel new: %v", err)
+		return nil
+	}
 	settings := &pb.ChannelSettings{
 		Name: name,
 		Psk:  psk,
-		// Id randomized so the channel hash collides minimally with
-		// other meshes using the same name. Per the proto's note: any
-		// 64-bit-random uint32 is fine for collision avoidance among
-		// the small number of meshtastic users.
-		Id: randUint32(),
+		Id:   channelID,
 	}
 	envelope, err := newAdminSetChannel(
 		m.myNodeNum, int32(slot), pb.Channel_SECONDARY, settings,
@@ -553,7 +578,7 @@ func (m *model) channelNew(name string) tea.Cmd {
 		name:    display,
 		private: true,
 		index:   slot,
-		role:    "SECONDARY",
+		role:    roleSecondary,
 		psk:     psk,
 	}
 	fp := pskFingerprint(psk)
@@ -574,18 +599,20 @@ func (m *model) channelNew(name string) tea.Cmd {
 // PSK itself is never displayed — only the hash.
 func pskFingerprint(psk []byte) string {
 	sum := sha256.Sum256(psk)
-	return fmt.Sprintf("%x", sum[:4])
+	return hex.EncodeToString(sum[:4])
 }
 
 // randUint32 returns a crypto/rand uint32 for ChannelSettings.Id.
-// Panics on rand failure because that's a fatal entropy-source
-// problem, not something to swallow with a flash.
-func randUint32() uint32 {
+// Returns the error so the caller can surface it as a flash — we're
+// running inside the bubbletea Update loop and a panic here would
+// kill the whole TUI mid-keystroke. Entropy failure is rare but the
+// failure mode shouldn't be "app crash."
+func randUint32() (uint32, error) {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		panic(fmt.Errorf("crypto/rand exhausted: %w", err))
+		return 0, fmt.Errorf("crypto/rand: %w", err)
 	}
-	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	return binary.BigEndian.Uint32(b[:]), nil
 }
 
 // channelDel disables a channel slot via AdminMessage_SetChannel
@@ -613,7 +640,7 @@ func (m *model) channelDel(typed string) tea.Cmd {
 		m.flash = fmt.Sprintf("/channel del: no channel matching %q", typed)
 		return nil
 	}
-	if m.channels[idx].role == "PRIMARY" {
+	if m.channels[idx].role == rolePrimary {
 		m.flash = "/channel del: cannot delete the primary channel — use /config to rename"
 		return nil
 	}
@@ -634,13 +661,13 @@ func (m *model) channelDel(typed string) tea.Cmd {
 	// channel the user just deleted while waiting for that round trip.
 	m.channels[idx] = channelItem{
 		index: idx,
-		role:  "DISABLED",
+		role:  roleDisabled,
 	}
 	if m.currentChannel == deletedName {
 		// User deleted the channel they were on. Snap back to the
 		// primary so the input bar has a valid target.
 		for _, c := range m.channels {
-			if c.role == "PRIMARY" {
+			if c.role == rolePrimary {
 				m.currentChannel = c.name
 				break
 			}
@@ -723,7 +750,7 @@ func (m *model) channelAdd(rawURL string) tea.Cmd {
 			name:    display,
 			private: len(s.GetPsk()) > 0,
 			index:   slot,
-			role:    "SECONDARY",
+			role:    roleSecondary,
 			psk:     s.GetPsk(),
 		}
 		summary = append(summary, fmt.Sprintf("add:  %s → slot %d", display, slot))

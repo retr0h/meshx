@@ -74,8 +74,8 @@ func parseChannelShareURL(raw string) (*pb.ChannelSet, error) {
 		strings.HasPrefix(u.Path, "/e/"):
 		// meshtastic.org/e/#... — same.
 	default:
-		return nil, fmt.Errorf(
-			"unrecognized url shape — expected meshtastic://e/#... or https://meshtastic.org/e/#...",
+		return nil, errors.New(
+			"unrecognized url scheme — expected meshtastic://e/ or https://meshtastic.org/e/",
 		)
 	}
 	frag := u.Fragment

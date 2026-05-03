@@ -414,6 +414,65 @@ func (m *model) findChannelByName(typed string) int {
 	return -1
 }
 
+// channelShare round-trips a local channel back into a meshtastic://
+// URL and renders it as an ASCII QR for in-person scanning. The PSK
+// in m.channels[idx].psk was sourced from the radio's NodeDB dump
+// (see applyChannel) — never read from disk, never reads from disk.
+//
+// The QR is the safest hand-off path: the bytes go terminal →
+// photons → recipient's camera with no network in the loop. Anything
+// else (DM, screenshot pasted in chat) means the PSK exists on
+// another system you don't control. We surface a "verify the person
+// scanning this can see the screen and only that person" reminder so
+// users don't routinely paste the URL into group chats.
+func (m *model) channelShare(typed string) tea.Cmd {
+	idx := m.findChannelByName(typed)
+	if idx < 0 {
+		m.flash = fmt.Sprintf("/channel share: no channel matching %q", typed)
+		return nil
+	}
+	c := m.channels[idx]
+	if c.role == "PRIMARY" && len(c.psk) == 0 {
+		// Sharing the default LongFast channel as a meshtastic:// URL
+		// is technically valid but useless — every Meshtastic radio is
+		// on it by default. Refuse rather than emit a QR no one needs
+		// to scan.
+		m.flash = "/channel share: the default channel is on every radio — nothing to share"
+		return nil
+	}
+	// Reconstruct ChannelSettings from what we have. Name comes off
+	// the displayed string with the renderer's #/* prefix peeled; PSK
+	// is the live RAM copy.
+	bare := strings.TrimPrefix(c.name, "#")
+	bare = strings.Trim(bare, "*")
+	settings := &pb.ChannelSettings{
+		Name: bare,
+		Psk:  c.psk,
+	}
+	url, err := buildChannelShareURL(settings, nil)
+	if err != nil {
+		m.flash = fmt.Sprintf("/channel share failed: %v", err)
+		return nil
+	}
+	qr, err := renderQRASCII(url)
+	if err != nil {
+		m.flash = fmt.Sprintf("/channel share: qr render failed: %v", err)
+		return nil
+	}
+	header := fmt.Sprintf("/channel share — %s", c.name)
+	qrLines := strings.Split(qr, "\n")
+	lines := make([]string, 0, len(qrLines)+4)
+	lines = append(lines,
+		"scan with the Meshtastic app to join (in-person only — the PSK is in this QR)",
+		"",
+	)
+	lines = append(lines, qrLines...)
+	lines = append(lines, "", "url: "+url)
+	m.systemBlock(header, lines...)
+	m.flash = fmt.Sprintf("share QR for %s — visible in log", c.name)
+	return nil
+}
+
 // channelNew creates a fresh secondary channel with a randomly
 // generated 32-byte AES256 PSK and pushes it to the first free slot.
 // The PSK never lands on disk — meshX has no channels table; the
@@ -1813,8 +1872,14 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 				return nil
 			}
 			return m.channelNew(arg)
+		case "share":
+			if arg == "" {
+				m.flash = "usage: /channel share <name>"
+				return nil
+			}
+			return m.channelShare(arg)
 		default:
-			m.flash = "usage: /channel list  |  /channel add <url>  |  /channel new <name>  |  /channel del <name>"
+			m.flash = "usage: /channel list | add <url> | new <name> | share <name> | del <name>"
 		}
 	case "nick":
 		// /nick (no args) — read-only display of the current
@@ -1862,6 +1927,52 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		)
 		m.flash = "/dingtest: BEL queued"
 		return ringTerminalBellCmd()
+	case "qrtest":
+		// Hidden diagnostic — same renderer /channel share uses, so
+		// you can iterate on QR layout (quiet zone, half-block math,
+		// scanability under your terminal's font / cell aspect)
+		// without minting and deleting real channels. With no arg,
+		// encodes a sample meshtastic://e/#... URL using a fixed
+		// "test" channel + a known dummy PSK so the bytes are stable
+		// run-to-run; with an arg, encodes that string verbatim so
+		// you can test arbitrary QR payloads (other URLs, plain
+		// text). Like /dingtest, intentionally NOT in /help — debug
+		// surface only.
+		payload := rest
+		if payload == "" {
+			// Stable fake — name "qrtest" + a 16-byte all-zero PSK.
+			// Real apps will treat it as a valid (if uninteresting)
+			// channel-share URL, so your phone scanner will recognize
+			// the meshtastic:// shape AND the Meshtastic app will
+			// even try to parse it. Good end-to-end smoke test.
+			settings := &pb.ChannelSettings{
+				Name: "qrtest",
+				Psk: []byte{
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+					0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				},
+			}
+			url, err := buildChannelShareURL(settings, nil)
+			if err != nil {
+				m.flash = fmt.Sprintf("/qrtest: build url failed: %v", err)
+				return nil
+			}
+			payload = url
+		}
+		qr, err := renderQRASCII(payload)
+		if err != nil {
+			m.flash = fmt.Sprintf("/qrtest: render failed: %v", err)
+			return nil
+		}
+		qrLines := strings.Split(qr, "\n")
+		lines := make([]string, 0, len(qrLines)+2)
+		lines = append(lines,
+			fmt.Sprintf("payload: %s", payload),
+			"",
+		)
+		lines = append(lines, qrLines...)
+		m.systemBlock("/qrtest", lines...)
+		m.flash = "/qrtest: QR rendered — visible in log"
 	case "mute":
 		// Toggle the meshX terminal ding (BEL on inbound text).
 		// Persists to settings.ding_muted so the pref survives

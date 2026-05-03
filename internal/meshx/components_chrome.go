@@ -327,6 +327,12 @@ func (c channelTabsRow) Render(box Box) string {
 	// placeholder when the radio's ChannelInfo packet hasn't landed).
 	var tabs []string
 	for i, ch := range m.channels {
+		// applyChannel keeps DISABLED slots in the slice so /channel
+		// new can find a free index — skip them for display so empty
+		// slots don't clutter the tab strip.
+		if ch.role == "DISABLED" {
+			continue
+		}
 		tabs = append(tabs, channelTabCell(
 			ch.name, i, ch.name == m.currentChannel, ch.private, ch.unread,
 		))

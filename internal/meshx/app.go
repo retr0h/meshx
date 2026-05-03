@@ -271,6 +271,22 @@ type channelItem struct {
 	name    string
 	private bool
 	unread  int
+	// index is the radio's slot number (0..7). Stable across re-applies
+	// — applyChannel upserts by index so /channel del / /channel new
+	// can address the right slot directly.
+	index int
+	// role is the Meshtastic Channel_Role string ("PRIMARY", "SECONDARY",
+	// "DISABLED"). Renderers skip DISABLED so empty slots don't clutter
+	// the tab strip; /channel del refuses PRIMARY because the radio
+	// requires one.
+	role string
+	// psk is the channel's pre-shared AES key, RAM-only — NEVER
+	// persisted (no column in the messages / nodes / settings tables).
+	// Sourced from the radio's NodeDB dump on connect; consumed by
+	// /channel share to round-trip the channel into a meshtastic://
+	// URL. If the radio dies the PSK is gone with it; that's the
+	// security posture (see README — "we don't store secrets").
+	psk []byte
 }
 
 type messageItem struct {

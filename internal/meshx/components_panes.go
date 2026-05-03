@@ -38,6 +38,11 @@ func (p channelsPane) Render(box Box) string {
 	lines := make([]string, 0, 2+len(m.channels))
 	lines = append(lines, header, "")
 	for i, c := range m.channels {
+		// Skip DISABLED slots — applyChannel keeps them in the slice
+		// for slot allocation but they're not real channels to display.
+		if c.role == "DISABLED" {
+			continue
+		}
 		selected := i == m.selectedCh && m.focused == paneChannels
 		inner := paneInnerWidth(box.Width)
 		contentW := inner - gutterWidth

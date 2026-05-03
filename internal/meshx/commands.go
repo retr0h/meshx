@@ -1439,16 +1439,17 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 	case "me":
 		// IRC ASCII-action convention. /me waves → broadcasts the
 		// literal "* waves" as a TEXT_MESSAGE_APP packet on the
-		// current channel; receivers see "[shortname] longname * waves"
-		// with the leading "* " marking it as an action. We don't
-		// prefix with the sender's nick in the body — the chat row's
-		// from column already does that, so adding it would duplicate.
-		// Same wire format every IRC bridge expects.
+		// current channel. Routes through sendPlainMessage (NOT
+		// sendBang) so msg.bang stays empty — chatRowRender's
+		// action detection requires that to render the row as
+		// "* <nick> <action>" in italic, instead of the bang flag
+		// /cq, /73, etc. produce. Wire format is just "* <action>"
+		// so non-meshx peers see something readable too.
 		if rest == "" {
 			m.flash = "usage: /me <action>"
 			return nil
 		}
-		m.sendBang("/me", "* "+rest)
+		m.sendPlainMessage("* " + rest)
 		m.flash = fmt.Sprintf("* %s %s", m.myCallsign(), rest)
 	case "version":
 		// Surface meshX version + radio firmware in one shot. Useful

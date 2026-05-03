@@ -414,8 +414,24 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 // scheduled tracerouteTimeoutMsg becomes a no-op when its tick lands
 // (the packetID guard there falls through silently).
 func (m *model) applyTraceroute(msg radioTracerouteMsg) {
-	if m.pendingTraceroute == nil ||
-		m.pendingTraceroute.packetID != msg.requestID {
+	if m.pendingTraceroute == nil {
+		return
+	}
+	// Correlate by request_id when the firmware sets it (modern
+	// builds), otherwise fall back to "is this from the node we're
+	// tracing?" — older Meshtastic firmware (≤ 2.2) replies to a
+	// TRACEROUTE_APP request with a fresh MeshPacket whose Data does
+	// NOT echo the original packetID, so a strict request_id match
+	// silently times out every time. The fromNum fallback only fires
+	// while a request is in flight, and `pendingTraceroute` enforces
+	// one-in-flight, so the worst-case false positive is "we accept
+	// a foreign traceroute reply that happens to come from the exact
+	// peer we just asked about" — which IS effectively the right
+	// answer for this user anyway.
+	switch {
+	case msg.requestID != 0 && msg.requestID == m.pendingTraceroute.packetID:
+	case msg.requestID == 0 && msg.fromNum == m.pendingTraceroute.targetNum:
+	default:
 		return
 	}
 	tgt := m.pendingTraceroute.targetCall
@@ -458,7 +474,13 @@ func (m *model) applyTraceroute(msg radioTracerouteMsg) {
 		m.nodes[idx].lastHops = hops
 	}
 	m.systemBlock(fmt.Sprintf("traceroute %s", tgt), lines...)
-	m.flash = fmt.Sprintf("tr: %s — %d hop%s in %s", tgt, hops, plural(hops), rtt.Round(100*time.Millisecond))
+	m.flash = fmt.Sprintf(
+		"tr: %s — %d hop%s in %s",
+		tgt,
+		hops,
+		plural(hops),
+		rtt.Round(100*time.Millisecond),
+	)
 	m.pendingTraceroute = nil
 }
 

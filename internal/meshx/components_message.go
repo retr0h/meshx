@@ -16,6 +16,7 @@
 package meshx
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -195,9 +196,41 @@ func chatRowRender(
 	}
 
 	parts := chatRowFor(m, msg, rowBg)
+
+	// /me action detection — IRC convention: a chat row whose body
+	// starts with "* " (and isn't a /bang command) renders without
+	// the bracketed sender column and with "* <nick> <action>" as
+	// the body in italic. Faithful to irssi's "*  nick waves at the
+	// camera" line. The wire format stays "* waves" so peers running
+	// other Meshtastic clients see something sensible too — meshx
+	// just chooses a richer presentation when we recognize the
+	// pattern.
+	isAction := msg.bang == "" && msg.status != "system" &&
+		strings.HasPrefix(msg.text, "* ") && len(msg.text) > 2
+
 	bodyLines := strings.Split(msg.text, "\n")
 	if len(bodyLines) == 0 {
 		bodyLines = []string{""}
+	}
+	if isAction {
+		// Strip the wire prefix; we rebuild it on the meshx side as
+		// "* <displayFrom> <action>".
+		actionText := strings.TrimPrefix(bodyLines[0], "* ")
+		bodyLines[0] = fmt.Sprintf("* %s %s", m.displayFrom(msg), actionText)
+		// Blank out the sender cell — the body now carries the
+		// nick. Keep the cell width preserved with a bg-tinted run
+		// of spaces so the column alignment past the sender column
+		// (gap + body) doesn't shift.
+		parts.sender = lipgloss.NewStyle().
+			Background(lipgloss.Color(rowBg)).
+			Render(strings.Repeat(" ", fromW))
+		// Action rows use the "*" flag glyph in dim drained color
+		// so the visual marker reads as "this is an action," not as
+		// the yellow-bang flag /cq, /73 etc. produce.
+		parts.flag = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(mhDrained)).
+			Background(lipgloss.Color(rowBg)).
+			Render("* ")
 	}
 	// Corrupted bodies — sanitizeMessageText replaced bad bytes with
 	// '?' and dropped non-printable runes, so the text is still
@@ -214,6 +247,16 @@ func chatRowRender(
 			Background(lipgloss.Color(rowBg)).
 			Italic(true)
 		bodyForFirst = "(?) " + bodyForFirst
+	}
+	if isAction {
+		// Italic + drained color signals "this is an action" the
+		// same way irssi renders /me output — distinct enough from
+		// regular chat that the eye reads it as narration without
+		// being so dim the text becomes unreadable.
+		bodyText = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(mhLavender)).
+			Background(lipgloss.Color(rowBg)).
+			Italic(true)
 	}
 	sys := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhLavender)).

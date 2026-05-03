@@ -198,8 +198,8 @@ var helpEntries = map[string]helpEntry{
 		summary: "alias for /channels — IRC convention for \"show me the channels\"",
 	},
 	"lastlog": {
-		usage:   "/lastlog <pattern>",
-		summary: "alias for /search — IRC convention for searching the message log",
+		usage:   "/lastlog",
+		summary: "jump to the most recent message in the log (like vim's G). Closes any overlay, parks the cursor on the tail in nav mode",
 	},
 	"info": {
 		usage:   "/info",

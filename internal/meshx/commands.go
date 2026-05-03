@@ -1651,7 +1651,26 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			"usage:   "+entry.usage,
 			"summary: "+entry.summary,
 		)
-	case "search", "lastlog":
+	case "lastlog":
+		// /lastlog jumps to the most recent message in the log —
+		// equivalent to `G` in nav mode. Closes any open overlay so
+		// the messages pane is visible, parks the cursor on the
+		// tail, and lands in nav mode so the highlight is on.
+		// Earlier this was aliased to /search which produced
+		// confusing behaviour (search is a filter prompt, not a
+		// jump-to-bottom).
+		if len(m.messages) == 0 {
+			m.flash = "/lastlog: log is empty"
+			return nil
+		}
+		m.overlay = overlayNone
+		m.focused = paneMessages
+		m.selectedMsg = len(m.messages) - 1
+		m.mode = modeNav
+		m.input.Blur()
+		latest := m.messages[m.selectedMsg]
+		m.flash = fmt.Sprintf("lastlog: %s — %s", latest.time, latest.from)
+	case "search":
 		if rest == "" {
 			m.flash = "usage: /search <pattern>"
 			return nil

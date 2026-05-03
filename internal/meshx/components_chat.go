@@ -359,9 +359,14 @@ func chatThreadingQuote(
 		Background(lipgloss.Color(rowBg)).
 		Bold(true).
 		Render("┌ ")
-	tstamp := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(mhDrained)).
-		Background(lipgloss.Color(rowBg))
+	// Italic + lavender to match the /me action body style — drained
+	// (#3b4261) was too faint to read at normal terminal contrast.
+	// Lavender (#6272a4) keeps the "this is context, not the row
+	// itself" cue while staying legible against the zebra bg.
+	quote := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhLavender)).
+		Background(lipgloss.Color(rowBg)).
+		Italic(true)
 	if parentFrom == "" {
 		parentFrom = "—"
 	}
@@ -370,7 +375,7 @@ func chatThreadingQuote(
 	cells := []Cell{
 		{Content: indent, Width: 2 + 2 + 7},
 		{Content: hook, Width: 2},
-		{Content: tstamp.Render(quoteBody), Width: -1, PadStyle: bg},
+		{Content: quote.Render(quoteBody), Width: -1, PadStyle: bg},
 	}
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }

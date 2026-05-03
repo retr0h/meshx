@@ -34,10 +34,13 @@ package meshx
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // sanitizeMessageText scrubs peer-originated text so one bad packet
@@ -260,8 +263,12 @@ func (m *model) applyChannel(msg radioChannelMsg) {
 
 // applyTextMessage appends a received text packet to the message log.
 // Resolves fromNum to a callsign via the NodeDB; unread count bumps
-// on the destination channel when it's not the active one.
-func (m *model) applyTextMessage(msg radioTextMsg) {
+// on the destination channel when it's not the active one. Returns a
+// tea.Cmd carrying the BEL when the message is from a peer and the
+// user hasn't /muted it; nil otherwise. Update threads it back to the
+// runtime so the bell write happens in a controlled goroutine instead
+// of racing the renderer.
+func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 	// Default ghost identity from the firmware's last-4-hex
 	// convention so the FROM column matches what other Meshtastic
 	// clients display for the same peer (iOS shows "c7f7", we
@@ -355,7 +362,7 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 				prev.status = "ack"
 			}
 			m.storagePersist(saveMessage(m.db, channelName, *prev))
-			return
+			return nil
 		}
 	}
 
@@ -384,6 +391,171 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 	if msg.channel < len(m.channels) && m.channels[msg.channel].name != m.currentChannel && !mine {
 		m.channels[msg.channel].unread++
 	}
+
+	// Terminal ding — return the BEL Cmd when the message came from
+	// someone else and the user hasn't /muted it. Update threads the
+	// Cmd back through the runtime; /dingtest returns the same Cmd
+	// so manual verification and the live ingress path share one
+	// code path.
+	if !mine && !m.dingMuted {
+		return ringTerminalBellCmd()
+	}
+	return nil
+}
+
+// ringTerminalBellCmd returns a tea.Cmd that writes a BEL byte to
+// os.Stdout — the canonical bubbletea pattern for terminal side
+// effects. The runtime executes the Cmd in a goroutine so the BEL
+// write doesn't interleave with the renderer's frame output. Stdout
+// (not /dev/tty) because that's the FD bubbletea renders to and
+// what tmux watches for bell-activity (`printf '\a'` works for the
+// same reason — same FD). Returns nil msg so nothing routes back
+// to Update.
+//
+// If the user has BEL silenced in their terminal preferences (iTerm
+// "Silence bell", Terminal.app "Audible Bell" / "Visual Bell" both
+// off) the byte goes through but no audible / visual bell fires —
+// that's terminal-side, not a meshx issue.
+func ringTerminalBellCmd() tea.Cmd {
+	return func() tea.Msg {
+		_, _ = fmt.Fprint(os.Stdout, "\a")
+		return nil
+	}
+}
+
+// applyTraceroute consumes a TRACEROUTE_APP reply that landed for
+// our outbound /tr request. Correlates against m.pendingTraceroute
+// via request_id; foreign traceroutes (replies to someone else's
+// request) silently drop because their request_id won't match.
+//
+// Surfaces the result as a systemBlock with the round-trip time, the
+// hop count (== len(route) — the firmware's RouteDiscovery puts only
+// intermediate node nums in the slice; source and dest are implicit
+// at MeshPacket.From / .To), and the resolved callsign of every hop
+// when we know one (placeholder hex when we don't).
+//
+// On match the pendingTraceroute slot clears so the user can fire a
+// fresh /tr without waiting for the timeout to elapse, and the
+// scheduled tracerouteTimeoutMsg becomes a no-op when its tick lands
+// (the packetID guard there falls through silently).
+func (m *model) applyTraceroute(msg radioTracerouteMsg) {
+	if m.pendingTraceroute == nil {
+		return
+	}
+	// Correlate by request_id when the firmware sets it (modern
+	// builds), otherwise fall back to "is this from the node we're
+	// tracing?" — older Meshtastic firmware (≤ 2.2) replies to a
+	// TRACEROUTE_APP request with a fresh MeshPacket whose Data does
+	// NOT echo the original packetID, so a strict request_id match
+	// silently times out every time. The fromNum fallback only fires
+	// while a request is in flight, and `pendingTraceroute` enforces
+	// one-in-flight, so the worst-case false positive is "we accept
+	// a foreign traceroute reply that happens to come from the exact
+	// peer we just asked about" — which IS effectively the right
+	// answer for this user anyway.
+	switch {
+	case msg.requestID != 0 && msg.requestID == m.pendingTraceroute.packetID:
+	case msg.requestID == 0 && msg.fromNum == m.pendingTraceroute.targetNum:
+	default:
+		return
+	}
+	tgt := m.pendingTraceroute.targetCall
+	rtt := msg.at.Sub(m.pendingTraceroute.requestedAt)
+	if rtt < 0 {
+		// Clock skew between the radio's RxTime stamp and our local
+		// clock can yield a negative delta. Round to time.Since so
+		// the displayed RTT is still useful.
+		rtt = time.Since(m.pendingTraceroute.requestedAt)
+	}
+	hops := len(msg.route)
+	lines := []string{
+		fmt.Sprintf("hops:    %d", hops),
+		fmt.Sprintf("rtt:     %s", rtt.Round(100*time.Millisecond)),
+	}
+	if hops == 0 {
+		lines = append(lines, "path:    direct (RF-adjacent — no relays)")
+	} else {
+		// Build "us → r1 → r2 → ... → target" using callsigns where
+		// we have them, "0x<hex>" otherwise. The user-readable path
+		// is the whole point of the live traceroute, so spend the
+		// width on rendering it well.
+		hopLabels := make([]string, 0, hops+2)
+		hopLabels = append(hopLabels, m.myCallsign())
+		for _, num := range msg.route {
+			if idx, ok := m.nodesByNum[num]; ok && idx < len(m.nodes) {
+				hopLabels = append(hopLabels, m.nodes[idx].callsign)
+				continue
+			}
+			hopLabels = append(hopLabels, fmt.Sprintf("0x%x", num))
+		}
+		hopLabels = append(hopLabels, tgt)
+		lines = append(lines, "path:    "+strings.Join(hopLabels, " → "))
+	}
+	// Update cached telemetry so subsequent /tr in demo / offline
+	// fall-back mode shows the freshly-measured value instead of the
+	// stale zero. lastHops needs the live value even if it's 0
+	// (direct), so this assignment doesn't gate on > 0.
+	if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx < len(m.nodes) {
+		m.nodes[idx].lastHops = hops
+	}
+	m.systemBlock(fmt.Sprintf("traceroute %s", tgt), lines...)
+	m.flash = fmt.Sprintf(
+		"tr: %s — %d hop%s in %s",
+		tgt,
+		hops,
+		plural(hops),
+		rtt.Round(100*time.Millisecond),
+	)
+	m.pendingTraceroute = nil
+}
+
+// applyPing consumes a REPLY_APP echo for our outbound /ping.
+// Correlates against m.pendingPing via request_id; falls back to
+// fromNum match when the firmware doesn't echo request_id (older
+// builds). Surfaces an RTT + hop + signal systemBlock and clears
+// the pending slot. Also refreshes the node's lastSNR / lastRSSI /
+// lastHops cache off the live measurement so /whois on the same
+// peer immediately renders fresh telemetry.
+func (m *model) applyPing(msg radioPingReplyMsg) {
+	if m.pendingPing == nil {
+		return
+	}
+	switch {
+	case msg.requestID != 0 && msg.requestID == m.pendingPing.packetID:
+	case msg.requestID == 0 && msg.fromNum == m.pendingPing.targetNum:
+	default:
+		return
+	}
+	tgt := m.pendingPing.targetCall
+	rtt := msg.at.Sub(m.pendingPing.requestedAt)
+	if rtt < 0 {
+		rtt = time.Since(m.pendingPing.requestedAt)
+	}
+	lines := []string{
+		fmt.Sprintf("rtt:     %s", rtt.Round(100*time.Millisecond)),
+		fmt.Sprintf("hops:    %d", msg.hops),
+		fmt.Sprintf("snr:     %s dB", msg.snr),
+		fmt.Sprintf("rssi:    %s", msg.rssi),
+	}
+	if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx < len(m.nodes) {
+		m.nodes[idx].lastHops = msg.hops
+		if msg.snr != "" {
+			m.nodes[idx].lastSNR = msg.snr
+		}
+		if msg.rssi != "" {
+			m.nodes[idx].lastRSSI = msg.rssi
+		}
+		m.nodes[idx].lastHeardAt = time.Now()
+	}
+	m.systemBlock(fmt.Sprintf("ping %s", tgt), lines...)
+	m.flash = fmt.Sprintf(
+		"ping: %s — %d hop%s in %s",
+		tgt,
+		msg.hops,
+		plural(msg.hops),
+		rtt.Round(100*time.Millisecond),
+	)
+	m.pendingPing = nil
 }
 
 // applyRouting flips the status of the local messageItem whose
@@ -401,6 +573,36 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 // went out.
 func (m *model) applyRouting(msg radioRoutingMsg) {
 	if msg.requestID == 0 {
+		return
+	}
+	// Outbound /ping correlation. REPLY_APP is technically a "built-in
+	// module" but firmware ships with it disabled often enough that
+	// relying on the echo alone fails on a lot of radios. The Routing
+	// receipt always lands (it's how the firmware confirms delivery
+	// for any WantAck packet), so when an in-flight ping resolves
+	// here BEFORE applyPing sees a REPLY_APP echo, treat the ack as
+	// the success signal and surface a softer result block:
+	// delivered, but no echo — useful for the "is this peer reachable
+	// at all?" question even when /ping's primary echo path can't
+	// answer it.
+	if m.pendingPing != nil && m.pendingPing.packetID == msg.requestID {
+		tgt := m.pendingPing.targetCall
+		rtt := time.Since(m.pendingPing.requestedAt).Round(100 * time.Millisecond)
+		if msg.ok {
+			m.systemBlock(fmt.Sprintf("ping %s", tgt),
+				fmt.Sprintf("rtt:     %s (ack only — no echo)", rtt),
+				"note:    radio acknowledged delivery, but REPLY_APP echo",
+				"         did not return. Common when the target's REPLY_APP",
+				"         module is disabled — /tr still works in that case.",
+			)
+			m.flash = fmt.Sprintf("ping: %s — ack in %s (no echo)", tgt, rtt)
+		} else {
+			m.systemBlock(fmt.Sprintf("ping %s", tgt),
+				fmt.Sprintf("result:  delivery failed (%s)", msg.errorName),
+			)
+			m.flash = fmt.Sprintf("ping: %s — %s", tgt, msg.errorName)
+		}
+		m.pendingPing = nil
 		return
 	}
 	for i := range m.messages {

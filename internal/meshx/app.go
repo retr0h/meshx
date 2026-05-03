@@ -29,6 +29,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 )
 
 // clientTag is the meshx self-identifier we splice into `/cq` beacons
@@ -164,13 +165,76 @@ const (
 	modeSearch
 	// modeHelp — full-screen scrollable keymap overlay.
 	modeHelp
+	// modeConfigEdit — inline string-row edit inside /config. Active
+	// when the user pressed Enter on the longname / shortname row;
+	// key events route to cfgEditInput instead of the panel's nav
+	// handler. Inner Enter commits to cfgDraft, Esc cancels.
+	modeConfigEdit
 )
+
+// configDraft is the staged-edits buffer for the /config overlay.
+// One field per row, populated from live state on open and diffed
+// against live state on Ctrl+S. No wire traffic happens until commit.
+type configDraft struct {
+	buzzer    bool
+	longName  string
+	shortName string
+}
+
+// pendingTraceroute is the in-flight /tr request the model tracks
+// from outbound enqueue until the matching TRACEROUTE_APP reply (or
+// timeout) lands. packetID is the MeshPacket.id we stamped on the
+// request; matching against radioTracerouteMsg.requestID ignores
+// foreign traceroutes that happen to be on the air. target is the
+// callsign / node num the user asked to trace, kept around so the
+// reply card can render "traceroute <call> — N hops" without
+// re-resolving. requestedAt drives the round-trip-time readout in
+// the result block + the timeout deadline.
+type pendingTraceroute struct {
+	packetID    uint32
+	targetNum   uint32
+	targetCall  string
+	requestedAt time.Time
+}
+
+// pendingPing is the in-flight /ping request — same correlation
+// shape as pendingTraceroute. packetID matches the inbound
+// REPLY_APP echo's request_id; fromNum match against targetNum is
+// the fallback for older firmware that doesn't echo request_id.
+type pendingPing struct {
+	packetID    uint32
+	targetNum   uint32
+	targetCall  string
+	requestedAt time.Time
+}
+
+// pingTimeoutMsg fires N seconds after a /ping goes out — same
+// pattern as tracerouteTimeoutMsg. packetID guards against stale
+// ticks colliding with a fresh /ping.
+type pingTimeoutMsg struct {
+	packetID uint32
+}
+
+// tracerouteTimeoutMsg fires N seconds after a /tr request goes out;
+// if it still matches m.pendingTraceroute (i.e. no reply arrived)
+// the handler emits a "no reply" systemBlock and clears the pending
+// slot. packetID is captured at enqueue time so a stale tick from a
+// previous /tr can't clobber a fresh one — same correlation pattern
+// radioRoutingMsg uses.
+type tracerouteTimeoutMsg struct {
+	packetID uint32
+}
 
 // Pane indices — used for overlay-focus accounting and accent colors.
 const (
 	paneChannels = 0
 	paneMessages = 1
 	paneNodes    = 2
+	// paneConfig — the /config overlay shares the messages-pane slot
+	// (full-width) but has its own focus index so j/k/Enter route to
+	// configPane's selectedCfg cursor instead of paneMessages's
+	// selectedMsg. Same pattern as paneChannels / paneNodes.
+	paneConfig = 3
 )
 
 // overlayKind — the main log is replaced by a contextual overlay when
@@ -192,6 +256,15 @@ const (
 	// on a fixed grid. Re-renders every tick so new NodeInfo
 	// + Position arrivals flow in live.
 	overlayRadar
+	// overlayConfig — "/config" interactive radio configuration
+	// panel. Same chrome as channels/nodes overlays (j/k walks,
+	// Enter activates). Currently surfaces the radio buzzer toggle
+	// (writes ModuleConfig.external_notification.alert_message_buzzer
+	// via AdminMessage.SetModuleConfig) plus a read-only block of
+	// connection / firmware / region info. Future config knobs land
+	// as additional rows in configEntries() — every interactive row
+	// shares the same Enter-to-toggle UX so muscle memory carries.
+	overlayConfig
 )
 
 type channelItem struct {
@@ -428,6 +501,83 @@ type model struct {
 	peerEnv       map[uint32]peerEnvMetrics
 
 	flash string
+
+	// dingMuted gates the terminal BEL emit on inbound text packets.
+	// Toggled by /mute, persisted under settings.ding_muted so the
+	// preference rides across restarts. Default false (=ding on)
+	// matches a fresh-install Meshtastic radio's stock notification
+	// behavior; the user has to deliberately silence meshX.
+	dingMuted bool
+	// radioBuzzerEnabled is the DERIVED "is the buzzer actually going
+	// to beep on a text message" state — true only when both
+	// ExternalNotification.Enabled AND AlertMessageBuzzer are set on
+	// the radio. Updated when radioModuleBuzzerMsg lands during the
+	// WantConfigId handshake; before that arrives the value is a
+	// best-effort guess from the persisted settings.radio_buzzer
+	// pref so /config doesn't render a confused empty/false until the
+	// real config trickles in. radioBuzzerKnown distinguishes "never
+	// heard the radio's actual state" from "actually false."
+	radioBuzzerEnabled bool
+	radioBuzzerKnown   bool
+	// radioBuzzerSnapshot holds the full ExternalNotificationConfig
+	// the radio reported, so commitConfigDraft can round-trip every
+	// field other than Enabled / AlertMessageBuzzer when toggling the
+	// buzzer — preserving alert_bell, vibra, output pin, etc. that
+	// the user might have configured via the phone app. Nil until
+	// the first radioModuleBuzzerMsg lands; toggle path falls back
+	// to a fresh empty config in that case (rare, only matters if
+	// the user toggles before the handshake completes).
+	radioBuzzerSnapshot *pb.ModuleConfig_ExternalNotificationConfig
+	// selectedCfg is the cursor index for the /config overlay (one
+	// entry per row; j/k walks). Same accounting shape as selectedCh
+	// / selectedNd / selectedMsg — clamped against configEntries() in
+	// moveSelection.
+	selectedCfg int
+
+	// cfgDraft holds pending /config edits before they're committed
+	// to the radio. Populated from live state when /config opens
+	// (resetConfigDraft); per-row Enter mutates fields here without
+	// any wire traffic. Ctrl+S walks the diff between draft and live
+	// in commitConfigDraft and fires the appropriate AdminMessages.
+	// Esc on a dirty draft prompts y/n via cfgConfirmDiscard.
+	cfgDraft configDraft
+	// cfgEditing names the field currently being edited via the
+	// inline textinput — "" when no edit is active, "longname" or
+	// "shortname" while the user types into cfgEditInput. Mode
+	// transitions to modeConfigEdit so key events route to the
+	// textinput instead of the panel's nav handler.
+	cfgEditing string
+	// cfgEditInput is the textinput used by the inline string-row
+	// edit. Pre-filled with the current draft value on focus;
+	// Enter commits the typed value to cfgDraft and returns to
+	// nav, Esc cancels and reverts to whatever was in the draft.
+	cfgEditInput textinput.Model
+	// cfgConfirmDiscard is set when the user pressed Esc on a dirty
+	// /config panel; while true the panel renders a y/n prompt and
+	// the input handler short-circuits all keys except y/n.
+	cfgConfirmDiscard bool
+
+	// pendingTraceroute tracks an in-flight /tr request so the
+	// inbound TRACEROUTE_APP reply can correlate back. Non-nil
+	// while a discovery is on the wire; cleared by applyTraceroute
+	// when the matching reply lands or by tracerouteTimeoutMsg when
+	// the deadline elapses with no reply.
+	pendingTraceroute *pendingTraceroute
+	// pendingPing tracks an in-flight /ping request — Meshtastic's
+	// REPLY_APP echo service bounces our outbound packet back to us
+	// and we measure RTT against this struct's requestedAt. Same
+	// one-in-flight contract as pendingTraceroute; same correlation
+	// path (request_id with a fromNum fallback for older firmware).
+	pendingPing *pendingPing
+
+	// ignored is the set of callsigns whose chat messages get
+	// filtered out of the messages pane. Toggled by /ignore <call>
+	// and /unignore <call>. In-memory only — restart clears the set
+	// (intentional: the persisted "muted" flag on nodeItem is a
+	// display marker handled by nav-m, not a render-side filter).
+	// Keyed on the lowercase callsign so substring/case-insensitive
+	// matches work the same way /whois lookup does.
+	ignored map[string]bool
 	// reconnect is non-nil while the pump is in its retry loop. Each
 	// radioReconnectingMsg refreshes the struct; noticeTickMsg uses it
 	// to repaint the flash with a live "in Ns" countdown so the user
@@ -626,7 +776,22 @@ func newModel(demo *Demo, dest string) model {
 		peerEnv:            make(map[uint32]peerEnvMetrics),
 		input:              in,
 		searchInput:        func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
-		initialFocusCmd:    focusCmd,
+		// cfgEditInput is the inline textinput that pops over the
+		// /config longname / shortname rows. CharLimit caps at 36 —
+		// the longest field is longname's 36-byte ceiling per the
+		// Meshtastic User proto. Shortname rows still validate
+		// separately on commit (4-byte cap there).
+		cfgEditInput: func() textinput.Model {
+			s := textinput.New()
+			s.Prompt = ""
+			s.CharLimit = 36
+			return s
+		}(),
+		initialFocusCmd: focusCmd,
+		// Defaults match a stock Meshtastic radio + a fresh meshX
+		// install (radio buzzer beeps on text, terminal also dings).
+		// Overridden below from the settings table when storage opens.
+		radioBuzzerEnabled: true,
 	}
 
 	if demo == nil {
@@ -638,6 +803,17 @@ func newModel(demo *Demo, dest string) model {
 		if path, err := defaultStoragePath(); err == nil {
 			if db, notes, err := openStorage(path); err == nil {
 				m.db = db
+				// Hydrate persisted prefs early — /mute (terminal ding)
+				// and /config's radio buzzer state. Both default "on"
+				// to match stock-radio + fresh-install behaviour, so
+				// missing rows just leave the model defaults from
+				// above untouched.
+				if v, ok := getSetting(db, "ding_muted"); ok {
+					m.dingMuted = v == "on"
+				}
+				if v, ok := getSetting(db, "radio_buzzer"); ok {
+					m.radioBuzzerEnabled = v != "off"
+				}
 				// Load the cached NodeDB FIRST — every peer we've
 				// ever resolved a real User for gets inserted into
 				// m.nodes / m.nodesByNum before anything else runs.
@@ -769,6 +945,19 @@ func newModel(demo *Demo, dest string) model {
 					}
 					if past.sentAt.After(m.nodes[idx].lastHeardAt) {
 						m.nodes[idx].lastHeardAt = past.sentAt
+						// Stamp lastHops + lastSNR off the most-
+						// recent message in history. Without this,
+						// /tr's offline fall-back path (no live
+						// pump) reads zero hops + empty snr even
+						// when the row right above shows the real
+						// values — applyTextMessage updates these
+						// for live packets, but historical messages
+						// replay directly into m.messages and never
+						// touch the node telemetry slots.
+						m.nodes[idx].lastHops = past.hops
+						if past.snr != "" {
+							m.nodes[idx].lastSNR = past.snr
+						}
 						touched[past.fromNum] = struct{}{}
 					}
 				}
@@ -1049,11 +1238,72 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case radioTextMsg:
-		m.applyTextMessage(msg)
-		return m, nil
+		return m, m.applyTextMessage(msg)
 
 	case radioRoutingMsg:
 		m.applyRouting(msg)
+		return m, nil
+
+	case radioTracerouteMsg:
+		m.applyTraceroute(msg)
+		return m, nil
+
+	case radioPingReplyMsg:
+		m.applyPing(msg)
+		return m, nil
+
+	case pingTimeoutMsg:
+		// Same shape as tracerouteTimeoutMsg — surface "no reply"
+		// only when the matching ping is still in flight.
+		if m.pendingPing != nil && m.pendingPing.packetID == msg.packetID {
+			tgt := m.pendingPing.targetCall
+			m.systemBlock(
+				fmt.Sprintf("ping %s", tgt),
+				fmt.Sprintf("result:  no echo within %ds", pingTimeoutSeconds),
+				"note:    target may be offline, out of range, or behind a dead relay",
+			)
+			m.flash = fmt.Sprintf("ping: no echo from %s", tgt)
+			m.pendingPing = nil
+		}
+		return m, nil
+
+	case radioModuleBuzzerMsg:
+		// Live ExternalNotificationConfig — comes either as part of
+		// the WantConfigId dump or in response to our explicit
+		// AdminMessage_GetModuleConfigRequest. Either way, this is
+		// the authoritative state. The buzzer "is on" only when
+		// BOTH enabled AND alert_message_buzzer are true; either
+		// false makes it silent regardless of the other.
+		m.radioBuzzerEnabled = msg.enabled && msg.alertMessageBuzzer
+		m.radioBuzzerKnown = true
+		m.radioBuzzerSnapshot = msg.snapshot
+		// Re-sync the persisted "last user intent" pref to whatever
+		// the radio actually says — that way next launch's pre-
+		// handshake guess matches reality instead of bouncing back
+		// to a stale value the user changed via the phone app.
+		v := "off"
+		if m.radioBuzzerEnabled {
+			v = "on"
+		}
+		m.storagePersist(putSetting(m.db, "radio_buzzer", v))
+		return m, nil
+
+	case tracerouteTimeoutMsg:
+		// Timeout for an outbound /tr. If the matching request is
+		// still in flight (packetID matches), surface a "no reply"
+		// systemBlock and clear the slot so a fresh /tr can fire.
+		// Stale ticks (request already resolved or replaced) drop
+		// silently — the packetID guard handles both cases.
+		if m.pendingTraceroute != nil && m.pendingTraceroute.packetID == msg.packetID {
+			tgt := m.pendingTraceroute.targetCall
+			m.systemBlock(
+				fmt.Sprintf("traceroute %s", tgt),
+				fmt.Sprintf("result:  no reply within %ds", tracerouteTimeoutSeconds),
+				"note:    target may be offline, out of range, or behind a dead relay",
+			)
+			m.flash = fmt.Sprintf("tr: no reply from %s", tgt)
+			m.pendingTraceroute = nil
+		}
 		return m, nil
 
 	case radioMetadataMsg:
@@ -1169,6 +1419,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the canonical connection indicator; flashing "radio
 		// connected" at the bottom was duplicate signal in the same
 		// mesh-green.
+		//
+		// Proactively pull the radio's actual ExternalNotification
+		// module config — some firmware doesn't push it during the
+		// WantConfigId dump, so without an explicit GetModuleConfig
+		// the /config buzzer row would render our default-true
+		// guess forever. The reply lands as another
+		// FromRadio_ModuleConfig and routes through the same
+		// radioModuleBuzzerMsg handler. Skipped if we already know
+		// the state (the dump did contain it).
+		if !m.radioBuzzerKnown && m.pump != nil {
+			if envelope, err := newAdminGetModuleConfigBuzzer(m.myNodeNum); err == nil {
+				m.pump.Enqueue(envelope)
+			}
+		}
 		return m, nil
 
 	case radioDisconnectedMsg:
@@ -1219,6 +1483,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSearch(msg)
 		case modeHelp:
 			return m.updateHelp(msg)
+		case modeConfigEdit:
+			return m.updateConfigEdit(msg)
 		case modeNav:
 			return m.updateNav(msg)
 		default:

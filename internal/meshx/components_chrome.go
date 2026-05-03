@@ -124,6 +124,23 @@ func (s statusBar) Render(box Box) string {
 		statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.nodes))), chrome),
 	)
 
+	// meshX terminal-ding badge — 🔔 when /mute is off (BEL fires on
+	// inbound text), 🔕 in pink when silenced. Always rendered so the
+	// user can see at a glance which way the toggle is set. The
+	// radio's onboard buzzer is intentionally NOT mirrored here —
+	// that's a radio-side thing the user hears in the room they're
+	// in, not something the terminal needs to visualise. /config
+	// shows the radio buzzer state directly when the panel is open.
+	if m.dingMuted {
+		segs = append(segs, statusSegment(
+			label.Render("🔕 ")+pink.Render("ding"), chrome,
+		))
+	} else {
+		segs = append(segs, statusSegment(
+			label.Render("🔔 ")+val.Render("ding"), chrome,
+		))
+	}
+
 	// Right-most segment: connection state.
 	var state string
 	switch {

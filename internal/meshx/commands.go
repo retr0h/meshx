@@ -45,14 +45,26 @@ import (
 )
 
 func (m *model) sendPlainMessage(text string) {
+	m.sendPlainReply(text, 0)
+}
+
+// sendPlainReply is sendPlainMessage with an optional Data.reply_id
+// for threading. Used by /reply, /msg, /me — anything that's
+// semantically "regular chat with a directed flavor," NOT a /bang
+// command. Routes through the same TEXT_MESSAGE_APP path sendBang
+// uses; the only difference is msg.bang stays empty so the chat row
+// renders with the magenta `›` "mine" marker instead of the yellow
+// `*` bang flag.
+func (m *model) sendPlainReply(text string, replyToID uint32) {
 	var pid uint32
 	var envelope *pb.ToRadio
 	if m.pump != nil {
-		envelope, pid = newTextToRadio(text, m.currentChannelIndex(), 0)
+		envelope, pid = newTextToRadio(text, m.currentChannelIndex(), replyToID)
 	}
 	item := messageItem{
 		time: timeNowHHMM(), from: "me", mine: true, text: text,
 		status: "pending", packetID: pid,
+		replyID: replyToID,
 		fromNum: m.myNodeNum,
 		sentAt:  time.Now(),
 	}
@@ -227,6 +239,388 @@ func newAdminSetOwner(
 	}, nil
 }
 
+// newAdminSetBuzzer builds an AdminMessage.SetModuleConfig envelope
+// for ExternalNotificationConfig. snapshot is the full live config
+// the radio reported (or a fresh empty config if we never saw one);
+// we copy it and overwrite only Enabled + AlertMessageBuzzer so other
+// fields the user might have configured via the phone app (output
+// pin, alert_bell, vibra, nag_timeout, …) ride through verbatim.
+// Both fields move together: a meaningful "buzzer on" requires
+// Enabled=true AND AlertMessageBuzzer=true, and "off" forces both
+// false so the module doesn't keep firing on bell or vibra paths
+// users probably don't realize were enabled.
+//
+// Like setOwner this skips the reboot the official phone app issues
+// after a module-config write — modern firmware accepts module config
+// hot. If a future radio refuses the change without a reboot we'd
+// need to chain an AdminMessage_RebootSeconds packet here.
+func newAdminSetBuzzer(
+	myNodeNum uint32,
+	enabled bool,
+	snapshot *pb.ModuleConfig_ExternalNotificationConfig,
+) (*pb.ToRadio, error) {
+	// proto.Clone on the snapshot preserves every field the radio
+	// reported (including ones we never surface in /config) without
+	// copying the proto's internal MessageState mutex — direct struct
+	// assignment trips go-vet's copylocks. Empty fallback covers
+	// "user toggled before the live config arrived" — we still get a
+	// usable payload, just without round-tripping unrelated fields.
+	var ext *pb.ModuleConfig_ExternalNotificationConfig
+	if snapshot != nil {
+		ext = proto.Clone(snapshot).(*pb.ModuleConfig_ExternalNotificationConfig)
+	} else {
+		ext = &pb.ModuleConfig_ExternalNotificationConfig{}
+	}
+	// Set ALL three message-alert output paths together. Meshtastic
+	// firmware fires whichever path the hardware has wired — a
+	// piezo on output_buzzer, a vibra motor on output_vibra, or a
+	// simple LED on output. Setting just AlertMessageBuzzer left
+	// radios with the notification on a different pin silent. Bell
+	// paths (alert_bell_*) stay at whatever the snapshot had — that
+	// flag is for the BEL character on incoming text, separate from
+	// the message-arrival alert /config exposes.
+	//
+	// UsePwm rides with the toggle because most ham-radio boards
+	// (T-Beam, Heltec, RAK 4631 with WisBlock buzzer) have a hardware
+	// buzzer on the device-level `device.buzzer_gpio` pin, NOT on
+	// External Notification's per-module output_pin (which is "Unset"
+	// out of the box). With UsePwm=true the module ignores the
+	// per-module output pin / duration / active polarity and routes
+	// through device.buzzer_gpio — which is what's actually wired.
+	// Without it, "buzzer on" sets every alert flag but the firmware
+	// has no GPIO to drive and the radio stays silent. The phone app
+	// surfaces this same field as "Use PWM Buzzer".
+	ext.Enabled = enabled
+	ext.AlertMessage = enabled
+	ext.AlertMessageBuzzer = enabled
+	ext.AlertMessageVibra = enabled
+	ext.UsePwm = enabled
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetModuleConfig{
+			SetModuleConfig: &pb.ModuleConfig{
+				PayloadVariant: &pb.ModuleConfig_ExternalNotification{
+					ExternalNotification: ext,
+				},
+			},
+		},
+	}
+	payload, err := proto.Marshal(admin)
+	if err != nil {
+		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
+	}
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			To:      myNodeNum,
+			WantAck: true,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum: pb.PortNum_ADMIN_APP,
+				Payload: payload,
+			}},
+		}},
+	}, nil
+}
+
+// newAdminReboot builds an AdminMessage.RebootSeconds envelope. The
+// firmware reboots after `secs` seconds — 5 gives the radio time to
+// finish flushing pending writes (queued ACKs, NodeDB persistence)
+// before the restart. Used by /reboot and as a recovery path for
+// radios that need a kick after a module-config write.
+func newAdminReboot(myNodeNum uint32, secs int32) (*pb.ToRadio, error) {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_RebootSeconds{
+			RebootSeconds: secs,
+		},
+	}
+	payload, err := proto.Marshal(admin)
+	if err != nil {
+		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
+	}
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			To:      myNodeNum,
+			WantAck: true,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum: pb.PortNum_ADMIN_APP,
+				Payload: payload,
+			}},
+		}},
+	}, nil
+}
+
+// newAdminGetModuleConfigBuzzer asks the radio to send back its
+// current ExternalNotification ModuleConfig. Used as a backstop after
+// the WantConfigId handshake — some firmware doesn't push module
+// configs proactively, in which case meshx would otherwise render a
+// default-true guess in /config until the user hit save. The reply
+// flows through the same FromRadio_ModuleConfig path the dump uses,
+// so applyModuleBuzzer doesn't have to know whether it was solicited.
+func newAdminGetModuleConfigBuzzer(myNodeNum uint32) (*pb.ToRadio, error) {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_GetModuleConfigRequest{
+			GetModuleConfigRequest: pb.AdminMessage_EXTNOTIF_CONFIG,
+		},
+	}
+	payload, err := proto.Marshal(admin)
+	if err != nil {
+		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
+	}
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			To:      myNodeNum,
+			WantAck: true,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum:      pb.PortNum_ADMIN_APP,
+				Payload:      payload,
+				WantResponse: true,
+			}},
+		}},
+	}, nil
+}
+
+// newTraceroutePacket builds a TRACEROUTE_APP MeshPacket addressed
+// to `targetNum` with an empty RouteDiscovery payload. WantResponse
+// tells the firmware to relay the discovery back populated with the
+// traversed route; WantAck so we still get a Routing receipt to
+// distinguish "request landed on the mesh" from "request never made
+// it to the wire." Returns the envelope plus the generated packetID
+// the model stashes in m.pendingTraceroute so the inbound reply can
+// correlate via Data.request_id.
+func newTraceroutePacket(targetNum uint32) (*pb.ToRadio, uint32, error) {
+	rd := &pb.RouteDiscovery{}
+	payload, err := proto.Marshal(rd)
+	if err != nil {
+		return nil, 0, fmt.Errorf("marshal RouteDiscovery: %w", err)
+	}
+	pid := randPacketID()
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			Id:       pid,
+			To:       targetNum,
+			WantAck:  true,
+			HopLimit: 7, // Meshtastic firmware default; gives the discovery enough headroom for a typical multi-hop mesh
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum:      pb.PortNum_TRACEROUTE_APP,
+				Payload:      payload,
+				WantResponse: true,
+			}},
+		}},
+	}, pid, nil
+}
+
+// newPingPacket builds a REPLY_APP MeshPacket addressed to
+// `targetNum`. Meshtastic's REPLY_APP service is a built-in echo:
+// the firmware automatically bounces whatever payload it receives
+// back to the sender, which is the closest thing to ICMP echo the
+// mesh has. WantAck so we still get a Routing receipt, WantResponse
+// so the firmware actually relays the echo back. Returns the
+// envelope plus the generated packetID the model stashes in
+// m.pendingPing for correlation.
+func newPingPacket(targetNum uint32) (*pb.ToRadio, uint32, error) {
+	pid := randPacketID()
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			Id:       pid,
+			To:       targetNum,
+			WantAck:  true,
+			HopLimit: 7,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum:      pb.PortNum_REPLY_APP,
+				Payload:      []byte("ping"),
+				WantResponse: true,
+			}},
+		}},
+	}, pid, nil
+}
+
+// pingTimeoutSeconds bounds how long /ping waits for the REPLY_APP
+// echo before declaring the request lost. Same 30s ballpark /tr
+// uses — enough for a multi-hop round trip on slow modem presets,
+// not so long the user thinks the command silently no-opped.
+const pingTimeoutSeconds = 30
+
+func pingTimeoutCmd(packetID uint32) tea.Cmd {
+	return tea.Tick(pingTimeoutSeconds*time.Second, func(time.Time) tea.Msg {
+		return pingTimeoutMsg{packetID: packetID}
+	})
+}
+
+// tracerouteTimeoutSeconds bounds how long /tr waits for a
+// TRACEROUTE_APP reply before declaring the request lost. 30s covers
+// a 6-hop round trip on a slow LongFast mesh with retries — same
+// ballpark the official Meshtastic clients use. tracerouteTimeoutCmd
+// returns a tea.Cmd that fires tracerouteTimeoutMsg after the
+// deadline; the handler short-circuits if pendingTraceroute already
+// resolved or got replaced by a newer /tr.
+const tracerouteTimeoutSeconds = 30
+
+func tracerouteTimeoutCmd(packetID uint32) tea.Cmd {
+	return tea.Tick(tracerouteTimeoutSeconds*time.Second, func(time.Time) tea.Msg {
+		return tracerouteTimeoutMsg{packetID: packetID}
+	})
+}
+
+// resetConfigDraft snapshots the live radio state into m.cfgDraft so
+// the /config panel opens populated with current values. Called from
+// openOverlay(overlayConfig) so re-opening the panel always starts
+// clean — any unsaved edits from a prior session are discarded the
+// moment the panel closes (a future "save on close" would invert
+// this, but the current design is "explicit Ctrl+S or it didn't
+// happen").
+func (m *model) resetConfigDraft() {
+	m.cfgDraft = configDraft{
+		buzzer:    m.radioBuzzerEnabled,
+		longName:  m.myCallsign(),
+		shortName: m.myShortName(),
+	}
+	m.cfgEditing = ""
+	m.cfgConfirmDiscard = false
+}
+
+// configDraftDirty reports whether the draft has any field that
+// differs from the live state. Drives the dirty-marker in the panel
+// header + each row, and gates the Esc-on-dirty discard prompt.
+func (m model) configDraftDirty() bool {
+	if m.cfgDraft.buzzer != m.radioBuzzerEnabled {
+		return true
+	}
+	if m.cfgDraft.longName != m.myCallsign() {
+		return true
+	}
+	if m.cfgDraft.shortName != m.myShortName() {
+		return true
+	}
+	return false
+}
+
+// commitConfigDraft fires the AdminMessage(s) needed to make the radio
+// match the draft, and persists the local mirrors. Walks the diff so
+// rows that didn't change don't generate wire traffic. Returns the
+// number of changes applied so the caller can flash a sane summary.
+//
+// Validates string fields against the firmware's byte limits before
+// touching the wire — same caps setOwner enforces — so a bad longname
+// rejects in-panel without the radio seeing it.
+func (m *model) commitConfigDraft() int {
+	if m.isDemo() {
+		m.flash = "/config: save needs a real radio (demo mode)"
+		return 0
+	}
+	if m.pump == nil {
+		m.flash = "/config: save needs a live radio connection"
+		return 0
+	}
+	// Validate before any side effects. Stop on the first failure so
+	// the user fixes one at a time — partial commits would land the
+	// "valid" half on the radio while the panel still shows the
+	// invalid edit, which is confusing.
+	if len(m.cfgDraft.longName) > 36 {
+		m.flash = fmt.Sprintf("/config: longname %d bytes, max 36", len(m.cfgDraft.longName))
+		return 0
+	}
+	if len(m.cfgDraft.shortName) > 4 {
+		m.flash = fmt.Sprintf("/config: shortname %d bytes, max 4", len(m.cfgDraft.shortName))
+		return 0
+	}
+
+	changes := 0
+	// Owner (longname / shortname) — one AdminMessage covers both
+	// fields; firmware overwrites the whole User record, so we round-
+	// trip both even if only one changed. Same path /nick uses.
+	if m.cfgDraft.longName != m.myCallsign() || m.cfgDraft.shortName != m.myShortName() {
+		envelope, err := newAdminSetOwner(
+			m.myNodeNum, m.cfgDraft.longName, m.cfgDraft.shortName, false,
+		)
+		if err != nil {
+			m.flash = fmt.Sprintf("/config: SetOwner build failed: %v", err)
+			return 0
+		}
+		if !m.pump.Enqueue(envelope) {
+			m.flash = "/config: SetOwner dropped — outbound buffer full"
+			return 0
+		}
+		changes++
+	}
+	// Radio buzzer — separate AdminMessage path (SetModuleConfig).
+	if m.cfgDraft.buzzer != m.radioBuzzerEnabled {
+		envelope, err := newAdminSetBuzzer(m.myNodeNum, m.cfgDraft.buzzer, m.radioBuzzerSnapshot)
+		if err != nil {
+			m.flash = fmt.Sprintf("/config: buzzer build failed: %v", err)
+			return 0
+		}
+		if !m.pump.Enqueue(envelope) {
+			m.flash = "/config: buzzer dropped — outbound buffer full"
+			return 0
+		}
+		m.radioBuzzerEnabled = m.cfgDraft.buzzer
+		v := "on"
+		if !m.cfgDraft.buzzer {
+			v = "off"
+		}
+		m.storagePersist(putSetting(m.db, "radio_buzzer", v))
+		changes++
+	}
+	if changes == 0 {
+		m.flash = "/config: no changes to save"
+		return 0
+	}
+	m.flash = fmt.Sprintf("/config: %d change%s saved — radio updating", changes, plural(changes))
+	m.systemLine(fmt.Sprintf("config: committed %d change%s", changes, plural(changes)))
+	return changes
+}
+
+// buildVersionLines returns the rows /version dumps as a systemBlock.
+// Reads from BuildInfo() (the same goversion.Info `meshx version`
+// JSON-prints) so the in-app surface and the CLI surface report
+// identical data — caarlos0/go-version backfills sensible defaults
+// from runtime/debug.ReadBuildInfo when goreleaser ldflags weren't
+// applied (e.g. plain `go build`), so we get the commit SHA + dirty
+// flag for free without forking the discovery logic.
+//
+// Also includes the radio's firmware version when known, so the user
+// can see at a glance whether their firmware is current.
+func buildVersionLines(m *model) []string {
+	v := BuildInfo()
+	lines := []string{
+		fmt.Sprintf("meshx:    %s", v.GitVersion),
+	}
+	if v.GitCommit != "" {
+		commit := v.GitCommit
+		if len(commit) > 7 {
+			commit = commit[:7]
+		}
+		if v.GitTreeState == "dirty" {
+			commit += "-dirty"
+		}
+		lines = append(lines, fmt.Sprintf("commit:   %s", commit))
+	}
+	if v.BuildDate != "" {
+		lines = append(lines, fmt.Sprintf("built:    %s", v.BuildDate))
+	}
+	if v.BuiltBy != "" {
+		lines = append(lines, fmt.Sprintf("by:       %s", v.BuiltBy))
+	}
+	lines = append(lines, fmt.Sprintf("go:       %s", v.GoVersion))
+	switch {
+	case m.radioFirmware != "":
+		lines = append(lines, fmt.Sprintf("firmware: %s", m.radioFirmware))
+	case m.isDemo():
+		lines = append(lines, "firmware: (demo)")
+	default:
+		lines = append(lines, "firmware: (waiting on Metadata packet)")
+	}
+	return lines
+}
+
+// plural returns "s" when n != 1 — micro-helper to keep config save
+// flash messages grammatical without inline ternaries littering the
+// commit path.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
 // currentChannelIndex maps m.currentChannel back to the Meshtastic
 // channel index used on the wire. Defaults to 0 (PRIMARY) when the
 // channel name isn't in our list.
@@ -266,6 +660,34 @@ func (m *model) actOnSelectedNode(fn func(*nodeItem)) {
 //   - messages: expand selected message (hop, SNR, RSSI, hex id)
 func (m *model) activate() tea.Cmd {
 	switch m.focused {
+	case paneConfig:
+		entries := m.configEntries()
+		if m.selectedCfg < 0 || m.selectedCfg >= len(entries) {
+			return nil
+		}
+		e := entries[m.selectedCfg]
+		switch e.kind {
+		case cfgEntryString:
+			// Swap into inline-edit mode. The Component checks
+			// m.cfgEditing and renders the textinput in place of the
+			// static value cell, so the cursor lives right where the
+			// row's draft value already does. Pre-fill with the
+			// current draft so a "small tweak" doesn't require
+			// retyping the whole field.
+			m.cfgEditing = e.field
+			m.cfgEditInput.SetValue(e.value)
+			m.cfgEditInput.CursorEnd()
+			m.mode = modeConfigEdit
+			return m.cfgEditInput.Focus()
+		case cfgEntryToggle:
+			if e.action != nil {
+				e.action(m)
+			}
+			return nil
+		}
+		// Read-only row — Enter is a no-op. selectableConfig...Indices
+		// already prevents the cursor from parking here, but guard.
+		return nil
 	case paneChannels:
 		if m.selectedCh < len(m.channels) {
 			c := m.channels[m.selectedCh]
@@ -511,14 +933,6 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		lines = append(lines, fmt.Sprintf("age:      %s ago", humanDuration(time.Since(env.at))))
 		m.systemBlock(fmt.Sprintf("env %s", n.callsign), lines...)
-	case "sked":
-		target := rest
-		if target == "" {
-			m.flash = "usage: /sked <callsign>"
-			return nil
-		}
-		m.sendBang("/sked "+target, "proposing scheduled contact, 24h from now")
-		m.flash = fmt.Sprintf("!sked %s — proposal sent", target)
 
 	// ── Extra ham/Meshtastic slang ────────────────────────────────
 	case "qrz":
@@ -622,7 +1036,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.flash = fmt.Sprintf("!k %s — over to you", target)
 
 	// ── IRC-style operational commands ────────────────────────────
-	case "tr", "traceroute", "trace":
+	case "tr":
 		target := rest
 		if target == "" {
 			target = m.selectedSender()
@@ -633,15 +1047,63 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		n := m.lookupNode(target)
 		if n == nil {
-			m.systemLine(fmt.Sprintf("tr: no route data for %s", target))
+			m.systemLine(fmt.Sprintf("tr: node %s unknown", target))
 			return nil
 		}
-		m.systemBlock(
-			fmt.Sprintf("traceroute %s", n.callsign),
-			fmt.Sprintf("hops:   %d", n.lastHops),
-			fmt.Sprintf("signal: %s", signalReport(n)),
-			"note:   live path not yet queried — showing last-known telemetry",
+		// Fast paths first — no live wire traffic possible in demo
+		// mode or when the pump isn't up yet, so fall back to cached
+		// telemetry with a clear "no live path" tag instead of
+		// silently no-opping.
+		if m.isDemo() || m.pump == nil {
+			m.systemBlock(
+				fmt.Sprintf("traceroute %s", n.callsign),
+				fmt.Sprintf("hops:   %d (cached)", n.lastHops),
+				fmt.Sprintf("signal: %s", signalReport(n)),
+				"note:   live traceroute needs a real radio connection",
+			)
+			return nil
+		}
+		// Self-traceroute is meaningless — firmware drops it.
+		if n.nodeNum != 0 && n.nodeNum == m.myNodeNum {
+			m.systemLine("tr: that's you — /info for your own config")
+			return nil
+		}
+		// One traceroute in flight at a time. Issuing a second /tr
+		// while the first hasn't resolved would orphan the old
+		// pendingTraceroute (the new packetID overwrites the field
+		// and the original timeout tick never finds a match). Refuse
+		// loud rather than silently lose the prior request.
+		if m.pendingTraceroute != nil {
+			m.flash = fmt.Sprintf(
+				"tr: already tracing %s — wait or it'll auto-timeout",
+				m.pendingTraceroute.targetCall,
+			)
+			return nil
+		}
+		envelope, pid, err := newTraceroutePacket(n.nodeNum)
+		if err != nil {
+			m.flash = fmt.Sprintf("tr: build failed: %v", err)
+			return nil
+		}
+		if !m.pump.Enqueue(envelope) {
+			m.flash = "tr: dropped — outbound buffer full"
+			return nil
+		}
+		m.pendingTraceroute = &pendingTraceroute{
+			packetID:    pid,
+			targetNum:   n.nodeNum,
+			targetCall:  n.callsign,
+			requestedAt: time.Now(),
+		}
+		m.flash = fmt.Sprintf(
+			"tr: tracing %s (waiting up to %ds)",
+			n.callsign, tracerouteTimeoutSeconds,
 		)
+		m.systemLine(fmt.Sprintf(
+			"traceroute %s — request sent (id 0x%x), awaiting reply",
+			n.callsign, pid,
+		))
+		return tracerouteTimeoutCmd(pid)
 	case "ping":
 		target := rest
 		if target == "" {
@@ -656,31 +1118,67 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.systemLine(fmt.Sprintf("ping: node %s unknown", target))
 			return nil
 		}
-		// Pinging ourselves yields meaningless telemetry (0s / 0.0 dB
-		// because we never rx our own packets). Refuse with a note
-		// rather than emitting a card full of zeros.
-		if nodeNum := m.nodeNumOf(target); nodeNum != 0 && nodeNum == m.myNodeNum {
+		// Pinging ourselves yields meaningless telemetry (firmware
+		// won't echo a packet back to its own node). Refuse with a
+		// note rather than emitting a request that will silently
+		// timeout.
+		if n.nodeNum != 0 && n.nodeNum == m.myNodeNum {
 			m.systemLine("ping: that's you — /whois for your own config")
 			return nil
 		}
-		lines := []string{
-			fmt.Sprintf("last heard: %s ago", n.currentLastHeard()),
-			fmt.Sprintf("signal:     %s", signalReport(n)),
-		}
-		// Include peer battery + distance if we've received Device
-		// Metrics + Position for them. Both are optional — Meshtastic
-		// peers don't always broadcast telemetry or a GPS fix.
-		if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
-			if pos, ok := m.peerPositions[nodeNum]; ok && m.myGrid != "" {
-				if km := haversineKm(m.myLatitude, m.myLongitude, pos.latitude, pos.longitude); km > 0 {
-					lines = append(
-						lines,
-						fmt.Sprintf("distance:   %.1f km  (grid %s)", km, pos.grid),
-					)
+		// Demo / offline fall back to cached telemetry — same shape
+		// /tr uses. Tag the result so the user knows the radio
+		// wasn't actually queried.
+		if m.isDemo() || m.pump == nil {
+			lines := []string{
+				fmt.Sprintf("last heard: %s ago (cached)", n.currentLastHeard()),
+				fmt.Sprintf("signal:     %s", signalReport(n)),
+				"note:       live ping needs a real radio connection",
+			}
+			if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
+				if pos, ok := m.peerPositions[nodeNum]; ok && m.myGrid != "" {
+					if km := haversineKm(m.myLatitude, m.myLongitude, pos.latitude, pos.longitude); km > 0 {
+						lines = append(lines,
+							fmt.Sprintf("distance:   %.1f km", km),
+						)
+					}
 				}
 			}
+			m.systemBlock(fmt.Sprintf("ping %s", n.callsign), lines...)
+			return nil
 		}
-		m.systemBlock(fmt.Sprintf("ping %s", n.callsign), lines...)
+		// One ping in flight at a time. Same shape as pendingTraceroute.
+		if m.pendingPing != nil {
+			m.flash = fmt.Sprintf(
+				"ping: already pinging %s — wait or it'll auto-timeout",
+				m.pendingPing.targetCall,
+			)
+			return nil
+		}
+		envelope, pid, err := newPingPacket(n.nodeNum)
+		if err != nil {
+			m.flash = fmt.Sprintf("ping: build failed: %v", err)
+			return nil
+		}
+		if !m.pump.Enqueue(envelope) {
+			m.flash = "ping: dropped — outbound buffer full"
+			return nil
+		}
+		m.pendingPing = &pendingPing{
+			packetID:    pid,
+			targetNum:   n.nodeNum,
+			targetCall:  n.callsign,
+			requestedAt: time.Now(),
+		}
+		m.flash = fmt.Sprintf(
+			"ping: pinging %s (waiting up to %ds)",
+			n.callsign, pingTimeoutSeconds,
+		)
+		m.systemLine(fmt.Sprintf(
+			"ping %s — request sent (id 0x%x), awaiting echo",
+			n.callsign, pid,
+		))
+		return pingTimeoutCmd(pid)
 	case "w", "whois":
 		target := rest
 		if target == "" {
@@ -834,7 +1332,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			parent = m.replyTargetFor(target)
 		}
 		m.replyParent = 0
-		m.sendBangReply("/reply "+target, body, parent)
+		// Plain chat with a Data.reply_id — NOT a /bang command. The
+		// renderer reads msg.bang to decide between yellow `*` and
+		// magenta `›` flag glyphs; we want `›` here so a reply
+		// looks like the regular outbound chat it actually is.
+		m.sendPlainReply(body, parent)
 		m.flash = fmt.Sprintf("reply sent to %s", target)
 	case "msg":
 		// /msg <call> <text> — directed message. Meshtastic has no
@@ -853,7 +1355,12 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "usage: /msg <callsign> <text>"
 			return nil
 		}
-		m.sendBang("/msg "+target, target+": "+body)
+		// Plain chat with the target's nick prefixed in the body —
+		// NOT a /bang command. Renders with the magenta `›` flag so
+		// it reads as regular outbound chat (which it is — Meshtastic
+		// has no actual DM, this is still a channel broadcast with
+		// the addressing convention spelled out in the body).
+		m.sendPlainReply(target+": "+body, 0)
 		m.flash = fmt.Sprintf("DM sent to %s", target)
 	case "join":
 		if rest == "" {
@@ -869,13 +1376,29 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		m.flash = fmt.Sprintf("no channel named %s — /channel list", rest)
 	case "part":
-		m.flash = "/part — channel leave needs radio transport to wire"
-	case "channels":
+		// Meshtastic channels aren't IRC channels — they live on the
+		// RADIO as "Channel" config slots (each with a name + a shared
+		// PSK), not as a per-client membership. There's nothing for
+		// meshX to "part" from; removing a channel means deleting the
+		// slot on the radio (phone app or `meshtastic --ch-disable
+		// <idx>`). Surface the explanation as a systemBlock instead of
+		// a one-line flash so the user sees the model spelled out.
+		m.systemBlock(
+			"/part",
+			"Meshtastic channels live on the radio, not the client.",
+			"To leave a channel, disable the slot via the phone app or",
+			"the meshtastic CLI (`meshtastic --ch-disable <index>`).",
+			"meshX will stop seeing it once the radio drops the slot.",
+		)
+		m.flash = "/part: channels are radio-configured — see the log"
+	case "channels", "list":
+		// /list is the IRC convention for "show me the channels."
 		m.openOverlay(overlayChannels)
-	case "nodes":
-		// "Node" is the canonical Meshtastic term — radios on the
-		// mesh are nodes, not users. We dropped the /users and
-		// /names IRC aliases to keep the vocabulary consistent.
+	case "nodes", "who":
+		// /who is the IRC convention for "show me the user list" —
+		// alias for /nodes so muscle memory from IRC clients lands
+		// where users expect. "Node" is the canonical Meshtastic
+		// term (we dropped /users + /names).
 		m.openOverlay(overlayNodes)
 	case "nearby":
 		// Distance-sorted roster of peers with a GPS fix — "who
@@ -896,61 +1419,173 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		m.flash = "usage: /channel list  |  /channel add <meshtastic://url>"
-	case "nick", "callsign":
-		// /nick <name> — set the radio's User.long_name via
-		// AdminMessage.SetOwner. Aliases: /callsign (ham-idiomatic).
-		// No reboot (unlike the phone app's behavior); firmware
-		// accepts the write hot. Change propagates to peers on
-		// the radio's next NodeInfo broadcast.
+	case "nick":
+		// /nick (no args) — read-only display of the current
+		// longname. /nick <name> — immediate write of User.long_name
+		// via AdminMessage.SetOwner. No reboot (firmware accepts
+		// the write hot); change propagates to peers on the next
+		// NodeInfo broadcast. The canonical edit path for both
+		// longname and shortname (with draft + Ctrl+S) is /config;
+		// /nick stays as the fast inline rename ham operators
+		// expect to do without leaving their composing surface.
+		// Shortname is round-tripped from the current value so
+		// this only changes longname.
+		if rest == "" {
+			cur := m.myCallsign()
+			short := m.myShortName()
+			if short != "" {
+				m.flash = fmt.Sprintf("nick: %s [%s]  (use /nick <name> to change)", cur, short)
+			} else {
+				m.flash = fmt.Sprintf("nick: %s  (use /nick <name> to change)", cur)
+			}
+			return nil
+		}
 		return m.setOwner(rest, m.myShortName(), "long")
-	case "tag", "emoji":
-		// /tag <text> — set the radio's User.short_name via
-		// AdminMessage.SetOwner. Aliases: /emoji (because ~every
-		// user sets shortname to a single emoji). Up to 4 bytes.
-		return m.setOwner(m.myCallsign(), rest, "short")
 	case "config":
-		// Single render path — demo and live both read from model
-		// state since demo mode pre-populates these fields. The only
-		// difference is a [DEMO] tag on the block header.
-		n := m.myNode()
-		lines := []string{fmt.Sprintf("callsign: %s", m.myCallsign())}
-		if n != nil && n.hwModel != "" {
-			lines = append(lines, fmt.Sprintf("hw:       %s", n.hwModel))
+		// Open the radio-config overlay. The interactive panel
+		// (configPane) shows an "Radio buzzer: on/off" row at the
+		// top — Enter toggles it via AdminMessage.SetModuleConfig.
+		// The dump-as-systemBlock variant /config used to do is
+		// gone; /info already covers "what does meshx know" and
+		// /config is now the consistent path for radio-side knobs.
+		m.openOverlay(overlayConfig)
+	case "dingtest":
+		// Manual BEL verification — returns the exact tea.Cmd
+		// applyTextMessage uses on inbound chat. Going through the
+		// bubbletea runtime (instead of writing to stdout inline) is
+		// what makes the BEL actually reach the terminal under the
+		// alt-screen renderer. If the bell still doesn't fire after
+		// /dingtest, the cause is your terminal's audible + visual
+		// bell preferences (Terminal.app / iTerm Profile → Audible
+		// Bell + Visual Bell) — not a meshX bug.
+		m.systemBlock("/dingtest",
+			"emit:    BEL queued via tea.Cmd",
+			"hint:    if no audible/visual bell, check",
+			"         Terminal/iTerm Profile → Audible Bell + Visual Bell.",
+		)
+		m.flash = "/dingtest: BEL queued"
+		return ringTerminalBellCmd()
+	case "mute":
+		// Toggle the meshX terminal ding (BEL on inbound text).
+		// Persists to settings.ding_muted so the pref survives
+		// restarts. Does NOT touch the radio's onboard buzzer —
+		// that's /config → "Radio buzzer". Two separate knobs by
+		// design: the radio beeps in your pocket / on your desk,
+		// meshX dings inside the terminal.
+		m.dingMuted = !m.dingMuted
+		v := "off"
+		if m.dingMuted {
+			v = "on"
 		}
-		if m.radioFirmware != "" {
-			lines = append(lines, fmt.Sprintf("fw:       %s", m.radioFirmware))
+		m.storagePersist(putSetting(m.db, "ding_muted", v))
+		if m.dingMuted {
+			m.flash = "/mute on — terminal ding silenced"
+			m.systemLine("ding muted — terminal won't beep on incoming text")
+		} else {
+			m.flash = "/mute off — terminal ding restored"
+			m.systemLine("ding unmuted — terminal will beep on incoming text")
 		}
-		if m.currentChannel != "" {
-			lines = append(
-				lines,
-				fmt.Sprintf("channel:  %s  %s", m.currentChannel, m.radioModemPreset),
-			)
+	case "me":
+		// IRC ASCII-action convention. /me waves → broadcasts the
+		// literal "* waves" as a TEXT_MESSAGE_APP packet on the
+		// current channel. Routes through sendPlainMessage (NOT
+		// sendBang) so msg.bang stays empty — chatRowRender's
+		// action detection requires that to render the row as
+		// "* <nick> <action>" in italic, instead of the bang flag
+		// /cq, /73, etc. produce. Wire format is just "* <action>"
+		// so non-meshx peers see something readable too.
+		if rest == "" {
+			m.flash = "usage: /me <action>"
+			return nil
 		}
-		if m.radioRole != "" {
-			lines = append(lines, fmt.Sprintf("role:     %s", m.radioRole))
+		m.sendPlainMessage("* " + rest)
+		m.flash = fmt.Sprintf("* %s %s", m.myCallsign(), rest)
+	case "version":
+		// Surface meshX version + radio firmware in one shot. Useful
+		// for support tickets, "is my firmware current?" checks, and
+		// just-curious. Reads runtime/debug.ReadBuildInfo() so the
+		// VCS revision is always accurate without a manual version
+		// constant to bump.
+		m.systemBlock("/version", buildVersionLines(m)...)
+	case "ignore":
+		// Local-only filter — hide chat messages from a peer in the
+		// messages pane. Doesn't touch the wire (the radio still
+		// receives the packets), doesn't persist (in-memory set,
+		// cleared on restart). Distinct from nav-m mute which is
+		// just a state-marker on the nodes pane. Use /unignore to
+		// drop the filter.
+		target := rest
+		if target == "" {
+			m.flash = "usage: /ignore <callsign>"
+			return nil
 		}
-		if m.radioRegion != "" {
-			lines = append(lines, fmt.Sprintf("region:   %s", m.radioRegion))
+		n := m.lookupNode(target)
+		if n == nil {
+			m.flash = fmt.Sprintf("ignore: no node matches %s", target)
+			return nil
 		}
-		if m.radioTxPower != 0 {
-			lines = append(lines, fmt.Sprintf("tx power: %d dBm", m.radioTxPower))
+		if m.ignored == nil {
+			m.ignored = make(map[string]bool)
 		}
-		if m.myGrid != "" {
-			lines = append(lines, fmt.Sprintf("grid:     %s", m.myGrid))
+		m.ignored[strings.ToLower(n.callsign)] = true
+		m.flash = fmt.Sprintf("ignoring %s — messages hidden until /unignore", n.callsign)
+		m.systemLine(fmt.Sprintf("ignore: %s — chat messages will be hidden", n.callsign))
+	case "unignore":
+		target := rest
+		if target == "" {
+			if len(m.ignored) == 0 {
+				m.flash = "/unignore: nothing on the ignore list"
+				return nil
+			}
+			calls := make([]string, 0, len(m.ignored))
+			for k := range m.ignored {
+				calls = append(calls, k)
+			}
+			m.flash = "currently ignoring: " + strings.Join(
+				calls,
+				", ",
+			) + "  (use /unignore <call>)"
+			return nil
 		}
-		if m.hasTelemetry {
-			lines = append(lines,
-				fmt.Sprintf("battery:  %.2f V  %d%%", m.batteryVoltage, m.batteryLevel),
-				fmt.Sprintf("chan use: %.1f%%", m.channelUtil),
-			)
+		n := m.lookupNode(target)
+		if n == nil {
+			m.flash = fmt.Sprintf("unignore: no node matches %s", target)
+			return nil
 		}
-		lines = append(lines, fmt.Sprintf("peers:    %d known", len(m.nodes)))
-		header := "config"
+		key := strings.ToLower(n.callsign)
+		if !m.ignored[key] {
+			m.flash = fmt.Sprintf("unignore: %s wasn't on the list", n.callsign)
+			return nil
+		}
+		delete(m.ignored, key)
+		m.flash = fmt.Sprintf("unignoring %s — messages will show again", n.callsign)
+		m.systemLine(fmt.Sprintf("unignore: %s — chat messages restored", n.callsign))
+	case "reboot":
+		// Sends AdminMessage_RebootSeconds(5) to our own radio. Some
+		// firmware needs a reboot for module-config writes to take
+		// effect; also a top-level "my radio is wedged" recovery.
+		// 5 seconds gives the radio time to flush queued ACKs +
+		// persist NodeDB before the restart.
 		if m.isDemo() {
-			header = "config [DEMO]"
+			m.flash = "/reboot: needs a real radio (demo mode)"
+			return nil
 		}
-		m.systemBlock(header, lines...)
-	case "info":
+		if m.pump == nil {
+			m.flash = "/reboot: needs a live radio connection"
+			return nil
+		}
+		envelope, err := newAdminReboot(m.myNodeNum, 5)
+		if err != nil {
+			m.flash = fmt.Sprintf("/reboot: build failed: %v", err)
+			return nil
+		}
+		if !m.pump.Enqueue(envelope) {
+			m.flash = "/reboot: dropped — outbound buffer full"
+			return nil
+		}
+		m.flash = "/reboot: radio will restart in 5s — meshx will reconnect automatically"
+		m.systemLine("reboot: AdminMessage sent — radio restarting in 5s")
+	case "info", "whoami":
 		// /info — dump meshx's current knowledge to the log so you
 		// can diagnose "why don't I have a name for this peer?"
 		// without external tooling. Shows our own identity, a
@@ -1076,18 +1711,96 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			"usage:   "+entry.usage,
 			"summary: "+entry.summary,
 		)
-	case "search", "find":
+	case "lastlog":
+		// /lastlog              — jump to the very last message
+		// /lastlog <call|text>  — jump to the last chat message FROM
+		//                          <call> (matches the from column,
+		//                          not body), or the last row whose
+		//                          body contains <text> if no sender
+		//                          matches. Substring + case-
+		//                          insensitive lookup, same loose
+		//                          match /whois uses.
+		// Closes any overlay, lands in nav mode on the located row.
+		if len(m.messages) == 0 {
+			m.flash = "/lastlog: log is empty"
+			return nil
+		}
+		m.overlay = overlayNone
+		m.focused = paneMessages
+		m.input.Blur()
+		idx := -1
 		if rest == "" {
-			m.flash = "usage: /search <pattern>"
+			idx = len(m.messages) - 1
+		} else {
+			needle := strings.ToLower(strings.TrimSpace(rest))
+			// First pass: prefer matches in the from column — that's
+			// what "the last message FROM gleep" means semantically.
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].status == "system" {
+					continue
+				}
+				if strings.Contains(strings.ToLower(m.messages[i].from), needle) {
+					idx = i
+					break
+				}
+			}
+			// Second pass: body match if no sender hit. Lets users
+			// /lastlog "morning" find the last message containing it.
+			if idx < 0 {
+				for i := len(m.messages) - 1; i >= 0; i-- {
+					if m.messages[i].status == "system" {
+						continue
+					}
+					if strings.Contains(strings.ToLower(m.messages[i].text), needle) {
+						idx = i
+						break
+					}
+				}
+			}
+		}
+		if idx < 0 {
+			m.flash = fmt.Sprintf("lastlog: no chat row matches %q", rest)
+			m.mode = modeNav
+			return nil
+		}
+		m.selectedMsg = idx
+		m.mode = modeNav
+		hit := m.messages[idx]
+		m.flash = fmt.Sprintf("lastlog: %s — %s", hit.time, hit.from)
+	case "search":
+		if rest == "" {
+			// Toggle behavior — clear an active query, otherwise
+			// hint at the syntax. "/search" with nothing was the
+			// only way to drop a stale query without going through
+			// nav-mode `/` then Esc; bind it here so the muscle-
+			// memory "type /search to manage search" works both
+			// directions.
+			if m.searchQuery != "" {
+				m.searchQuery = ""
+				m.flash = "search cleared"
+				return nil
+			}
+			m.flash = "usage: /search <pattern>  (press / in nav for live-filter)"
 			return nil
 		}
 		m.searchQuery = strings.ToLower(rest)
-		if ok, count := m.jumpToSearchHit(+1); ok {
-			m.flash = fmt.Sprintf("search: %d matches for %q", count, rest)
+		// Walk backward from the current selection — chat logs read
+		// newest-first, so /search should land on the MOST RECENT
+		// match (just-above-the-cursor or near-the-tail), not the
+		// oldest one. n/N still step in their bound directions, so
+		// once we're on the most-recent hit n walks further back
+		// through history and N walks forward toward newer matches.
+		if ok, count := m.jumpToSearchHit(-1); ok {
+			m.flash = fmt.Sprintf(
+				"search: %d matches for %q — n/N to step, /search to clear",
+				count,
+				rest,
+			)
 			m.mode = modeNav
 			m.input.Blur()
 		} else {
 			m.flash = fmt.Sprintf("no match for %q", rest)
+			m.searchQuery = ""
 		}
 	case "clear":
 		m.messages = nil

@@ -68,10 +68,6 @@ var helpEntries = map[string]helpEntry{
 		usage:   "/grid [locator]",
 		summary: "just the Maidenhead grid locator — shorter / more data-friendly than /qth",
 	},
-	"sked": {
-		usage:   "/sked <call>",
-		summary: "propose a scheduled contact with <call> ~24h out",
-	},
 	"qrz": {
 		usage:   "/qrz",
 		summary: "\"who is calling me?\" — broadcast a prompt for identification",
@@ -120,10 +116,8 @@ var helpEntries = map[string]helpEntry{
 	},
 	"tr": {
 		usage:   "/tr <call>",
-		summary: "traceroute from us to <call>; aliases: /traceroute, /trace",
+		summary: "traceroute from us to <call> — shows the mesh hop path; the only way to debug \"why is this peer 4 hops out\"",
 	},
-	"trace":      {usage: "/trace <call>", summary: "alias for /tr"},
-	"traceroute": {usage: "/traceroute <call>", summary: "alias for /tr"},
 	"whois": {
 		usage:   "/whois <call>",
 		summary: "dump node metadata for <call> — hw, fw, last-heard, signal, grid if published",
@@ -161,12 +155,55 @@ var helpEntries = map[string]helpEntry{
 	},
 	"search": {
 		usage:   "/search <pattern>",
-		summary: "live-search the message log; aliases: /find",
+		summary: "search the message log — case-insensitive substring match against from + body. Matching rows highlight with a dim-green background; press n to step to the next hit, N for the previous. Esc clears the search. /search alone with no pattern is a usage hint; press / in nav mode for the live-filter prompt instead",
 	},
-	"find": {usage: "/find <pattern>", summary: "alias for /search"},
 	"config": {
 		usage:   "/config",
-		summary: "dump the radio + identity configuration as a systemBlock",
+		summary: "open the interactive radio config panel — j/k walks, Enter edits (toggles bools or opens an inline string editor for longname / shortname), Ctrl+S commits the diff to the radio in one shot, Esc on a dirty panel prompts y/n. Separate from /mute (which silences only the meshX terminal ding)",
+	},
+	"mute": {
+		usage:   "/mute",
+		summary: "toggle the meshX terminal ding (BEL on incoming text). Persists across restarts. The radio's own buzzer is unaffected — for that, use /config → \"radio buzzer\"",
+	},
+	// /dingtest is intentionally NOT listed here. It's a hidden
+	// diagnostic that fires the BEL verification path. Available
+	// from the dispatcher; surfacing it in /help or completion
+	// would leak debug surface to normal users.
+	"me": {
+		usage:   "/me <action>",
+		summary: "IRC-style action — broadcasts \"* <action>\" on the current channel; receivers see it as your row with the leading \"* \" marker",
+	},
+	"version": {
+		usage:   "/version",
+		summary: "show meshX build identity (commit, build date) plus the connected radio's firmware version. Same data `meshx version` prints",
+	},
+	"ignore": {
+		usage:   "/ignore <call>",
+		summary: "hide chat messages from <call> in the messages pane (local-only filter, doesn't touch the wire). Use /unignore to drop the filter. Cleared on restart",
+	},
+	"unignore": {
+		usage:   "/unignore [call]",
+		summary: "remove <call> from the /ignore list. With no args, lists currently ignored callsigns",
+	},
+	"reboot": {
+		usage:   "/reboot",
+		summary: "send AdminMessage_RebootSeconds(5) to the radio — restarts in 5s. Useful when a module-config write needs a reboot or when the radio is wedged. meshx reconnects automatically",
+	},
+	"who": {
+		usage:   "/who",
+		summary: "alias for /nodes — IRC convention for \"show me the user list\"",
+	},
+	"whoami": {
+		usage:   "/whoami",
+		summary: "alias for /info — IRC convention for \"who am I?\"",
+	},
+	"list": {
+		usage:   "/list",
+		summary: "alias for /channels — IRC convention for \"show me the channels\"",
+	},
+	"lastlog": {
+		usage:   "/lastlog [call|text]",
+		summary: "with no args, jump to the most recent message (like vim G). With a callsign, jump to the last message FROM that peer; falls back to a body substring match if no sender hits",
 	},
 	"info": {
 		usage:   "/info",
@@ -174,16 +211,7 @@ var helpEntries = map[string]helpEntry{
 	},
 	"nick": {
 		usage:   "/nick <longname>",
-		summary: "set the radio's User.long_name (up to 36 bytes) via AdminMessage.SetOwner; no reboot required",
-	},
-	"callsign": {usage: "/callsign <name>", summary: "ham-idiomatic alias for /nick"},
-	"tag": {
-		usage:   "/tag <text-or-emoji>",
-		summary: "set the radio's User.short_name (up to 4 bytes; usually one emoji) via AdminMessage.SetOwner",
-	},
-	"emoji": {
-		usage:   "/emoji <x>",
-		summary: "alias for /tag (most people set shortname to an emoji)",
+		summary: "quick-access immediate-write of User.long_name via AdminMessage.SetOwner. No reboot. The canonical edit path for both longname and shortname (with draft + Ctrl+S) is /config — /nick stays as the fast inline rename muscle-memory expects",
 	},
 	"sync": {
 		usage:   "/sync",

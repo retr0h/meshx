@@ -23,58 +23,22 @@ package cmd
 import (
 	"fmt"
 
-	goversion "github.com/caarlos0/go-version"
 	"github.com/spf13/cobra"
+
+	"github.com/retr0h/meshx/internal/meshx"
 )
 
-// Build-time identity. Populated by goreleaser via -ldflags -X at
-// link time; left blank for `go run` / `go build` of a working
-// tree (caarlos0/go-version backfills "(devel)" defaults from
-// debug.ReadBuildInfo when the strings are empty).
-var (
-	version   = ""
-	commit    = ""
-	treeState = ""
-	date      = ""
-	builtBy   = ""
-)
-
-// buildVersion stitches the goreleaser ldflag values into a
-// goversion.Info — printed by `meshx version` in the same JSON
-// shape the rest of the retr0h tooling uses.
-func buildVersion(version, commit, date, builtBy, treeState string) goversion.Info {
-	return goversion.GetVersionInfo(
-		goversion.WithAppDetails(
-			"meshx",
-			"a glitched-out terminal Meshtastic messenger.\n",
-			"https://github.com/retr0h/meshx",
-		),
-		func(i *goversion.Info) {
-			if commit != "" {
-				i.GitCommit = commit
-			}
-			if treeState != "" {
-				i.GitTreeState = treeState
-			}
-			if date != "" {
-				i.BuildDate = date
-			}
-			if version != "" {
-				i.GitVersion = version
-			}
-			if builtBy != "" {
-				i.BuiltBy = builtBy
-			}
-		},
-	)
-}
-
+// versionCmd renders the build identity collected in
+// internal/meshx/version.go as the same JSON shape every retr0h
+// project's `<bin> version` produces. Implementation lives in
+// internal/meshx so the in-app /version slash command can share
+// the exact same source of truth — no ldflag-target duplication.
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Display the version of meshx",
 	Run: func(_ *cobra.Command, _ []string) {
-		v := buildVersion(version, commit, date, builtBy, treeState)
-		jsonOut, _ := v.JSONString()
+		info := meshx.BuildInfo()
+		jsonOut, _ := info.JSONString()
 		fmt.Println(jsonOut)
 	},
 }

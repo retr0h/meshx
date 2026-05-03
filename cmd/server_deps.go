@@ -22,6 +22,7 @@ package cmd
 
 import (
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -39,13 +40,16 @@ import (
 // peripherals don't pollute results.
 const meshtasticServiceUUID = "6ba1b218-15a8-461f-9fa8-5dcae273eafd"
 
-// serveDeps wires the optional server dependencies — sqlite store,
+// serverDeps wires the optional server dependencies — sqlite store,
 // BLE scanner, BLE pairer. Each can fail independently; the server
 // returns 503 from endpoints that need a missing dep so callers see
-// a real signal instead of silent breakage. Errors get logged to
-// stderr but don't abort serve startup.
-func serveDeps(cmd *cobra.Command) (server.Store, server.BLEScanner, server.BLEPairer) {
-	store := openStorage(cmd)
+// a real signal instead of silent breakage. Errors get logged but
+// don't abort daemon startup.
+func serverDeps(
+	cmd *cobra.Command,
+	log *slog.Logger,
+) (server.Store, server.BLEScanner, server.BLEPairer) {
+	store := openStorage(cmd, log)
 	scanner := bleScanner{}
 	pairer := blePairer{}
 	return store, scanner, pairer
@@ -53,19 +57,23 @@ func serveDeps(cmd *cobra.Command) (server.Store, server.BLEScanner, server.BLEP
 
 // openStorage opens the shared sqlite handle (~/.meshx/meshx.db),
 // running migrations as needed. Returns nil on failure with a
-// stderr warning — the daemon still serves read-only routes that
+// structured warning — the daemon still serves read-only routes that
 // don't need persistence.
-func openStorage(cmd *cobra.Command) server.Store {
+func openStorage(_ *cobra.Command, log *slog.Logger) server.Store {
 	path, err := storage.DefaultPath()
 	if err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "meshx: storage path: %v\n", err)
+		log.Warn("storage disabled: cannot resolve path", slog.Any("error", err))
 		return nil
 	}
 	s, err := storage.New(path)
 	if err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "meshx: open storage: %v\n", err)
+		log.Warn("storage disabled: open failed",
+			slog.String("path", path),
+			slog.Any("error", err),
+		)
 		return nil
 	}
+	log.Info("storage opened", slog.String("path", path))
 	return s
 }
 

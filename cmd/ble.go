@@ -21,8 +21,8 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sort"
 	"text/tabwriter"
@@ -30,7 +30,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/retr0h/meshx/internal/server"
-	"github.com/retr0h/meshx/internal/tui"
 )
 
 // bleCmd groups every Bluetooth LE operation. Pair once via
@@ -53,16 +52,17 @@ API for both this CLI and remote clients.`,
 }
 
 // localServer constructs an in-process server with the daemon's
-// dependencies. The HTTP listener is never started — cmd just calls
-// handler methods directly so CLI ops execute the same code path
-// the HTTP daemon does.
-func localServer(cmd *cobra.Command) *server.Server {
-	store, scanner, pairer := serveDeps(cmd)
+// dependencies typed as the narrow bleOps consumer interface. The HTTP
+// listener is never started — cmd calls handler methods directly so
+// CLI ops execute the same code path the HTTP daemon does.
+func localServer(cmd *cobra.Command) bleOps {
+	store, scanner, pairer := serverDeps(cmd, logger)
 	return server.New(server.Config{
 		Radios:  server.NewRegistry(),
 		Store:   store,
 		Scanner: scanner,
 		Pairer:  pairer,
+		Logger:  logger,
 	})
 }
 
@@ -73,6 +73,8 @@ var bleScanCmd = &cobra.Command{
 		"advertises the Meshtastic service uuid. The uuid shown here\n" +
 		"is what `meshx ble pair` accepts.",
 	RunE: func(c *cobra.Command, _ []string) error {
+		logger.With(slog.String("subsystem", "ble.scan")).
+			Debug("running", slog.Int("timeout_ms", 10000))
 		srv := localServer(c)
 		hits, err := srv.ScanBLE(c.Context(), 10000)
 		if err != nil {
@@ -119,8 +121,10 @@ macOS handles the 6-digit PIN through the system pairing dialog;
 Linux goes through the BlueZ agent.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(c *cobra.Command, args []string) error {
-		srv := localServer(c)
 		uuid := args[0]
+		logger.With(slog.String("subsystem", "ble.pair")).
+			Debug("running", slog.String("uuid", uuid))
+		srv := localServer(c)
 		fmt.Printf("pairing %s …\n", uuid)
 		fmt.Println("  if your OS pops a Bluetooth pair prompt, enter the PIN shown on the radio.")
 		if err := srv.PairBLE(c.Context(), uuid); err != nil {
@@ -139,6 +143,7 @@ var bleListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Show saved Bluetooth devices",
 	RunE: func(c *cobra.Command, _ []string) error {
+		logger.With(slog.String("subsystem", "ble.list")).Debug("running")
 		srv := localServer(c)
 		devs, err := srv.ListBLEDevices(c.Context())
 		if err != nil {
@@ -171,6 +176,8 @@ var bleForgetCmd = &cobra.Command{
 	Short: "Remove a saved Bluetooth device",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(c *cobra.Command, args []string) error {
+		logger.With(slog.String("subsystem", "ble.forget")).
+			Debug("running", slog.String("target", args[0]))
 		srv := localServer(c)
 		if err := srv.ForgetBLEDevice(c.Context(), args[0]); err != nil {
 			return err
@@ -185,12 +192,15 @@ var bleConnectCmd = &cobra.Command{
 	Short: "Open the TUI over Bluetooth",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(c *cobra.Command, args []string) error {
+		log := logger.With(slog.String("subsystem", "ble.connect"))
+		log.Debug("running", slog.String("target", args[0]))
 		srv := localServer(c)
 		uuid, err := srv.ResolveBLE(c.Context(), args[0])
 		if err != nil {
 			return err
 		}
-		return tui.RunRadio("ble:" + uuid)
+		log.Debug("resolved", slog.String("uuid", uuid))
+		return runRadio("ble:" + uuid)
 	},
 }
 
@@ -198,6 +208,7 @@ var bleDisconnectCmd = &cobra.Command{
 	Use:   "disconnect",
 	Short: "Clear the auto-connect favorite",
 	RunE: func(c *cobra.Command, _ []string) error {
+		logger.With(slog.String("subsystem", "ble.disconnect")).Debug("running")
 		srv := localServer(c)
 		return srv.ClearBLEFavorite(c.Context())
 	},
@@ -208,6 +219,8 @@ var bleFavCmd = &cobra.Command{
 	Short: "Mark a saved device as the bare-launch favorite",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(c *cobra.Command, args []string) error {
+		logger.With(slog.String("subsystem", "ble.fav")).
+			Debug("running", slog.String("target", args[0]))
 		srv := localServer(c)
 		view, err := srv.SetBLEFavoriteByName(c.Context(), args[0])
 		if err != nil {
@@ -224,9 +237,6 @@ func orDash(s string) string {
 	}
 	return s
 }
-
-// silence unused import linter — context is consumed via cobra.Cmd.Context.
-var _ = context.Background
 
 func init() {
 	bleCmd.AddCommand(bleScanCmd)

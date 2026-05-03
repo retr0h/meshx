@@ -292,13 +292,12 @@ type model struct {
 
 	// driver is the headless radio session layer — owns Pump (outbound
 	// + reconnect) and Store (persistence) along with the *driver.State
-	// the model embeds. Constructed by RunRadio and handed to the TUI.
-	// Nil-safe: demo mode leaves driver.Pump and driver.Store nil and
-	// the session runs in-memory. After MR-3.5c lands, apply* handlers
-	// will move onto driver methods so a future meshx serve daemon
-	// (MR-4) can reuse the same control flow without dragging Bubble
-	// Tea in.
-	driver *driver.Driver
+	// the model embeds. Typed as the narrow radioDriver interface
+	// (declared in tui/driver.go) so a test double or future in-process
+	// variant can satisfy it without the concrete *driver.Driver.
+	// Nil-safe: demo mode leaves PumpHandle and StoreHandle nil and
+	// the session runs in-memory.
+	driver radioDriver
 
 	// initialFocusCmd captures the tea.Cmd returned by
 	// textinput.Focus() in newModel — the bubbles cursor blink
@@ -375,11 +374,11 @@ type model struct {
 func RunRadio(dest string) error {
 	m := newModel(dest)
 	// Close the persistence handle when the tea loop exits. Nil-safe:
-	// if storage.New failed inside newModel, m.driver.Store is nil and the
-	// close is a no-op.
+	// if storage.New failed inside newModel, StoreHandle() is nil and
+	// the close is a no-op.
 	defer func() {
-		if m.driver.Store != nil {
-			_ = m.driver.Store.Close()
+		if st := m.driver.StoreHandle(); st != nil {
+			_ = st.Close()
 		}
 	}()
 	// Allocate the program slot BEFORE handing the model to NewProgram —
@@ -530,7 +529,7 @@ func newModel(dest string) model {
 		// the model only ever sees the consumer-facing surface.
 		if sqliteStore, err := storage.New(path); err == nil {
 			var store driver.Store = sqliteStore
-			m.driver.Store = store
+			m.driver.AttachStore(store)
 			// Bind this session to a radio identity before any
 			// storage call references radioID. ResolveRadioByConnection
 			// returns the canonical "0xNNNNNNNN" form for radios
@@ -829,16 +828,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = m.reconnectFlashText()
 		m.flashSeen = m.flash
 		m.flashSeenAt = time.Now()
-		// Concrete *pump.Pump cast to the local Pump interface at the
+		// Concrete *pump.Pump cast to the Pump interface at the
 		// construction site (osapi-io). The compile-time assertion
 		// here catches any drift the moment the interface gains a
 		// method *pump.Pump doesn't implement.
 		var p driver.Pump = pump.New(msg.dest, m.programSlot.p)
-		m.driver.Pump = p
+		m.driver.AttachPump(p)
 		return m, nil
 
 	case pumpAttachedMsg:
-		m.driver.Pump = msg.p
+		m.driver.AttachPump(msg.p)
 		return m, nil
 
 	case mdl.MyInfo:
@@ -853,8 +852,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (messages, nodes, settings) in one transaction. Already-
 		// canonical IDs (we've handshaken with this radio before)
 		// just refresh my_node_num + last_seen.
-		if m.driver.Store != nil {
-			if newID, err := m.driver.Store.ClaimRadioIdentity(m.RadioID, msg.NodeNum); err == nil {
+		if st := m.driver.StoreHandle(); st != nil {
+			if newID, err := st.ClaimRadioIdentity(m.RadioID, msg.NodeNum); err == nil {
 				m.RadioID = newID
 			} else {
 				m.storagePersist(err)
@@ -943,8 +942,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.RadioBuzzerEnabled {
 			v = "on"
 		}
-		if m.driver.Store != nil {
-			m.storagePersist(m.driver.Store.PutSetting(m.RadioID, "radio_buzzer", v))
+		if st := m.driver.StoreHandle(); st != nil {
+			m.storagePersist(st.PutSetting(m.RadioID, "radio_buzzer", v))
 		}
 		return m, nil
 
@@ -1088,8 +1087,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// FromRadio_ModuleConfig and routes through the same
 		// mdl.ModuleBuzzer handler. Skipped if we already know
 		// the state (the dump did contain it).
-		if !m.RadioBuzzerKnown && m.driver.Pump != nil {
-			m.driver.Pump.Send(mdl.RequestBuzzerConfig{})
+		if !m.RadioBuzzerKnown && m.driver.PumpHandle() != nil {
+			m.driver.Send(mdl.RequestBuzzerConfig{})
 		}
 		return m, nil
 

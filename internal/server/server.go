@@ -47,7 +47,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -64,6 +66,11 @@ type Config struct {
 	Store   Store
 	Scanner BLEScanner
 	Pairer  BLEPairer
+
+	// Logger is the slog handle every middleware (request log, panic
+	// recovery, future audit) emits through. Nil falls back to a
+	// stderr text handler so tests don't have to wire one up.
+	Logger *slog.Logger
 }
 
 // Server is the HTTP+SSE daemon that multiplexes one or more radios
@@ -76,6 +83,7 @@ type Server struct {
 	pairer  BLEPairer
 	http    *http.Server
 	api     huma.API
+	logger  *slog.Logger
 }
 
 // New wires a Server around the given Config. The Registry is
@@ -88,8 +96,18 @@ func New(cfg Config) *Server {
 	if cfg.Radios == nil {
 		cfg.Radios = NewRegistry()
 	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
+	}
 	mux := http.NewServeMux()
 	hc := huma.DefaultConfig("meshx", "0.1.0")
+	// Huma emits 3.1 by default and a downgraded 3.0 spec at
+	// /openapi-3.0.{json,yaml}. oapi-codegen still needs 3.0
+	// (see oapi-codegen #373) so the SDK regen pulls from the 3.0
+	// path. Don't pin OpenAPI.OpenAPI = "3.0.x" here — that flips
+	// the version field but leaves 3.1-only schema constructs
+	// (examples-as-array, type: [..,null]) intact and produces an
+	// internally inconsistent spec.
 	hc.Info.Description = "meshx mesh-radio HTTP API — channels, nodes, messages, transports, and live events from one or more Meshtastic-compatible LoRa radios. Radio-scoped resources live under /radios/{radio_id}/…; transport-management endpoints under /transports/…"
 	api := humago.New(mux, hc)
 
@@ -99,6 +117,7 @@ func New(cfg Config) *Server {
 		scanner: cfg.Scanner,
 		pairer:  cfg.Pairer,
 		api:     api,
+		logger:  cfg.Logger.With(slog.String("subsystem", "http")),
 		http: &http.Server{
 			Handler: mux,
 			// ReadHeaderTimeout protects against slowloris-style attacks;
@@ -107,6 +126,7 @@ func New(cfg Config) *Server {
 			ReadHeaderTimeout: 10 * time.Second,
 		},
 	}
+	s.registerMiddleware()
 	s.registerRoutes()
 	return s
 }

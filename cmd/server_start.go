@@ -28,18 +28,14 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"github.com/retr0h/meshx/internal/driver"
 	"github.com/retr0h/meshx/internal/server"
 )
 
-var (
-	serveBind  string
-	serveRadio string
-)
-
-// serveStartCmd boots the daemon — runs the HTTP+SSE server without
-// the TUI. The architecture treats `meshx serve start` as the
+// serverStartCmd boots the daemon — runs the HTTP+SSE server without
+// the TUI. The architecture treats `meshx server start` as the
 // canonical "headless" deployment: a long-running process that owns
 // the radio transport, exposes the API, and lets remote clients
 // connect over HTTP.
@@ -48,38 +44,50 @@ var (
 //	                          ├─ driver (state + apply* + send) ─┐
 //	                          │                                  ├─ server (HTTP+SSE) ──→ clients
 //	                          └──────── storage (SQLite) ────────┘
-var serveStartCmd = &cobra.Command{
+var serverStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the meshx daemon",
 	Long: `Start the meshx daemon — exposes channels, nodes, messages, and
 live events over HTTP+SSE. Generated OpenAPI spec at /openapi.json.
 
-  meshx serve start                          # bind :8080, no radio attached
-  meshx serve start --bind :3000             # custom listener address
-  meshx serve start --radio /dev/cu.usb…     # attach a radio over USB
-  meshx serve start --radio host:4403        # attach over TCP (meshtasticd)
-  meshx serve start --radio ble:<uuid>       # attach over Bluetooth LE`,
-	RunE: runServeStart,
+  meshx server start                          # bind 127.0.0.1:4404
+  meshx server start --bind :4404             # listen on all interfaces
+  meshx server start --radio /dev/cu.usb…     # attach a radio over USB
+  meshx server start --radio host:4403        # attach over TCP (meshtasticd)
+  meshx server start --radio ble:<uuid>       # attach over Bluetooth LE
+
+Every flag here is also overridable via env (MESHX_SERVER_BIND,
+MESHX_SERVER_RADIO).`,
+	RunE: runServerStart,
 }
 
 func init() {
-	serveStartCmd.Flags().StringVar(
-		&serveBind,
+	serverStartCmd.Flags().String(
 		"bind",
-		":8080",
+		"127.0.0.1:4404",
 		"HTTP listener address (host:port; empty host = all interfaces)",
 	)
-	serveStartCmd.Flags().StringVar(
-		&serveRadio,
+	serverStartCmd.Flags().String(
 		"radio",
 		"",
 		"transport target for the radio: /dev/cu.usb… | host:port | ble:<uuid>. Empty = serve with no radio attached.",
 	)
-	serveCmd.AddCommand(serveStartCmd)
+	_ = viper.BindPFlag("server.bind", serverStartCmd.Flags().Lookup("bind"))
+	_ = viper.BindPFlag("server.radio", serverStartCmd.Flags().Lookup("radio"))
+
+	serverCmd.AddCommand(serverStartCmd)
 }
 
-func runServeStart(cmd *cobra.Command, _ []string) error {
-	slog.Info("starting meshx daemon", "bind", serveBind, "radio", serveRadio)
+func runServerStart(cmd *cobra.Command, _ []string) error {
+	bind := viper.GetString("server.bind")
+	radio := viper.GetString("server.radio")
+
+	log := logger.With(slog.String("subsystem", "server"))
+	log.Info("config",
+		slog.String("bind", bind),
+		slog.String("radio", radio),
+		slog.Bool("debug", viper.GetBool("debug")),
+	)
 
 	ctx, cancel := signal.NotifyContext(
 		cmd.Context(),
@@ -90,34 +98,34 @@ func runServeStart(cmd *cobra.Command, _ []string) error {
 
 	radios := server.NewRegistry()
 
-	if serveRadio != "" {
+	if radio != "" {
 		drv := driver.New(nil, nil, nil)
-		pendingID := "pending:" + serveRadio
-		drv.State.ConnectDest = serveRadio
+		pendingID := "pending:" + radio
+		drv.State.ConnectDest = radio
 		drv.State.RadioID = pendingID
 		radios.Add(pendingID, drv)
-		_, _ = fmt.Fprintf(
-			cmd.ErrOrStderr(),
-			"meshx serve: registered radio %q under id %q (transport attach pending)\n",
-			serveRadio, pendingID,
+		log.Info("radio registered (transport attach pending)",
+			slog.String("radio_id", pendingID),
+			slog.String("dest", radio),
 		)
 	}
 
-	store, scanner, pairer := serveDeps(cmd)
+	store, scanner, pairer := serverDeps(cmd, log)
 	var srv daemonRunner = server.New(server.Config{
 		Radios:  radios,
 		Store:   store,
 		Scanner: scanner,
 		Pairer:  pairer,
+		Logger:  logger,
 	})
 
-	_, _ = fmt.Fprintf(
-		cmd.OutOrStdout(),
-		"meshx serve: listening on %s (OpenAPI: http://localhost%s/openapi.json)\n",
-		serveBind, serveBind,
+	log.Info("listening",
+		slog.String("bind", bind),
+		slog.String("openapi", "http://"+bind+"/openapi.json"),
+		slog.String("docs", "http://"+bind+"/docs"),
 	)
 
-	if err := srv.Run(ctx, serveBind); err != nil {
+	if err := srv.Run(ctx, bind); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
 	if err := ctx.Err(); err != nil && err != context.Canceled {

@@ -99,3 +99,42 @@ func (d *Driver) Session() *State {
 	}
 	return d.State
 }
+
+// AttachPump sets the pump handle. Called by the TUI once the tea
+// program is running and the transport has been dialed.
+func (d *Driver) AttachPump(p Pump) {
+	if d == nil {
+		return
+	}
+	d.Pump = p
+}
+
+// AttachStore sets the storage handle. Called by newModel after
+// storage.New succeeds.
+func (d *Driver) AttachStore(s Store) {
+	if d == nil {
+		return
+	}
+	d.Store = s
+}
+
+// PumpHandle returns the current Pump, which may be nil (demo mode or
+// pre-connection). Consumers that need direct Pump access during the
+// transition can call this; future follow-ups will replace these call
+// sites with higher-level methods on Driver.
+func (d *Driver) PumpHandle() Pump {
+	if d == nil {
+		return nil
+	}
+	return d.Pump
+}
+
+// StoreHandle returns the current Store, which may be nil (in-memory
+// mode). Consumers that need direct Store access during the transition
+// call this; future follow-ups will replace these with driver methods.
+func (d *Driver) StoreHandle() Store {
+	if d == nil {
+		return nil
+	}
+	return d.Store
+}

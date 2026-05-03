@@ -22,10 +22,10 @@ package cmd
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/retr0h/meshx/internal/meshx/transport"
-	"github.com/retr0h/meshx/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -58,6 +58,8 @@ var usbConnectCmd = &cobra.Command{
 		if len(args) == 1 {
 			dest = args[0]
 		}
+		log := logger.With(slog.String("subsystem", "usb.connect"))
+		log.Debug("running", slog.String("device", dest))
 		if dest == "" {
 			auto, err := transport.AutoDetectMeshtastic(1500 * time.Millisecond)
 			if err != nil {
@@ -67,8 +69,9 @@ var usbConnectCmd = &cobra.Command{
 				)
 			}
 			dest = auto
+			log.Debug("auto-detected", slog.String("device", dest))
 		}
-		return tui.RunRadio(dest)
+		return runRadio(dest)
 	},
 }
 

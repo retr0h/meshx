@@ -36,19 +36,19 @@ type daemonRunner interface {
 	Run(ctx context.Context, addr string) error
 }
 
-// serveCmd is the parent for every daemon operation.
+// serverCmd is the parent for every daemon operation.
 // Subcommands: start.
-var serveCmd = &cobra.Command{
-	Use:   "serve",
+var serverCmd = &cobra.Command{
+	Use:   "server",
 	Short: "Run the meshx HTTP+SSE daemon (headless)",
 	Long: `Commands for running the meshx daemon — exposes channels, nodes,
 messages, and live events over HTTP+SSE.
 
-  meshx serve start                       # bind :8080, no radio attached
-  meshx serve start --bind :3000          # custom listener address
-  meshx serve start --radio /dev/cu.usb…  # attach a radio over USB`,
+  meshx server start                       # bind 127.0.0.1:4404, no radio attached
+  meshx server start --bind :4404          # listen on all interfaces
+  meshx server start --radio /dev/cu.usb…  # attach a radio over USB`,
 }
 
 func init() {
-	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(serverCmd)
 }

@@ -72,8 +72,8 @@ func (m *model) sendPlainMessage(text string) {
 // `*` bang flag.
 func (m *model) sendPlainReply(text string, replyToID uint32) {
 	var pid uint32
-	if m.driver.Pump != nil {
-		pid, _ = m.driver.Pump.Send(mdl.SendText{
+	if m.driver.PumpHandle() != nil {
+		pid, _ = m.driver.Send(mdl.SendText{
 			Channel: int(m.currentChannelIndex()),
 			Text:    text,
 			ReplyID: replyToID,
@@ -90,8 +90,8 @@ func (m *model) sendPlainReply(text string, replyToID uint32) {
 	m.selectedMsg = len(m.Messages) - 1
 	m.flash = fmt.Sprintf("sent in %s", m.CurrentChannel)
 
-	if m.driver.Store != nil {
-		m.storagePersist(m.driver.Store.SaveMessage(m.RadioID, m.CurrentChannel, item.Message))
+	if st := m.driver.StoreHandle(); st != nil {
+		m.storagePersist(st.SaveMessage(m.RadioID, m.CurrentChannel, item.Message))
 	}
 }
 
@@ -103,7 +103,7 @@ func (m *model) sendPlainReply(text string, replyToID uint32) {
 // Called by /nick and /tag. Returns a tea.Cmd for consistency with
 // the dispatcher's expected shape; today it's always nil.
 func (m *model) setOwner(longName, shortName, which string) tea.Cmd {
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/" + which + "name needs a live radio connection"
 		return nil
 	}
@@ -145,7 +145,7 @@ func (m *model) setOwner(longName, shortName, which string) tea.Cmd {
 		// stays however the user configured it via the phone app.
 		_ = n
 	}
-	if _, ok := m.driver.Pump.Send(mdl.SetOwner{
+	if _, ok := m.driver.Send(mdl.SetOwner{
 		LongName:   longName,
 		ShortName:  shortName,
 		IsLicensed: isLicensed,
@@ -235,7 +235,7 @@ func bareChannelName(s string) string {
 // scanning this can see the screen and only that person" reminder so
 // users don't routinely paste the URL into group chats.
 func (m *model) channelShare(typed string) tea.Cmd {
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/channel share needs a live radio connection"
 		return nil
 	}
@@ -296,7 +296,7 @@ func (m *model) channelShare(typed string) tea.Cmd {
 // reading the raw PSK bytes aloud. Same convention SSH uses for host
 // key fingerprints.
 func (m *model) channelNew(name string) tea.Cmd {
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/channel new needs a live radio connection"
 		return nil
 	}
@@ -338,7 +338,7 @@ func (m *model) channelNew(name string) tea.Cmd {
 		m.flash = fmt.Sprintf("/channel new: %v", err)
 		return nil
 	}
-	if _, ok := m.driver.Pump.Send(mdl.SetChannel{
+	if _, ok := m.driver.Send(mdl.SetChannel{
 		Slot: mdl.ChannelInfo{
 			Index:  slot,
 			Name:   name,
@@ -407,7 +407,7 @@ func randUint32() (uint32, error) {
 // is fundamentally a local-state edit. If we ever ship /channel
 // backup, we can add a "deleted N channels" undo window.
 func (m *model) channelDel(typed string) tea.Cmd {
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/channel del needs a live radio connection"
 		return nil
 	}
@@ -420,7 +420,7 @@ func (m *model) channelDel(typed string) tea.Cmd {
 		m.flash = "/channel del: cannot delete the primary channel — use /config to rename"
 		return nil
 	}
-	if _, ok := m.driver.Pump.Send(mdl.DeleteChannel{Index: idx}); !ok {
+	if _, ok := m.driver.Send(mdl.DeleteChannel{Index: idx}); !ok {
 		m.flash = "/channel del dropped — outbound buffer full"
 		return nil
 	}
@@ -455,7 +455,7 @@ func (m *model) channelDel(typed string) tea.Cmd {
 // into slot 0 (PRIMARY) so a malformed share link can't nuke the
 // user's primary channel.
 func (m *model) channelAdd(rawURL string) tea.Cmd {
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/channel add needs a live radio connection"
 		return nil
 	}
@@ -493,7 +493,7 @@ func (m *model) channelAdd(rawURL string) tea.Cmd {
 		// Place the imported channel into the next free slot. The model
 		// already carries Role=Secondary, ID, PSK from the share URL.
 		s.Index = slot
-		if _, ok := m.driver.Pump.Send(mdl.SetChannel{Slot: s}); !ok {
+		if _, ok := m.driver.Send(mdl.SetChannel{Slot: s}); !ok {
 			summary = append(summary, fmt.Sprintf("fail: %q — outbound buffer full", name))
 			skipped++
 			continue
@@ -599,7 +599,7 @@ func (m model) configDraftDirty() bool {
 // touching the wire — same caps setOwner enforces — so a bad longname
 // rejects in-panel without the radio seeing it.
 func (m *model) commitConfigDraft() int {
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/config: save needs a live radio connection"
 		return 0
 	}
@@ -621,7 +621,7 @@ func (m *model) commitConfigDraft() int {
 	// fields; firmware overwrites the whole User record, so we round-
 	// trip both even if only one changed. Same path /nick uses.
 	if m.cfgDraft.longName != m.myCallsign() || m.cfgDraft.shortName != m.myShortName() {
-		if _, ok := m.driver.Pump.Send(mdl.SetOwner{
+		if _, ok := m.driver.Send(mdl.SetOwner{
 			LongName:  m.cfgDraft.longName,
 			ShortName: m.cfgDraft.shortName,
 		}); !ok {
@@ -632,7 +632,7 @@ func (m *model) commitConfigDraft() int {
 	}
 	// Radio buzzer — separate AdminMessage path (SetModuleConfig).
 	if m.cfgDraft.buzzer != m.RadioBuzzerEnabled {
-		if _, ok := m.driver.Pump.Send(mdl.SetBuzzer{
+		if _, ok := m.driver.Send(mdl.SetBuzzer{
 			Enabled:  m.cfgDraft.buzzer,
 			Snapshot: m.RadioBuzzerSnapshot,
 		}); !ok {
@@ -644,8 +644,8 @@ func (m *model) commitConfigDraft() int {
 		if !m.cfgDraft.buzzer {
 			v = "off"
 		}
-		if m.driver.Store != nil {
-			m.storagePersist(m.driver.Store.PutSetting(m.RadioID, "radio_buzzer", v))
+		if st := m.driver.StoreHandle(); st != nil {
+			m.storagePersist(st.PutSetting(m.RadioID, "radio_buzzer", v))
 		}
 		changes++
 	}
@@ -878,11 +878,10 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "notice unpinned — timer resumed"
 		}
 
-	// ── Ham-radio bang shortcuts ──────────────────────────────────
-	// These are quick-command shorthands that compose and send the
-	// underlying !bang message. Geeky, fast, and keeps the protocol
-	// payload visible as normal message text so every other
-	// Meshtastic client sees it as plain chat.
+	// Ham-radio bang shortcuts — quick-command shorthands that compose
+	// and send the underlying !bang message. Keeps the protocol payload
+	// visible as normal message text so every other Meshtastic client
+	// sees it as plain chat.
 
 	case "cq":
 		// Ham-customary "via <rig/app>" suffix on the beacon so
@@ -1021,7 +1020,6 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		lines = append(lines, fmt.Sprintf("age:      %s ago", humanDuration(time.Since(env.At))))
 		m.systemBlock(fmt.Sprintf("env %s", n.Callsign), lines...)
 
-	// ── Extra ham/Meshtastic slang ────────────────────────────────
 	case "qrz":
 		// "Who is calling me?" — broadcast a prompt for identification.
 		m.sendBang("/qrz", "QRZ? who's calling?")
@@ -1122,7 +1120,6 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.sendBangReply("/k "+target, "K — over, go ahead", m.replyTargetFor(target))
 		m.flash = fmt.Sprintf("!k %s — over to you", target)
 
-	// ── IRC-style operational commands ────────────────────────────
 	case "tr":
 		target := rest
 		if target == "" {
@@ -1139,7 +1136,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		// No live wire traffic possible when the pump isn't up yet;
 		// fall back to cached telemetry with a clear "no live path" tag.
-		if m.driver.Pump == nil {
+		if m.driver.PumpHandle() == nil {
 			m.systemBlock(
 				fmt.Sprintf("traceroute %s", n.Callsign),
 				fmt.Sprintf("hops:   %d (cached)", n.LastHops),
@@ -1165,7 +1162,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			)
 			return nil
 		}
-		pid, ok := m.driver.Pump.Send(mdl.SendTraceroute{TargetNum: n.NodeNum})
+		pid, ok := m.driver.Send(mdl.SendTraceroute{TargetNum: n.NodeNum})
 		if !ok {
 			m.flash = "tr: dropped — outbound buffer full"
 			return nil
@@ -1208,7 +1205,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		// Offline fall back to cached telemetry.
-		if m.driver.Pump == nil {
+		if m.driver.PumpHandle() == nil {
 			lines := []string{
 				fmt.Sprintf("last heard: %s ago (cached)", nodeLastHeard(n)),
 				fmt.Sprintf("signal:     %s", signalReport(n)),
@@ -1234,7 +1231,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			)
 			return nil
 		}
-		pid, ok := m.driver.Pump.Send(mdl.SendPing{TargetNum: n.NodeNum})
+		pid, ok := m.driver.Send(mdl.SendPing{TargetNum: n.NodeNum})
 		if !ok {
 			m.flash = "ping: dropped — outbound buffer full"
 			return nil
@@ -1611,8 +1608,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// ding_muted is a meshx-CLIENT preference (terminal beep), not
 		// a per-radio knob — pass "" for radioID so it lives once
 		// globally rather than once per radio in the settings table.
-		if m.driver.Store != nil {
-			m.storagePersist(m.driver.Store.PutSetting("", "ding_muted", v))
+		if st := m.driver.StoreHandle(); st != nil {
+			m.storagePersist(st.PutSetting("", "ding_muted", v))
 		}
 		if m.DingMuted {
 			m.flash = "/mute on — terminal ding silenced"
@@ -1698,11 +1695,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.systemLine(fmt.Sprintf("unignore: %s — chat messages restored", n.Callsign))
 	case "reboot":
 		// Sends AdminMessage_RebootSeconds(5) to our own radio.
-		if m.driver.Pump == nil {
+		if m.driver.PumpHandle() == nil {
 			m.flash = "/reboot: needs a live radio connection"
 			return nil
 		}
-		if _, ok := m.driver.Pump.Send(mdl.Reboot{Seconds: 5}); !ok {
+		if _, ok := m.driver.Send(mdl.Reboot{Seconds: 5}); !ok {
 			m.flash = "/reboot: dropped — outbound buffer full"
 			return nil
 		}
@@ -1774,11 +1771,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// cache is stale, or after the radio just resolved a peer
 		// you want surfaced without waiting for the next organic
 		// NODEINFO_APP broadcast.
-		if m.driver.Pump == nil {
+		if m.driver.PumpHandle() == nil {
 			m.flash = "/sync needs a live radio connection (demo mode)"
 			return nil
 		}
-		if _, ok := m.driver.Pump.Send(mdl.RequestSync{}); !ok {
+		if _, ok := m.driver.Send(mdl.RequestSync{}); !ok {
 			m.flash = "/sync dropped — outbound buffer full"
 			return nil
 		}
@@ -1950,8 +1947,8 @@ func (m *model) sendBang(bang, body string) {
 func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	status := mdl.StatusPending // flipped by mdl.Routing handler
 	var pid uint32
-	if m.driver.Pump != nil {
-		pid, _ = m.driver.Pump.Send(mdl.SendText{
+	if m.driver.PumpHandle() != nil {
+		pid, _ = m.driver.Send(mdl.SendText{
 			Channel: int(m.currentChannelIndex()),
 			Text:    body,
 			ReplyID: replyToID,
@@ -1974,9 +1971,9 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	m.focused = paneMessages
 
 	// Persist the outgoing so the log survives restart. Skipped in
-	// demo mode (m.db is always nil there).
-	if m.driver.Store != nil {
-		m.storagePersist(m.driver.Store.SaveMessage(m.RadioID, m.CurrentChannel, item.Message))
+	// demo mode (store is nil there).
+	if st := m.driver.StoreHandle(); st != nil {
+		m.storagePersist(st.SaveMessage(m.RadioID, m.CurrentChannel, item.Message))
 	}
 }
 

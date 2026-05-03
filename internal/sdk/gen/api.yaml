@@ -1,0 +1,934 @@
+components:
+  schemas:
+    BLEDeviceView:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/BLEDeviceView.json
+          format: uri
+          readOnly: true
+          type: string
+        favorite:
+          type: boolean
+        hw_model:
+          type: string
+        long_name:
+          type: string
+        short_name:
+          type: string
+        uuid:
+          type: string
+      required:
+        - uuid
+        - favorite
+      type: object
+    BLESighting:
+      additionalProperties: false
+      properties:
+        local_name:
+          description: name advertised by the radio; empty when unset
+          type: string
+        rssi:
+          description: signal strength in dBm; closer to zero = stronger
+          format: int32
+          type: integer
+        uuid:
+          description: peripheral identifier — pass to /transports/ble/devices to pair
+          type: string
+      required:
+        - uuid
+        - local_name
+        - rssi
+      type: object
+    ChannelItem:
+      additionalProperties: false
+      properties:
+        has_psk:
+          description: true when this slot is encrypted (computed from PSK presence)
+          type: boolean
+        index:
+          description: radio slot 0..7
+          format: int64
+          type: integer
+        name:
+          description: channel display name; empty for the unnamed primary
+          type: string
+        private:
+          description: true when the channel uses a non-default PSK
+          type: boolean
+        role:
+          description: PRIMARY | SECONDARY | DISABLED
+          type: string
+        unread:
+          description: unread message count for the tab badge
+          format: int64
+          type: integer
+      required:
+        - name
+        - private
+        - unread
+        - index
+        - role
+        - has_psk
+      type: object
+    ErrorDetail:
+      additionalProperties: false
+      properties:
+        location:
+          description: Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'
+          type: string
+        message:
+          description: Error message text
+          type: string
+        value:
+          description: The value at the given location
+      type: object
+    ErrorModel:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ErrorModel.json
+          format: uri
+          readOnly: true
+          type: string
+        detail:
+          description: A human-readable explanation specific to this occurrence of the problem.
+          example: Property foo is required but is missing.
+          type: string
+        errors:
+          description: Optional list of individual error details
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          nullable: true
+          type: array
+        instance:
+          description: A URI reference that identifies the specific occurrence of the problem.
+          example: https://example.com/error-log/abc123
+          format: uri
+          type: string
+        status:
+          description: HTTP status code
+          example: 400
+          format: int64
+          type: integer
+        title:
+          description: A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
+          example: Bad Request
+          type: string
+        type:
+          default: about:blank
+          description: A URI reference to human-readable documentation for the error.
+          example: https://example.com/errors/example
+          format: uri
+          type: string
+      type: object
+    EventsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/EventsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        status:
+          type: string
+      required:
+        - status
+      type: object
+    HealthOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/HealthOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        status:
+          description: always 'ok' when the server is responsive
+          type: string
+      required:
+        - status
+      type: object
+    ListBLEDevicesOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListBLEDevicesOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        devices:
+          items:
+            $ref: "#/components/schemas/BLEDeviceView"
+          nullable: true
+          type: array
+      required:
+        - devices
+      type: object
+    ListChannelsOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListChannelsOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        channels:
+          items:
+            $ref: "#/components/schemas/ChannelItem"
+          nullable: true
+          type: array
+      required:
+        - channels
+      type: object
+    ListMessagesOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListMessagesOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        messages:
+          items:
+            $ref: "#/components/schemas/MessageItem"
+          nullable: true
+          type: array
+      required:
+        - messages
+      type: object
+    ListNodesOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListNodesOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        nodes:
+          items:
+            $ref: "#/components/schemas/NodeItem"
+          nullable: true
+          type: array
+      required:
+        - nodes
+      type: object
+    ListRadiosOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ListRadiosOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        radios:
+          items:
+            $ref: "#/components/schemas/RadioSummary"
+          nullable: true
+          type: array
+      required:
+        - radios
+      type: object
+    MessageItem:
+      additionalProperties: false
+      properties:
+        acks:
+          description: child line ('↳ 3 acks — ...') under outgoing messages
+          type: string
+        bang:
+          description: leading verb for ham-bang messages
+          type: string
+        corrupted:
+          description: sanitization replaced/dropped bytes
+          type: boolean
+        expire_at:
+          description: reap deadline for TTL-expiring notices
+          format: date-time
+          type: string
+        from:
+          description: sender callsign at receive time
+          type: string
+        from_num:
+          description: sender node num
+          format: int32
+          minimum: 0
+          type: integer
+        group:
+          description: binds rows as one logical block for multi-line replies
+          format: int64
+          minimum: 0
+          type: integer
+        hops:
+          description: mesh hop count; 0 = direct
+          format: int64
+          type: integer
+        mine:
+          description: true when local user composed this row
+          type: boolean
+        packet_id:
+          description: MeshPacket.id; 0 for system / demo rows
+          format: int32
+          minimum: 0
+          type: integer
+        pinned:
+          description: user paused this row's TTL
+          type: boolean
+        reply_id:
+          description: PacketID this message answers
+          format: int32
+          minimum: 0
+          type: integer
+        sent_at:
+          description: absolute time of receive / persist
+          format: date-time
+          type: string
+        snr:
+          description: signal-to-noise ratio at receive
+          type: string
+        status:
+          description: ok | ack | pending | fail | system | notice
+          format: int64
+          type: integer
+        text:
+          description: message body, post-sanitization
+          type: string
+        time:
+          description: display timestamp like '09:47'
+          type: string
+        to_num:
+          description: addressee node num; 0xFFFFFFFF = broadcast
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - time
+        - from
+        - text
+        - mine
+        - status
+        - hops
+        - packet_id
+        - from_num
+        - to_num
+        - sent_at
+      type: object
+    NodeItem:
+      additionalProperties: false
+      properties:
+        callsign:
+          description: long-form callsign as set on the radio
+          type: string
+        fav:
+          description: user marked this peer with *
+          type: boolean
+        firmware:
+          description: firmware version string
+          type: string
+        heard_rank:
+          description: sort stability — lower = more recent
+          format: int64
+          type: integer
+        hw_model:
+          description: e.g. T-Beam v1.1, HELTEC_V3
+          type: string
+        last_heard:
+          description: display string ('2m', '14:02', '3h')
+          type: string
+        last_heard_at:
+          description: absolute time of last decoded packet
+          format: date-time
+          type: string
+        last_hops:
+          description: hop count of last received packet (0 = direct)
+          format: int64
+          type: integer
+        last_rssi:
+          description: most recent RSSI (dBm), e.g. -92
+          type: string
+        last_snr:
+          description: most recent SNR (dB), e.g. -8.5
+          type: string
+        node_num:
+          description: radio identity, derived from MAC
+          format: int32
+          minimum: 0
+          type: integer
+        short_name:
+          description: 4-char badge
+          type: string
+        state:
+          description: online | offline | failed | muted | (empty for unknown)
+          format: int64
+          type: integer
+        unresolved:
+          description: identity is a synthesized placeholder; no NodeInfo yet
+          type: boolean
+      required:
+        - callsign
+        - short_name
+        - node_num
+        - unresolved
+        - state
+        - fav
+        - last_heard
+        - last_heard_at
+        - heard_rank
+        - last_snr
+        - last_rssi
+        - last_hops
+        - hw_model
+        - firmware
+      type: object
+    PairBLEInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/PairBLEInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        uuid:
+          description: peripheral identifier from a /transports/ble/scan result
+          minLength: 1
+          type: string
+      required:
+        - uuid
+      type: object
+    RadioSummary:
+      additionalProperties: false
+      properties:
+        connect_dest:
+          description: transport target string (/dev/cu.*, host:port, ble:<uuid>)
+          type: string
+        connected:
+          description: true once ConfigComplete has fired
+          type: boolean
+        my_node_num:
+          description: radio's own node num; zero before MyInfo arrives
+          format: int32
+          minimum: 0
+          type: integer
+        radio_id:
+          description: canonical radio identifier — 0x<hex node_num> post-handshake, pending:<transport>:<addr> beforehand
+          type: string
+      required:
+        - radio_id
+        - my_node_num
+        - connected
+        - connect_dest
+      type: object
+    ScanBLEInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ScanBLEInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        timeout_ms:
+          description: scan duration in milliseconds; default 10000
+          format: int64
+          type: integer
+      type: object
+    ScanBLEOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ScanBLEOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        devices:
+          items:
+            $ref: "#/components/schemas/BLESighting"
+          nullable: true
+          type: array
+      required:
+        - devices
+      type: object
+    SendMessageRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/SendMessageRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        channel:
+          description: target channel slot index (0..7); the current channel's slot is the default
+          format: int64
+          type: integer
+        reply_id:
+          description: PacketID this message replies to
+          format: int32
+          minimum: 0
+          type: integer
+        text:
+          description: message body
+          minLength: 1
+          type: string
+      required:
+        - channel
+        - text
+      type: object
+    SendMessageResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/SendMessageResult.json
+          format: uri
+          readOnly: true
+          type: string
+        ok:
+          description: false when the pump's outbound buffer was full or no radio is attached
+          type: boolean
+        packet_id:
+          description: MeshPacket.id allocated by the radio (zero if pump rejected the send)
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - packet_id
+        - ok
+      type: object
+    SessionSnapshot:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/SessionSnapshot.json
+          format: uri
+          readOnly: true
+          type: string
+        air_util_tx:
+          format: float
+          type: number
+        battery_level:
+          format: int32
+          minimum: 0
+          type: integer
+        battery_voltage:
+          format: float
+          type: number
+        channel_util:
+          format: float
+          type: number
+        connect_dest:
+          type: string
+        connected:
+          type: boolean
+        current_channel:
+          type: string
+        my_altitude:
+          format: int32
+          type: integer
+        my_grid:
+          type: string
+        my_latitude:
+          format: double
+          type: number
+        my_longitude:
+          format: double
+          type: number
+        my_node_num:
+          format: int32
+          minimum: 0
+          type: integer
+        radio_firmware:
+          type: string
+        radio_id:
+          type: string
+        radio_modem:
+          type: string
+        radio_region:
+          type: string
+        radio_role:
+          type: string
+      required:
+        - radio_id
+        - my_node_num
+        - connected
+        - current_channel
+        - connect_dest
+      type: object
+info:
+  description: meshx mesh-radio HTTP API — channels, nodes, messages, transports, and live events from one or more Meshtastic-compatible LoRa radios. Radio-scoped resources live under /radios/{radio_id}/…; transport-management endpoints under /transports/…
+  title: meshx
+  version: 0.1.0
+openapi: 3.0.3
+paths:
+  /healthz:
+    get:
+      description: Cheap probe for orchestration (systemd, k8s, docker healthcheck). Touches no state.
+      operationId: health
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Liveness probe
+      tags:
+        - meta
+  /radios:
+    get:
+      description: Returns every radio currently registered with the daemon — radio_id, identity, connection status. Clients use this to populate a radio picker before drilling into per-radio resources.
+      operationId: list-radios
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListRadiosOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List attached radios
+      tags:
+        - radios
+  /radios/{radio_id}:
+    get:
+      description: Identity, telemetry, current channel, connection status for one radio. Useful for clients rendering a status bar.
+      operationId: get-radio
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionSnapshot"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Per-radio session snapshot
+      tags:
+        - radios
+  /radios/{radio_id}/channels:
+    get:
+      description: Returns the radio's channel table — name, role, slot index, has-PSK flag. PSK bytes are NEVER emitted by this endpoint; they stay on the daemon side.
+      operationId: list-channels
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListChannelsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List configured channel slots for one radio
+      tags:
+        - channels
+  /radios/{radio_id}/events:
+    get:
+      description: Live SSE stream of mesh activity for the named radio — node updates, incoming text, ack receipts, reconnect status. Clients consume this for real-time UI updates.
+      operationId: events-stream
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventsOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Server-sent events stream for one radio
+      tags:
+        - events
+  /radios/{radio_id}/messages:
+    get:
+      description: Returns persisted + live in-memory chat rows in chronological order. Optional ?limit= caps response to the most recent N rows.
+      operationId: list-messages
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+        - description: max rows to return; 0 = no limit
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 0
+            description: max rows to return; 0 = no limit
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListMessagesOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List chat messages for one radio
+      tags:
+        - messages
+    post:
+      description: Enqueues an outbound text message on the named channel. Returns the allocated MeshPacket.id; clients correlate this with subsequent ack / fail events from the SSE stream.
+      operationId: send-message
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendMessageResult"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Send a chat message via one radio
+      tags:
+        - messages
+  /radios/{radio_id}/nodes:
+    get:
+      description: Returns every peer the radio's NodeDB has seen, with the most-recent telemetry (SNR, RSSI, hops) and derived state (online / offline / muted).
+      operationId: list-nodes
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListNodesOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List known mesh peers for one radio
+      tags:
+        - nodes
+  /transports/ble/devices:
+    get:
+      description: Returns every BLE device the daemon has saved for auto-connect. Favorite devices are flagged.
+      operationId: list-ble-devices
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListBLEDevicesOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List paired Bluetooth devices
+      tags:
+        - transports
+    post:
+      description: Opens an encrypted GATT connection to trigger OS-level bonding (PIN prompt on macOS, agent on Linux), then saves the device to the daemon's pairing table.
+      operationId: pair-ble
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairBLEInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BLEDeviceView"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Pair a Bluetooth radio
+      tags:
+        - transports
+  /transports/ble/devices/{uuid}:
+    delete:
+      description: Removes the device from the saved-pairings table. Does not unbind at the OS level.
+      operationId: forget-ble-device
+      parameters:
+        - description: peripheral identifier or saved long/short name
+          in: path
+          name: uuid
+          required: true
+          schema:
+            description: peripheral identifier or saved long/short name
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Remove a paired Bluetooth device
+      tags:
+        - transports
+  /transports/ble/devices/{uuid}/favorite:
+    put:
+      description: Sets this device as the bare-`meshx` auto-connect target when no USB radio is plugged in.
+      operationId: set-ble-favorite
+      parameters:
+        - description: peripheral identifier or saved long/short name
+          in: path
+          name: uuid
+          required: true
+          schema:
+            description: peripheral identifier or saved long/short name
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BLEDeviceView"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Mark a Bluetooth device as the auto-connect favorite
+      tags:
+        - transports
+  /transports/ble/favorite:
+    delete:
+      description: Removes the favorite flag from whichever device currently holds it. Auto-connect falls back to the single-saved-device rule.
+      operationId: clear-ble-favorite
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Clear the auto-connect favorite
+      tags:
+        - transports
+  /transports/ble/scan:
+    post:
+      description: Runs a discovery scan for the configured timeout (default 10s) and returns peripherals advertising the Meshtastic GATT service.
+      operationId: scan-ble
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScanBLEInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanBLEOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Scan for nearby Meshtastic radios over Bluetooth
+      tags:
+        - transports

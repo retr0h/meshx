@@ -71,17 +71,13 @@ type SendMessageRequest struct {
 	ReplyID uint32 `json:"reply_id,omitempty" doc:"PacketID this message replies to"`
 }
 
-// SendMessageResponse echoes the allocated PacketID so clients can
-// correlate with ack / fail events on the SSE stream.
-type SendMessageResponse struct {
+// SendMessageResult echoes the allocated PacketID so clients can
+// correlate with ack / fail events on the SSE stream. (Named
+// "Result" not "Response" so the OpenAPI schema name doesn't collide
+// with oapi-codegen's auto-generated <OpId>Response wrapper.)
+type SendMessageResult struct {
 	PacketID uint32 `json:"packet_id" doc:"MeshPacket.id allocated by the radio (zero if pump rejected the send)"`
 	OK       bool   `json:"ok"        doc:"false when the pump's outbound buffer was full or no radio is attached"`
-}
-
-// radioIDPath is embedded in every per-radio handler input so the
-// {radio_id} path param is parsed by Huma once.
-type radioIDPath struct {
-	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios for the list"`
 }
 
 // resolveRadio looks up the Driver for an inbound {radio_id} and
@@ -151,7 +147,7 @@ func (s *Server) handleListRadios(
 }
 
 type getRadioInput struct {
-	radioIDPath
+	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
 }
 
 type getRadioOutput struct {
@@ -191,7 +187,7 @@ func (s *Server) handleGetRadio(_ context.Context, in *getRadioInput) (*getRadio
 }
 
 type listChannelsInput struct {
-	radioIDPath
+	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
 }
 
 type listChannelsOutput struct {
@@ -223,7 +219,7 @@ func (s *Server) handleListChannels(
 }
 
 type listNodesInput struct {
-	radioIDPath
+	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
 }
 
 type listNodesOutput struct {
@@ -252,8 +248,8 @@ func (s *Server) handleListNodes(_ context.Context, in *listNodesInput) (*listNo
 }
 
 type listMessagesInput struct {
-	radioIDPath
-	Limit int `query:"limit" doc:"max rows to return; 0 = no limit" default:"0"`
+	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
+	Limit   int    `                doc:"max rows to return; 0 = no limit"             query:"limit" default:"0"`
 }
 
 type listMessagesOutput struct {
@@ -285,12 +281,12 @@ func (s *Server) handleListMessages(
 }
 
 type sendMessageInput struct {
-	radioIDPath
-	Body SendMessageRequest
+	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
+	Body    SendMessageRequest
 }
 
 type sendMessageOutput struct {
-	Body SendMessageResponse
+	Body SendMessageResult
 }
 
 func (s *Server) handleSendMessage(
@@ -307,12 +303,12 @@ func (s *Server) handleSendMessage(
 		ReplyID: in.Body.ReplyID,
 	})
 	out := &sendMessageOutput{}
-	out.Body = SendMessageResponse{PacketID: pid, OK: ok}
+	out.Body = SendMessageResult{PacketID: pid, OK: ok}
 	return out, nil
 }
 
 type eventsInput struct {
-	radioIDPath
+	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
 }
 
 // eventsOutput is a placeholder for SSE — Huma's streaming SSE

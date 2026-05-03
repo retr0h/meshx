@@ -23,6 +23,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -58,6 +59,10 @@ in the pump / model wiring; if probe sees nothing, the issue is
 in DialBLE / bleClient.Run itself.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
+		logger.With(slog.String("subsystem", "ble.probe")).Debug("running",
+			slog.String("uuid", args[0]),
+			slog.Duration("timeout", bleProbeTimeout),
+		)
 		return bleProbe(args[0])
 	},
 }

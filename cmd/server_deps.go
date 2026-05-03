@@ -21,43 +21,38 @@
 package cmd
 
 import (
-	"fmt"
 	"log/slog"
-	"slices"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
-	"tinygo.org/x/bluetooth"
 
 	"github.com/retr0h/meshx/internal/meshx/storage"
 	"github.com/retr0h/meshx/internal/meshx/transport"
 	"github.com/retr0h/meshx/internal/server"
 )
 
-// meshtasticServiceUUID is the BLE GATT service every Meshtastic
-// radio advertises. Scan results filter on it so unrelated
-// peripherals don't pollute results.
-const meshtasticServiceUUID = "6ba1b218-15a8-461f-9fa8-5dcae273eafd"
-
-// serverDeps wires the optional server dependencies — sqlite store,
-// BLE scanner, BLE pairer, USB scanner. Each can fail independently;
-// the server returns 503 from endpoints that need a missing dep so
-// callers see a real signal instead of silent breakage. Errors get
-// logged but don't abort daemon startup.
+// serverDeps wires the optional dependencies the daemon's HTTP
+// surface (transports/ble/*, transports/usb/*) needs. Each can fail
+// independently; the server returns 503 from endpoints that need a
+// missing dep so callers see a real signal instead of silent
+// breakage. Errors get logged but don't abort daemon startup.
+//
+// Note: the local CLI (cmd/ble.go, cmd/usb.go one-shots) does NOT go
+// through this — those subcommands call the transport + storage
+// packages directly through their own narrow consumer interfaces.
+// This function exists only for `meshx server start`.
 func serverDeps(
 	cmd *cobra.Command,
 	log *slog.Logger,
 ) (server.Store, server.BLEScanner, server.BLEPairer, server.USBScanner) {
-	store := openStorage(cmd, log)
-	return store, bleScanner{}, blePairer{}, usbScanner{}
+	store := openStore(cmd, log)
+	return store, daemonBLEScanner{}, daemonBLEPairer{}, daemonUSBScanner{}
 }
 
-// openStorage opens the shared sqlite handle (~/.meshx/meshx.db),
+// openStore opens the shared sqlite handle (~/.meshx/meshx.db),
 // running migrations as needed. Returns nil on failure with a
-// structured warning — the daemon still serves read-only routes that
-// don't need persistence.
-func openStorage(_ *cobra.Command, log *slog.Logger) server.Store {
+// structured warning — read-only HTTP routes still serve.
+func openStore(_ *cobra.Command, log *slog.Logger) *storage.Sqlite {
 	path, err := storage.DefaultPath()
 	if err != nil {
 		log.Warn("storage disabled: cannot resolve path", slog.Any("error", err))
@@ -75,102 +70,41 @@ func openStorage(_ *cobra.Command, log *slog.Logger) server.Store {
 	return s
 }
 
-// bleScanner satisfies server.BLEScanner — runs a tinygo bluetooth
-// scan, filters to peripherals advertising the Meshtastic service,
-// stops after the timeout, returns the unique peripherals.
-type bleScanner struct{}
+// daemonBLEScanner satisfies server.BLEScanner by delegating to
+// transport.ScanBLE and lifting the result into the server's wire
+// shape.
+type daemonBLEScanner struct{}
 
-func (bleScanner) ScanMeshtastic(timeoutMS int) ([]server.BLESighting, error) {
-	adapter := bluetooth.DefaultAdapter
-	if err := adapter.Enable(); err != nil {
-		return nil, fmt.Errorf("enable bluetooth adapter: %w", err)
-	}
-
-	wantUUID, err := bluetooth.ParseUUID(meshtasticServiceUUID)
+func (daemonBLEScanner) ScanMeshtastic(timeoutMS int) ([]server.BLESighting, error) {
+	hits, err := transport.ScanBLE(time.Duration(timeoutMS) * time.Millisecond)
 	if err != nil {
-		return nil, fmt.Errorf("parse service uuid: %w", err)
+		return nil, err
 	}
-
-	type hit struct {
-		address   string
-		localName string
-		rssi      int16
-	}
-	var (
-		mu   sync.Mutex
-		hits = map[string]*hit{}
-	)
-
-	scanDone := make(chan error, 1)
-	go func() {
-		scanDone <- adapter.Scan(func(_ *bluetooth.Adapter, res bluetooth.ScanResult) {
-			if !slices.Contains(res.ServiceUUIDs(), wantUUID) {
-				return
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			addr := res.Address.String()
-			h, ok := hits[addr]
-			if !ok {
-				h = &hit{address: addr}
-				hits[addr] = h
-			}
-			h.localName = res.LocalName()
-			h.rssi = res.RSSI
-		})
-	}()
-
-	select {
-	case err := <-scanDone:
-		if err != nil {
-			return nil, fmt.Errorf("scan failed: %w", err)
-		}
-	case <-time.After(time.Duration(timeoutMS) * time.Millisecond):
-		if err := adapter.StopScan(); err != nil {
-			return nil, fmt.Errorf("stop scan: %w", err)
-		}
-		<-scanDone
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
 	out := make([]server.BLESighting, 0, len(hits))
 	for _, h := range hits {
 		out = append(out, server.BLESighting{
-			UUID:      h.address,
-			LocalName: h.localName,
-			RSSI:      h.rssi,
+			UUID:      h.UUID,
+			LocalName: h.LocalName,
+			RSSI:      h.RSSI,
 		})
 	}
 	return out, nil
 }
 
-// blePairer satisfies server.BLEPairer — opens a brief encrypted
-// GATT connection (which triggers OS-level bonding / PIN prompt),
-// then closes it. The follow-up `connect` re-opens against the
-// now-bonded peripheral without a fresh prompt.
-type blePairer struct{}
+// daemonBLEPairer satisfies server.BLEPairer by delegating to
+// transport.PairBLE.
+type daemonBLEPairer struct{}
 
-func (blePairer) PairMeshtastic(uuid string) error {
-	client, err := transport.DialBLE(uuid)
-	if err != nil {
-		return fmt.Errorf("pair: %w", err)
-	}
-	if cerr := client.Close(); cerr != nil {
-		// Best-effort close — the bond is established at the OS layer
-		// regardless of how cleanly the link unwinds.
-		return fmt.Errorf("close after pair: %w", cerr)
-	}
-	return nil
+func (daemonBLEPairer) PairMeshtastic(uuid string) error {
+	return transport.PairBLE(uuid)
 }
 
-// usbScanner satisfies server.USBScanner — wraps the transport
-// package's IdentifyAllSerial probe and lifts each transport.DeviceInfo
-// into a server.USBSighting (renaming Err → Reason as a string so the
-// shape survives JSON marshaling).
-type usbScanner struct{}
+// daemonUSBScanner satisfies server.USBScanner by delegating to
+// transport.IdentifyAllSerial and lifting each transport.DeviceInfo
+// into the server's wire shape (Err → Reason as a string).
+type daemonUSBScanner struct{}
 
-func (usbScanner) IdentifyAllSerial(timeoutMS int) ([]server.USBSighting, error) {
+func (daemonUSBScanner) IdentifyAllSerial(timeoutMS int) ([]server.USBSighting, error) {
 	infos, err := transport.IdentifyAllSerial(time.Duration(timeoutMS) * time.Millisecond)
 	if err != nil {
 		return nil, err

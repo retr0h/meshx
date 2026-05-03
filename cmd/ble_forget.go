@@ -21,20 +21,35 @@
 package cmd
 
 import (
-	"context"
+	"fmt"
+	"log/slog"
 
-	"github.com/retr0h/meshx/internal/server"
+	"github.com/spf13/cobra"
 )
 
-// bleOps is the narrow BLE-management surface the ble subcommands
-// require, declared at the consumer seam per the osapi-io pattern.
-// Concrete *server.Server satisfies this structurally.
-type bleOps interface {
-	ListBLEDevices(ctx context.Context) ([]server.BLEDeviceView, error)
-	ScanBLE(ctx context.Context, timeoutMS int) ([]server.BLESighting, error)
-	PairBLE(ctx context.Context, uuid string) error
-	ForgetBLEDevice(ctx context.Context, target string) error
-	SetBLEFavoriteByName(ctx context.Context, target string) (server.BLEDeviceView, error)
-	ClearBLEFavorite(ctx context.Context) error
-	ResolveBLE(ctx context.Context, target string) (string, error)
+var bleForgetCmd = &cobra.Command{
+	Use:   "forget <uuid|name>",
+	Short: "Remove a saved Bluetooth device",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		logger.With(slog.String("subsystem", "ble.forget")).
+			Debug("running", slog.String("target", args[0]))
+		store, err := cliOpenBLEStore()
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		defer func() { _ = store.Close() }()
+		d, err := store.LookupBLEDevice(args[0])
+		if err != nil {
+			return fmt.Errorf("lookup: %w", err)
+		}
+		if d == nil {
+			return fmt.Errorf("no saved device matches %q (run `meshx ble list`)", args[0])
+		}
+		if err := store.ForgetBLEDevice(d.UUID); err != nil {
+			return fmt.Errorf("forget: %w", err)
+		}
+		fmt.Printf("forgot %s\n", args[0])
+		return nil
+	},
 }

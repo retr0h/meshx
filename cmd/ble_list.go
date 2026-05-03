@@ -21,16 +21,46 @@
 package cmd
 
 import (
-	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"text/tabwriter"
 
-	"github.com/retr0h/meshx/internal/server"
+	"github.com/spf13/cobra"
 )
 
-// usbOps is the narrow USB-management surface the usb subcommands
-// require, declared at the consumer seam per the osapi-io pattern.
-// Concrete *server.Server satisfies this structurally — the cmd
-// goes through the same code path the HTTP handlers do.
-type usbOps interface {
-	ScanUSB(ctx context.Context, timeoutMS int) ([]server.USBSighting, error)
-	AutoDetectUSB(ctx context.Context, timeoutMS int) (string, error)
+var bleListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "Show saved Bluetooth devices",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		logger.With(slog.String("subsystem", "ble.list")).Debug("running")
+		store, err := cliOpenBLEStore()
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		defer func() { _ = store.Close() }()
+		devs, err := store.LoadBLEDevices()
+		if err != nil {
+			return fmt.Errorf("load: %w", err)
+		}
+		if len(devs) == 0 {
+			fmt.Println("no saved Bluetooth devices.")
+			fmt.Println()
+			fmt.Println("  → run `meshx ble scan` to discover nearby radios,")
+			fmt.Println("    then `meshx ble pair <uuid>` to save one.")
+			return nil
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(tw, "   UUID\tLONGNAME\tSHORTNAME\tHW")
+		for _, d := range devs {
+			star := "  "
+			if d.Favorite {
+				star = " ★"
+			}
+			_, _ = fmt.Fprintf(tw, "%s %s\t%s\t%s\t%s\n",
+				star, d.UUID, orDash(d.LongName), orDash(d.ShortName), orDash(d.HWModel),
+			)
+		}
+		return tw.Flush()
+	},
 }

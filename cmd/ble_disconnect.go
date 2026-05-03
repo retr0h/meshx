@@ -20,12 +20,23 @@
 
 package cmd
 
-import "github.com/retr0h/meshx/internal/tui"
+import (
+	"fmt"
+	"log/slog"
 
-// radioLauncher is the narrow surface cmd uses to open the TUI against
-// a transport destination string. The variable form lets tests swap in
-// a no-op without importing the full TUI.
-type radioLauncher func(dest string) error
+	"github.com/spf13/cobra"
+)
 
-// runRadio is the default launcher — points at tui.RunRadio.
-var runRadio radioLauncher = tui.RunRadio
+var bleDisconnectCmd = &cobra.Command{
+	Use:   "disconnect",
+	Short: "Clear the auto-connect favorite",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		logger.With(slog.String("subsystem", "ble.disconnect")).Debug("running")
+		store, err := cliOpenBLEStore()
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		defer func() { _ = store.Close() }()
+		return store.SetBLEFavorite("")
+	},
+}

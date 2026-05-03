@@ -20,32 +20,38 @@
 
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+	"log/slog"
 
-// usbCmd is the parent for every USB-serial one-shot operation:
-// scanning, identifying, and opening a TUI session against a
-// specific device. Mirrors `ble` so the CLI tree reads consistently.
-//
-// These subcommands are CLI-local — they directly enumerate and
-// probe USB-serial ports through cliUSBScanner. No daemon is
-// required, no HTTP is involved. The daemon's /transports/usb/*
-// routes exist for remote admin (a future web UI inspecting USB
-// state on a headless box).
-//
-// Each subcommand lives in its own usb_<verb>.go file; this file is
-// just the parent + the init wiring. usb_probe.go is the diagnostic
-// deep-dump tool sibling.
-var usbCmd = &cobra.Command{
-	Use:   "usb",
-	Short: "USB-serial Meshtastic transport",
-	Long: `Commands for discovering, identifying, and connecting to
-Meshtastic radios over a USB-serial cable (the default transport
-for a desk-mounted or data-cable-tethered radio).`,
-}
+	"github.com/spf13/cobra"
 
-func init() {
-	usbCmd.AddCommand(usbScanCmd)
-	usbCmd.AddCommand(usbConnectCmd)
-	usbCmd.AddCommand(probeCmd)
-	rootCmd.AddCommand(usbCmd)
+	"github.com/retr0h/meshx/internal/tui"
+)
+
+var bleConnectCmd = &cobra.Command{
+	Use:   "connect <uuid|name>",
+	Short: "Open the TUI over Bluetooth",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		log := logger.With(slog.String("subsystem", "ble.connect"))
+		log.Debug("running", slog.String("target", args[0]))
+		store, err := cliOpenBLEStore()
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		d, err := store.LookupBLEDevice(args[0])
+		_ = store.Close()
+		if err != nil {
+			return fmt.Errorf("lookup: %w", err)
+		}
+		if d == nil {
+			return fmt.Errorf(
+				"no saved device matches %q — run `meshx ble list` to see what's paired",
+				args[0],
+			)
+		}
+		log.Debug("resolved", slog.String("uuid", d.UUID))
+		return tui.RunRadio("ble:" + d.UUID)
+	},
 }

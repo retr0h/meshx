@@ -20,32 +20,42 @@
 
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+	"log/slog"
 
-// usbCmd is the parent for every USB-serial one-shot operation:
-// scanning, identifying, and opening a TUI session against a
-// specific device. Mirrors `ble` so the CLI tree reads consistently.
-//
-// These subcommands are CLI-local — they directly enumerate and
-// probe USB-serial ports through cliUSBScanner. No daemon is
-// required, no HTTP is involved. The daemon's /transports/usb/*
-// routes exist for remote admin (a future web UI inspecting USB
-// state on a headless box).
-//
-// Each subcommand lives in its own usb_<verb>.go file; this file is
-// just the parent + the init wiring. usb_probe.go is the diagnostic
-// deep-dump tool sibling.
-var usbCmd = &cobra.Command{
-	Use:   "usb",
-	Short: "USB-serial Meshtastic transport",
-	Long: `Commands for discovering, identifying, and connecting to
-Meshtastic radios over a USB-serial cable (the default transport
-for a desk-mounted or data-cable-tethered radio).`,
-}
+	"github.com/spf13/cobra"
 
-func init() {
-	usbCmd.AddCommand(usbScanCmd)
-	usbCmd.AddCommand(usbConnectCmd)
-	usbCmd.AddCommand(probeCmd)
-	rootCmd.AddCommand(usbCmd)
+	"github.com/retr0h/meshx/internal/tui"
+)
+
+var usbConnectCmd = &cobra.Command{
+	Use:   "connect [device]",
+	Short: "Open the TUI over USB serial",
+	Long: `Connect to a Meshtastic radio over USB serial and open the TUI.
+
+  meshx usb connect                    # auto-detect the only radio on USB
+  meshx usb connect /dev/cu.usbserial… # explicit device path (macOS)
+  meshx usb connect /dev/ttyUSB0       # explicit device path (Linux)`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		dest := ""
+		if len(args) == 1 {
+			dest = args[0]
+		}
+		log := logger.With(slog.String("subsystem", "usb.connect"))
+		log.Debug("running", slog.String("device", dest))
+		if dest == "" {
+			auto, err := cliUSBScanner.AutoDetect(1500)
+			if err != nil {
+				return fmt.Errorf(
+					"usb auto-detect: %w — try `meshx usb scan` to see candidates",
+					err,
+				)
+			}
+			dest = auto
+			log.Debug("auto-detected", slog.String("device", dest))
+		}
+		return tui.RunRadio(dest)
+	},
 }

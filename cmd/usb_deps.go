@@ -20,32 +20,32 @@
 
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"time"
 
-// usbCmd is the parent for every USB-serial one-shot operation:
-// scanning, identifying, and opening a TUI session against a
-// specific device. Mirrors `ble` so the CLI tree reads consistently.
-//
-// These subcommands are CLI-local — they directly enumerate and
-// probe USB-serial ports through cliUSBScanner. No daemon is
-// required, no HTTP is involved. The daemon's /transports/usb/*
-// routes exist for remote admin (a future web UI inspecting USB
-// state on a headless box).
-//
-// Each subcommand lives in its own usb_<verb>.go file; this file is
-// just the parent + the init wiring. usb_probe.go is the diagnostic
-// deep-dump tool sibling.
-var usbCmd = &cobra.Command{
-	Use:   "usb",
-	Short: "USB-serial Meshtastic transport",
-	Long: `Commands for discovering, identifying, and connecting to
-Meshtastic radios over a USB-serial cable (the default transport
-for a desk-mounted or data-cable-tethered radio).`,
+	"github.com/retr0h/meshx/internal/meshx/transport"
+)
+
+// usbScanner is the narrow USB-management surface the usb subcommands
+// require. Identify probes every candidate serial port; AutoDetect
+// returns the single Meshtastic-responding port (or a useful
+// multi-line error when zero or multiple are found).
+type usbScanner interface {
+	Identify(timeoutMS int) ([]transport.DeviceInfo, error)
+	AutoDetect(timeoutMS int) (string, error)
 }
 
-func init() {
-	usbCmd.AddCommand(usbScanCmd)
-	usbCmd.AddCommand(usbConnectCmd)
-	usbCmd.AddCommand(probeCmd)
-	rootCmd.AddCommand(usbCmd)
+// transportUSBScanner satisfies usbScanner by delegating to the
+// transport package.
+type transportUSBScanner struct{}
+
+func (transportUSBScanner) Identify(timeoutMS int) ([]transport.DeviceInfo, error) {
+	return transport.IdentifyAllSerial(time.Duration(timeoutMS) * time.Millisecond)
 }
+
+func (transportUSBScanner) AutoDetect(timeoutMS int) (string, error) {
+	return transport.AutoDetectMeshtastic(time.Duration(timeoutMS) * time.Millisecond)
+}
+
+// cliUSBScanner is the package-level wiring; tests can swap.
+var cliUSBScanner usbScanner = transportUSBScanner{}

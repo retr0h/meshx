@@ -164,7 +164,21 @@ const (
 	modeSearch
 	// modeHelp — full-screen scrollable keymap overlay.
 	modeHelp
+	// modeConfigEdit — inline string-row edit inside /config. Active
+	// when the user pressed Enter on the longname / shortname row;
+	// key events route to cfgEditInput instead of the panel's nav
+	// handler. Inner Enter commits to cfgDraft, Esc cancels.
+	modeConfigEdit
 )
+
+// configDraft is the staged-edits buffer for the /config overlay.
+// One field per row, populated from live state on open and diffed
+// against live state on Ctrl+S. No wire traffic happens until commit.
+type configDraft struct {
+	buzzer    bool
+	longName  string
+	shortName string
+}
 
 // Pane indices — used for overlay-focus accounting and accent colors.
 const (
@@ -463,6 +477,29 @@ type model struct {
 	// / selectedNd / selectedMsg — clamped against configEntries() in
 	// moveSelection.
 	selectedCfg int
+
+	// cfgDraft holds pending /config edits before they're committed
+	// to the radio. Populated from live state when /config opens
+	// (resetConfigDraft); per-row Enter mutates fields here without
+	// any wire traffic. Ctrl+S walks the diff between draft and live
+	// in commitConfigDraft and fires the appropriate AdminMessages.
+	// Esc on a dirty draft prompts y/n via cfgConfirmDiscard.
+	cfgDraft configDraft
+	// cfgEditing names the field currently being edited via the
+	// inline textinput — "" when no edit is active, "longname" or
+	// "shortname" while the user types into cfgEditInput. Mode
+	// transitions to modeConfigEdit so key events route to the
+	// textinput instead of the panel's nav handler.
+	cfgEditing string
+	// cfgEditInput is the textinput used by the inline string-row
+	// edit. Pre-filled with the current draft value on focus;
+	// Enter commits the typed value to cfgDraft and returns to
+	// nav, Esc cancels and reverts to whatever was in the draft.
+	cfgEditInput textinput.Model
+	// cfgConfirmDiscard is set when the user pressed Esc on a dirty
+	// /config panel; while true the panel renders a y/n prompt and
+	// the input handler short-circuits all keys except y/n.
+	cfgConfirmDiscard bool
 	// reconnect is non-nil while the pump is in its retry loop. Each
 	// radioReconnectingMsg refreshes the struct; noticeTickMsg uses it
 	// to repaint the flash with a live "in Ns" countdown so the user
@@ -661,6 +698,17 @@ func newModel(demo *Demo, dest string) model {
 		peerEnv:            make(map[uint32]peerEnvMetrics),
 		input:              in,
 		searchInput:        func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
+		// cfgEditInput is the inline textinput that pops over the
+		// /config longname / shortname rows. CharLimit caps at 36 —
+		// the longest field is longname's 36-byte ceiling per the
+		// Meshtastic User proto. Shortname rows still validate
+		// separately on commit (4-byte cap there).
+		cfgEditInput: func() textinput.Model {
+			s := textinput.New()
+			s.Prompt = ""
+			s.CharLimit = 36
+			return s
+		}(),
 		initialFocusCmd:    focusCmd,
 		// Defaults match a stock Meshtastic radio + a fresh meshX
 		// install (radio buzzer beeps on text, terminal also dings).
@@ -1269,6 +1317,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSearch(msg)
 		case modeHelp:
 			return m.updateHelp(msg)
+		case modeConfigEdit:
+			return m.updateConfigEdit(msg)
 		case modeNav:
 			return m.updateNav(msg)
 		default:

@@ -267,42 +267,123 @@ func newAdminSetBuzzer(myNodeNum uint32, enabled bool) (*pb.ToRadio, error) {
 	}, nil
 }
 
-// setRadioBuzzer toggles the radio's external-notification buzzer to
-// `enabled` and persists the new desired-state under the radio_buzzer
-// settings key. Demo mode and offline mode flash a hint instead of
-// silently no-opping. On a successful enqueue we flip the local mirror
-// (m.radioBuzzerEnabled) so the /config panel reflects the new value
-// even before the radio acks — same UX setOwner uses for /nick.
-func (m *model) setRadioBuzzer(enabled bool) {
+// resetConfigDraft snapshots the live radio state into m.cfgDraft so
+// the /config panel opens populated with current values. Called from
+// openOverlay(overlayConfig) so re-opening the panel always starts
+// clean — any unsaved edits from a prior session are discarded the
+// moment the panel closes (a future "save on close" would invert
+// this, but the current design is "explicit Ctrl+S or it didn't
+// happen").
+func (m *model) resetConfigDraft() {
+	m.cfgDraft = configDraft{
+		buzzer:    m.radioBuzzerEnabled,
+		longName:  m.myCallsign(),
+		shortName: m.myShortName(),
+	}
+	m.cfgEditing = ""
+	m.cfgConfirmDiscard = false
+}
+
+// configDraftDirty reports whether the draft has any field that
+// differs from the live state. Drives the dirty-marker in the panel
+// header + each row, and gates the Esc-on-dirty discard prompt.
+func (m model) configDraftDirty() bool {
+	if m.cfgDraft.buzzer != m.radioBuzzerEnabled {
+		return true
+	}
+	if m.cfgDraft.longName != m.myCallsign() {
+		return true
+	}
+	if m.cfgDraft.shortName != m.myShortName() {
+		return true
+	}
+	return false
+}
+
+// commitConfigDraft fires the AdminMessage(s) needed to make the radio
+// match the draft, and persists the local mirrors. Walks the diff so
+// rows that didn't change don't generate wire traffic. Returns the
+// number of changes applied so the caller can flash a sane summary.
+//
+// Validates string fields against the firmware's byte limits before
+// touching the wire — same caps setOwner enforces — so a bad longname
+// rejects in-panel without the radio seeing it.
+func (m *model) commitConfigDraft() int {
 	if m.isDemo() {
-		m.flash = "/config: radio buzzer toggle needs a real radio (demo mode)"
-		return
+		m.flash = "/config: save needs a real radio (demo mode)"
+		return 0
 	}
 	if m.pump == nil {
-		m.flash = "/config: radio buzzer toggle needs a live radio connection"
-		return
+		m.flash = "/config: save needs a live radio connection"
+		return 0
 	}
-	envelope, err := newAdminSetBuzzer(m.myNodeNum, enabled)
-	if err != nil {
-		m.flash = fmt.Sprintf("/config: buzzer write failed: %v", err)
-		return
+	// Validate before any side effects. Stop on the first failure so
+	// the user fixes one at a time — partial commits would land the
+	// "valid" half on the radio while the panel still shows the
+	// invalid edit, which is confusing.
+	if len(m.cfgDraft.longName) > 36 {
+		m.flash = fmt.Sprintf("/config: longname %d bytes, max 36", len(m.cfgDraft.longName))
+		return 0
 	}
-	if !m.pump.Enqueue(envelope) {
-		m.flash = "/config: buzzer write dropped — outbound buffer full"
-		return
+	if len(m.cfgDraft.shortName) > 4 {
+		m.flash = fmt.Sprintf("/config: shortname %d bytes, max 4", len(m.cfgDraft.shortName))
+		return 0
 	}
-	m.radioBuzzerEnabled = enabled
-	v := "on"
-	if !enabled {
-		v = "off"
+
+	changes := 0
+	// Owner (longname / shortname) — one AdminMessage covers both
+	// fields; firmware overwrites the whole User record, so we round-
+	// trip both even if only one changed. Same path /nick uses.
+	if m.cfgDraft.longName != m.myCallsign() || m.cfgDraft.shortName != m.myShortName() {
+		envelope, err := newAdminSetOwner(
+			m.myNodeNum, m.cfgDraft.longName, m.cfgDraft.shortName, false,
+		)
+		if err != nil {
+			m.flash = fmt.Sprintf("/config: SetOwner build failed: %v", err)
+			return 0
+		}
+		if !m.pump.Enqueue(envelope) {
+			m.flash = "/config: SetOwner dropped — outbound buffer full"
+			return 0
+		}
+		changes++
 	}
-	m.storagePersist(putSetting(m.db, "radio_buzzer", v))
-	state := "enabled"
-	if !enabled {
-		state = "disabled"
+	// Radio buzzer — separate AdminMessage path (SetModuleConfig).
+	if m.cfgDraft.buzzer != m.radioBuzzerEnabled {
+		envelope, err := newAdminSetBuzzer(m.myNodeNum, m.cfgDraft.buzzer)
+		if err != nil {
+			m.flash = fmt.Sprintf("/config: buzzer build failed: %v", err)
+			return 0
+		}
+		if !m.pump.Enqueue(envelope) {
+			m.flash = "/config: buzzer dropped — outbound buffer full"
+			return 0
+		}
+		m.radioBuzzerEnabled = m.cfgDraft.buzzer
+		v := "on"
+		if !m.cfgDraft.buzzer {
+			v = "off"
+		}
+		m.storagePersist(putSetting(m.db, "radio_buzzer", v))
+		changes++
 	}
-	m.flash = fmt.Sprintf("radio buzzer %s — change applied", state)
-	m.systemLine(fmt.Sprintf("radio buzzer %s (alert_message_buzzer = %t)", state, enabled))
+	if changes == 0 {
+		m.flash = "/config: no changes to save"
+		return 0
+	}
+	m.flash = fmt.Sprintf("/config: %d change%s saved — radio updating", changes, plural(changes))
+	m.systemLine(fmt.Sprintf("config: committed %d change%s", changes, plural(changes)))
+	return changes
+}
+
+// plural returns "s" when n != 1 — micro-helper to keep config save
+// flash messages grammatical without inline ternaries littering the
+// commit path.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // currentChannelIndex maps m.currentChannel back to the Meshtastic
@@ -350,14 +431,27 @@ func (m *model) activate() tea.Cmd {
 			return nil
 		}
 		e := entries[m.selectedCfg]
-		if e.action == nil {
-			// Read-only row — Enter is a no-op (cursor isn't supposed
-			// to land on these per selectableConfigEntryIndices, but
-			// guard anyway in case future code paths drop selectedCfg
-			// onto one).
+		switch e.kind {
+		case cfgEntryString:
+			// Swap into inline-edit mode. The Component checks
+			// m.cfgEditing and renders the textinput in place of the
+			// static value cell, so the cursor lives right where the
+			// row's draft value already does. Pre-fill with the
+			// current draft so a "small tweak" doesn't require
+			// retyping the whole field.
+			m.cfgEditing = e.field
+			m.cfgEditInput.SetValue(e.value)
+			m.cfgEditInput.CursorEnd()
+			m.mode = modeConfigEdit
+			return m.cfgEditInput.Focus()
+		case cfgEntryToggle:
+			if e.action != nil {
+				e.action(m)
+			}
 			return nil
 		}
-		e.action(m)
+		// Read-only row — Enter is a no-op. selectableConfig...Indices
+		// already prevents the cursor from parking here, but guard.
 		return nil
 	case paneChannels:
 		if m.selectedCh < len(m.channels) {
@@ -715,7 +809,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.flash = fmt.Sprintf("!k %s — over to you", target)
 
 	// ── IRC-style operational commands ────────────────────────────
-	case "tr", "traceroute", "trace":
+	case "tr":
 		target := rest
 		if target == "" {
 			target = m.selectedSender()
@@ -989,18 +1083,28 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		m.flash = "usage: /channel list  |  /channel add <meshtastic://url>"
-	case "nick", "callsign":
-		// /nick <name> — set the radio's User.long_name via
-		// AdminMessage.SetOwner. Aliases: /callsign (ham-idiomatic).
-		// No reboot (unlike the phone app's behavior); firmware
-		// accepts the write hot. Change propagates to peers on
-		// the radio's next NodeInfo broadcast.
+	case "nick":
+		// /nick (no args) — read-only display of the current
+		// longname. /nick <name> — immediate write of User.long_name
+		// via AdminMessage.SetOwner. No reboot (firmware accepts
+		// the write hot); change propagates to peers on the next
+		// NodeInfo broadcast. The canonical edit path for both
+		// longname and shortname (with draft + Ctrl+S) is /config;
+		// /nick stays as the fast inline rename ham operators
+		// expect to do without leaving their composing surface.
+		// Shortname is round-tripped from the current value so
+		// this only changes longname.
+		if rest == "" {
+			cur := m.myCallsign()
+			short := m.myShortName()
+			if short != "" {
+				m.flash = fmt.Sprintf("nick: %s [%s]  (use /nick <name> to change)", cur, short)
+			} else {
+				m.flash = fmt.Sprintf("nick: %s  (use /nick <name> to change)", cur)
+			}
+			return nil
+		}
 		return m.setOwner(rest, m.myShortName(), "long")
-	case "tag", "emoji":
-		// /tag <text> — set the radio's User.short_name via
-		// AdminMessage.SetOwner. Aliases: /emoji (because ~every
-		// user sets shortname to a single emoji). Up to 4 bytes.
-		return m.setOwner(m.myCallsign(), rest, "short")
 	case "config":
 		// Open the radio-config overlay. The interactive panel
 		// (configPane) shows an "Radio buzzer: on/off" row at the
@@ -1155,7 +1259,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			"usage:   "+entry.usage,
 			"summary: "+entry.summary,
 		)
-	case "search", "find":
+	case "search":
 		if rest == "" {
 			m.flash = "usage: /search <pattern>"
 			return nil

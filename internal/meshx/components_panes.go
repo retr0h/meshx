@@ -264,7 +264,7 @@ func (p helpPane) Render(box Box) string {
 		kv("/reply [call] [text]", "reply (uses highlighted sender if omitted)"),
 		kv("/r", "alias for /reply"),
 		kv("/ping <call>", "RTT + signal check"),
-		kv("/tr <call>", "traceroute — alias /traceroute"),
+		kv("/tr <call>", "traceroute — show mesh hop path to <call>"),
 		kv("/whois <call>", "node metadata — alias /w"),
 		"",
 		sec("CHANNEL / UTIL /COMMANDS"),
@@ -309,60 +309,101 @@ func (p helpPane) Render(box Box) string {
 }
 
 // configEntryKind classifies a /config row. Interactive rows respond
-// to Enter (toggle / cycle / prompt); read-only rows are display-only
-// — they exist so the panel doubles as the radio-state reference
-// /config used to systemBlock-dump, without forking the surface into
-// two commands.
+// to Enter; read-only rows are display-only — they exist so the panel
+// doubles as the radio-state reference /config used to systemBlock-
+// dump, without forking the surface into two commands.
+//
+//   - cfgEntryReadOnly — value rendered, Enter does nothing
+//   - cfgEntryToggle   — Enter flips a bool in cfgDraft
+//   - cfgEntryString   — Enter swaps the row to inline-edit (focuses
+//     cfgEditInput pre-filled with the current draft string; inner
+//     Enter commits to draft, Esc cancels back to nav)
+//
+// All edits stage in cfgDraft. Nothing reaches the radio until the
+// user presses Ctrl+S (commitConfigDraft).
 type configEntryKind int
 
 const (
 	cfgEntryReadOnly configEntryKind = iota
 	cfgEntryToggle
+	cfgEntryString
 )
 
 // configEntry describes one row in the /config overlay. label is the
-// left-column key (cell-padded by configPane.Render); value is what
-// renders on the right (e.g. "on" / "off" / "915MHz / LONG_FAST").
-// kind controls whether activate() does anything when the cursor is
-// parked on this row.
+// left-column key (cell-padded by configPane.Render); value is the
+// CURRENT DRAFT value (rendered, not the saved one). saved is the
+// live radio value, kept alongside so the renderer can compare and
+// mark the row dirty without re-deriving it. kind controls Enter
+// behaviour — see configEntryKind.
 type configEntry struct {
 	label string
-	value string
+	value string // draft value as a string
+	saved string // live value as a string — "" means N/A (read-only)
 	kind  configEntryKind
 	// action runs when the user presses Enter on a kind=Toggle row.
-	// nil for read-only entries — activate() short-circuits when the
-	// current row's action is nil. Non-nil rows MUST be the only
-	// rows users can stop on; selectableConfigEntries() drops
-	// read-onlys when computing j/k destinations so the cursor jumps
-	// past the firmware/region block instead of getting stuck on it.
+	// String rows route through a separate path (Enter focuses the
+	// inline textinput) so action stays nil for them. Read-only rows
+	// have action nil and are skipped by selectableConfigEntryIndices.
 	action func(m *model)
+	// field names which cfgDraft slot a string row binds to —
+	// "longname" / "shortname". Used by activate() to stash the
+	// current value in cfgEditInput and by the edit-commit path to
+	// route the typed value back into the draft. Empty for non-string
+	// rows.
+	field string
+}
+
+// boolToOnOff renders true/false as the "on"/"off" tokens the panel
+// uses for toggle row values. Centralized so the dirty-marker check
+// (saved == value) compares against the same string the renderer
+// emits, and a future "enabled / disabled" rebrand lands in one
+// place instead of N inline ternaries.
+func boolToOnOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 // configEntries returns the rows the /config overlay should render in
-// display order. The selectable ones (Enter does something) come
-// first so j-only-from-the-top hits them without scrolling. Order:
+// display order. Interactive rows come first (j-only-from-the-top
+// lands on something useful); read-only rows below the divider mirror
+// the radio state reference /config used to systemBlock-dump. Order:
 //
-//  1. Radio buzzer toggle (interactive)
-//  2. — separator —
-//  3. Read-only radio identity / firmware / region / preset / role
+//  1. radio buzzer (toggle — alert_message_buzzer)
+//  2. longname     (string — User.long_name; round-trips with shortname)
+//  3. shortname    (string — User.short_name)
+//  4. — separator —
+//  5. read-only firmware / region / preset / role / telemetry
 //
-// Future interactive knobs (LoRa region, preset, …) slot in above
-// the separator. Read-only rows beneath the divider are documentation
-// for what's currently true — same fields the legacy `/config`
-// systemBlock used to dump.
+// All interactive values read from cfgDraft, not the live state, so
+// per-row Enter mutations show up immediately while staying off the
+// wire until Ctrl+S. The saved-value column lets the renderer mark
+// dirty rows without re-deriving live state per render.
 func (m model) configEntries() []configEntry {
-	on := "on"
-	if !m.radioBuzzerEnabled {
-		on = "off"
-	}
 	out := []configEntry{
 		{
 			label: "radio buzzer",
-			value: on,
+			value: boolToOnOff(m.cfgDraft.buzzer),
+			saved: boolToOnOff(m.radioBuzzerEnabled),
 			kind:  cfgEntryToggle,
 			action: func(mm *model) {
-				mm.setRadioBuzzer(!mm.radioBuzzerEnabled)
+				mm.cfgDraft.buzzer = !mm.cfgDraft.buzzer
 			},
+		},
+		{
+			label: "longname",
+			value: m.cfgDraft.longName,
+			saved: m.myCallsign(),
+			kind:  cfgEntryString,
+			field: "longname",
+		},
+		{
+			label: "shortname",
+			value: m.cfgDraft.shortName,
+			saved: m.myShortName(),
+			kind:  cfgEntryString,
+			field: "shortname",
 		},
 		// Separator row — rendered as a dim divider; non-selectable.
 		{label: "", value: "", kind: cfgEntryReadOnly},
@@ -375,7 +416,6 @@ func (m model) configEntries() []configEntry {
 		out = append(out, configEntry{label: k, value: v, kind: cfgEntryReadOnly})
 	}
 
-	add("callsign", m.myCallsign())
 	if n := m.myNode(); n != nil {
 		add("hw", n.hwModel)
 	}
@@ -415,32 +455,43 @@ func (m model) selectableConfigEntryIndices() []int {
 }
 
 // configPane is the /config overlay — interactive radio configuration
-// with vim nav (j/k walks selectable rows, Enter toggles). Mirrors
-// channelsPane's frame chrome (CONFIG header, paneCountSuffix,
-// renderBorderedPane), so the user experience is identical to
-// /channels — only the row content differs.
+// with vim nav (j/k walks selectable rows, Enter toggles bools or
+// opens an inline string-edit). Edits stage in cfgDraft; Ctrl+S
+// commits them to the radio in one shot, Esc on a dirty draft
+// prompts y/n via cfgConfirmDiscard.
 type configPane struct{ m model }
 
 // Render lays the entries from configEntries() onto bordered-pane
 // rows. Selectable rows pass through wrapSelection so the cursor
 // renders the same selection chrome /channels uses; read-only rows
-// render as dim "  key  value" lines. Header counts the toggleable
-// entries so users see "(1 toggle)" and know the panel does
-// something even before they press anything.
+// render as dim "  key  value" lines. Dirty rows (draft != saved)
+// get a "*" prefix in the value column so the user sees what they're
+// about to commit. The pane header counts unsaved changes to match.
 func (p configPane) Render(box Box) string {
 	m := p.m
 	entries := m.configEntries()
 
 	header := paneHeaderCell("CONFIG", m.focused == paneConfig)
-	togglable := 0
+	editable := 0
+	unsaved := 0
 	for _, e := range entries {
 		if e.kind != cfgEntryReadOnly {
-			togglable++
+			editable++
+			if e.value != e.saved {
+				unsaved++
+			}
 		}
 	}
-	count := paneCountSuffix(fmt.Sprintf("  (%d toggle, %d info)", togglable, len(entries)-togglable-1))
+	dirtyTag := ""
+	if unsaved > 0 {
+		dirtyTag = fmt.Sprintf(", %d unsaved", unsaved)
+	}
+	count := paneCountSuffix(fmt.Sprintf(
+		"  (%d editable, %d info%s)",
+		editable, len(entries)-editable-1, dirtyTag,
+	))
 	legend := paneLegendLine(
-		"j/k walk · Enter toggle · Esc close · /mute silences the meshX terminal ding (separate)",
+		"j/k walk · Enter edit · Ctrl+S save · Esc close",
 	)
 
 	inner := paneInnerWidth(box.Width)
@@ -451,42 +502,96 @@ func (p configPane) Render(box Box) string {
 
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
-	valStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
+	onStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
 	offStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
+	dirtyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
+	editPromptStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(mhPink)).Bold(true)
 
-	lines := make([]string, 0, 4+len(entries))
+	lines := make([]string, 0, 6+len(entries))
 	lines = append(lines, header+count, "", legend, "")
 
 	for i, e := range entries {
 		// Empty separator row — rendered as a dim divider line.
-		if e.label == "" && e.value == "" {
+		if e.label == "" && e.value == "" && e.kind == cfgEntryReadOnly {
 			lines = append(lines, dim.Render(strings.Repeat("─", contentW)))
 			continue
 		}
-		// Build "key" left, "value" right, with the value styled by
-		// kind (interactive = bold green/dim; read-only = drained
-		// label + cyan value to match the rest of the UI palette).
-		var row string
-		switch e.kind {
-		case cfgEntryToggle:
-			val := e.value
-			styled := valStyle.Render(val)
-			if val == "off" {
-				styled = offStyle.Render(val)
-			}
-			row = fmt.Sprintf("  %s  %s",
-				keyStyle.Render(padCells(e.label, 14)),
-				styled,
-			)
-		default:
-			row = fmt.Sprintf("  %s  %s",
-				dim.Render(padCells(e.label, 14)),
-				keyStyle.Render(e.value),
-			)
+		dirty := e.kind != cfgEntryReadOnly && e.value != e.saved
+		marker := "  "
+		if dirty {
+			marker = dirtyStyle.Render(" *")
 		}
+		// Determine value rendering. If this row is currently being
+		// edited inline, render the live textinput View() instead of
+		// the static draft value so the cursor is visible. The other
+		// rows render their typed values per kind.
+		var styledVal string
+		isEditingThis := m.cfgEditing != "" && m.cfgEditing == e.field &&
+			i == m.selectedCfg && m.focused == paneConfig
+		switch {
+		case isEditingThis:
+			// "‹ longname › typing here _" — give the editor an
+			// obvious bracket so it doesn't blend with surrounding
+			// text. m.cfgEditInput holds the textinput.Model.
+			styledVal = editPromptStyle.Render("‹ ") +
+				m.cfgEditInput.View() +
+				editPromptStyle.Render(" ›")
+		case e.kind == cfgEntryToggle:
+			if e.value == "on" {
+				styledVal = onStyle.Render(e.value)
+			} else {
+				styledVal = offStyle.Render(e.value)
+			}
+			if dirty {
+				styledVal += dim.Render(fmt.Sprintf("  (was %s)", e.saved))
+			}
+		case e.kind == cfgEntryString:
+			val := e.value
+			if val == "" {
+				val = dim.Render("(empty)")
+			} else {
+				val = keyStyle.Render(val)
+			}
+			styledVal = val
+			if dirty {
+				styledVal += dim.Render(fmt.Sprintf("  (was %s)", e.saved))
+			}
+		default:
+			styledVal = keyStyle.Render(e.value)
+		}
+		labelStyle := keyStyle
+		if e.kind == cfgEntryReadOnly {
+			labelStyle = dim
+		}
+		row := fmt.Sprintf("%s %s  %s",
+			marker,
+			labelStyle.Render(padCells(e.label, 14)),
+			styledVal,
+		)
 		row = padCells(row, contentW)
 		selected := i == m.selectedCfg && m.focused == paneConfig && e.kind != cfgEntryReadOnly
 		lines = append(lines, wrapSelection(row, selected, false, inner))
+	}
+
+	// Trailing footer — Esc-on-dirty confirmation prompt or status
+	// hint. Renders below the row list, dim italic so it doesn't
+	// fight the entries for attention.
+	lines = append(lines, "")
+	switch {
+	case m.cfgConfirmDiscard:
+		lines = append(lines, dirtyStyle.Render(
+			" discard "+fmt.Sprintf("%d", unsaved)+
+				" unsaved change(s)?  y / n",
+		))
+	case unsaved > 0:
+		lines = append(lines, dim.Italic(true).Render(
+			fmt.Sprintf(" %d unsaved change(s) — Ctrl+S to commit, Esc to discard", unsaved),
+		))
+	default:
+		lines = append(lines, dim.Italic(true).Render(
+			" no pending changes",
+		))
 	}
 
 	return renderBorderedPane(

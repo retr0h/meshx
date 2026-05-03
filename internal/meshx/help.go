@@ -120,10 +120,8 @@ var helpEntries = map[string]helpEntry{
 	},
 	"tr": {
 		usage:   "/tr <call>",
-		summary: "traceroute from us to <call>; aliases: /traceroute, /trace",
+		summary: "traceroute from us to <call> — shows the mesh hop path; the only way to debug \"why is this peer 4 hops out\"",
 	},
-	"trace":      {usage: "/trace <call>", summary: "alias for /tr"},
-	"traceroute": {usage: "/traceroute <call>", summary: "alias for /tr"},
 	"whois": {
 		usage:   "/whois <call>",
 		summary: "dump node metadata for <call> — hw, fw, last-heard, signal, grid if published",
@@ -163,10 +161,9 @@ var helpEntries = map[string]helpEntry{
 		usage:   "/search <pattern>",
 		summary: "live-search the message log; aliases: /find",
 	},
-	"find": {usage: "/find <pattern>", summary: "alias for /search"},
 	"config": {
 		usage:   "/config",
-		summary: "open the interactive radio config panel — j/k walks, Enter toggles. First row is the radio buzzer (alert_message_buzzer); read-only rows below show identity, firmware, region, and telemetry. Separate from /mute (which silences only the meshX terminal ding)",
+		summary: "open the interactive radio config panel — j/k walks, Enter edits (toggles bools or opens an inline string editor for longname / shortname), Ctrl+S commits the diff to the radio in one shot, Esc on a dirty panel prompts y/n. Separate from /mute (which silences only the meshX terminal ding)",
 	},
 	"mute": {
 		usage:   "/mute",
@@ -178,16 +175,7 @@ var helpEntries = map[string]helpEntry{
 	},
 	"nick": {
 		usage:   "/nick <longname>",
-		summary: "set the radio's User.long_name (up to 36 bytes) via AdminMessage.SetOwner; no reboot required",
-	},
-	"callsign": {usage: "/callsign <name>", summary: "ham-idiomatic alias for /nick"},
-	"tag": {
-		usage:   "/tag <text-or-emoji>",
-		summary: "set the radio's User.short_name (up to 4 bytes; usually one emoji) via AdminMessage.SetOwner",
-	},
-	"emoji": {
-		usage:   "/emoji <x>",
-		summary: "alias for /tag (most people set shortname to an emoji)",
+		summary: "quick-access immediate-write of User.long_name via AdminMessage.SetOwner. No reboot. The canonical edit path for both longname and shortname (with draft + Ctrl+S) is /config — /nick stays as the fast inline rename muscle-memory expects",
 	},
 	"sync": {
 		usage:   "/sync",

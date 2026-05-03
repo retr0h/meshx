@@ -102,9 +102,12 @@ func (m *model) openOverlay(kind overlayKind) {
 		// selectedCfg instead of selectedMsg / selectedNd. Reset
 		// the cursor to the top entry so a fresh open always
 		// lands on the same row regardless of where it was the
-		// last time the panel closed.
+		// last time the panel closed. Snapshot live state into
+		// the draft buffer so per-row Enter mutates a clean copy
+		// — no leaked draft state between sessions.
 		m.focused = paneConfig
 		m.selectedCfg = 0
+		m.resetConfigDraft()
 	case overlayNodes, overlayNearby, overlayRadar:
 		// /nearby + /radar are peer-oriented surfaces — keep focus
 		// on the nodes pane so j/k stepping lands where the user
@@ -402,11 +405,72 @@ func wirePayloadBytes(input string) int {
 	}
 }
 
+// updateConfigEdit handles key events while the user is typing into
+// an inline /config string-row textinput. Inner Enter commits the
+// typed value into cfgDraft (per cfgEditing), Esc cancels the edit
+// without touching the draft. All other keys flow through to the
+// textinput so editing keys (arrows, backspace, etc.) work normally.
+//
+// On commit / cancel the model returns to modeNav so j/k resumes
+// walking the panel. The Component re-renders the row from cfgDraft
+// — what the user just typed shows up immediately if they committed,
+// or reverts to whatever was in the draft if they Esc'd.
+func (m model) updateConfigEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		v := strings.TrimSpace(m.cfgEditInput.Value())
+		switch m.cfgEditing {
+		case "longname":
+			m.cfgDraft.longName = v
+		case "shortname":
+			m.cfgDraft.shortName = v
+		}
+		m.cfgEditing = ""
+		m.cfgEditInput.Blur()
+		m.mode = modeNav
+		return m, nil
+	case "esc":
+		m.cfgEditing = ""
+		m.cfgEditInput.Blur()
+		m.mode = modeNav
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.cfgEditInput, cmd = m.cfgEditInput.Update(msg)
+	return m, cmd
+}
+
 // updateNav — scrollback / overlay selection mode. j/k walks the
 // focused list, single letters run contextual commands. ESC (or i/q)
 // always lands back at the input bar — canonical "where I type."
 func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+
+	// Discard-confirmation prompt — Esc on a dirty /config panel sets
+	// m.cfgConfirmDiscard, the panel renders "discard X unsaved
+	// changes? y/n", and any key other than y/n is a no-op while the
+	// prompt is up. y discards and closes; n cancels the prompt and
+	// keeps the user in nav so they can Ctrl+S instead.
+	if m.cfgConfirmDiscard {
+		switch key {
+		case "y", "Y":
+			m.cfgConfirmDiscard = false
+			m.resetConfigDraft()
+			return m, m.closeOverlayToInput()
+		case "n", "N", "esc":
+			m.cfgConfirmDiscard = false
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Ctrl+S inside /config commits the draft. Lives at the top of
+	// updateNav so it works regardless of selectedCfg / which row the
+	// cursor is on — same shape vim's :w semantics have.
+	if key == "ctrl+s" && m.overlay == overlayConfig {
+		m.commitConfigDraft()
+		return m, nil
+	}
 
 	// Ctrl+W prefix — window-nav. `j` drops to the input bar.
 	if m.ctrlWPend {
@@ -427,7 +491,14 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ctrlWPend = true
 		return m, nil
 	case "esc", "i", "q":
-		// Close any active overlay and land on the input bar.
+		// Close any active overlay and land on the input bar. If the
+		// /config panel has unsaved edits, raise the discard prompt
+		// instead — the next iteration of updateNav will read y/n
+		// out of m.cfgConfirmDiscard and route accordingly.
+		if m.overlay == overlayConfig && m.configDraftDirty() {
+			m.cfgConfirmDiscard = true
+			return m, nil
+		}
 		return m, m.closeOverlayToInput()
 	// Channel hop is a global action — bind Alt+digit in nav mode
 	// too so the keys don't silently no-op when the user is reading

@@ -45,14 +45,26 @@ import (
 )
 
 func (m *model) sendPlainMessage(text string) {
+	m.sendPlainReply(text, 0)
+}
+
+// sendPlainReply is sendPlainMessage with an optional Data.reply_id
+// for threading. Used by /reply, /msg, /me — anything that's
+// semantically "regular chat with a directed flavor," NOT a /bang
+// command. Routes through the same TEXT_MESSAGE_APP path sendBang
+// uses; the only difference is msg.bang stays empty so the chat row
+// renders with the magenta `›` "mine" marker instead of the yellow
+// `*` bang flag.
+func (m *model) sendPlainReply(text string, replyToID uint32) {
 	var pid uint32
 	var envelope *pb.ToRadio
 	if m.pump != nil {
-		envelope, pid = newTextToRadio(text, m.currentChannelIndex(), 0)
+		envelope, pid = newTextToRadio(text, m.currentChannelIndex(), replyToID)
 	}
 	item := messageItem{
 		time: timeNowHHMM(), from: "me", mine: true, text: text,
 		status: "pending", packetID: pid,
+		replyID: replyToID,
 		fromNum: m.myNodeNum,
 		sentAt:  time.Now(),
 	}
@@ -1308,7 +1320,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			parent = m.replyTargetFor(target)
 		}
 		m.replyParent = 0
-		m.sendBangReply("/reply "+target, body, parent)
+		// Plain chat with a Data.reply_id — NOT a /bang command. The
+		// renderer reads msg.bang to decide between yellow `*` and
+		// magenta `›` flag glyphs; we want `›` here so a reply
+		// looks like the regular outbound chat it actually is.
+		m.sendPlainReply(body, parent)
 		m.flash = fmt.Sprintf("reply sent to %s", target)
 	case "msg":
 		// /msg <call> <text> — directed message. Meshtastic has no
@@ -1327,7 +1343,12 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "usage: /msg <callsign> <text>"
 			return nil
 		}
-		m.sendBang("/msg "+target, target+": "+body)
+		// Plain chat with the target's nick prefixed in the body —
+		// NOT a /bang command. Renders with the magenta `›` flag so
+		// it reads as regular outbound chat (which it is — Meshtastic
+		// has no actual DM, this is still a channel broadcast with
+		// the addressing convention spelled out in the body).
+		m.sendPlainReply(target+": "+body, 0)
 		m.flash = fmt.Sprintf("DM sent to %s", target)
 	case "join":
 		if rest == "" {
@@ -1680,10 +1701,9 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.focused = paneMessages
 		m.input.Blur()
 		idx := -1
-		switch {
-		case rest == "":
+		if rest == "" {
 			idx = len(m.messages) - 1
-		default:
+		} else {
 			needle := strings.ToLower(strings.TrimSpace(rest))
 			// First pass: prefer matches in the from column — that's
 			// what "the last message FROM gleep" means semantically.

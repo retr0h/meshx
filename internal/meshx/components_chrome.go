@@ -124,16 +124,13 @@ func (s statusBar) Render(box Box) string {
 		statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.nodes))), chrome),
 	)
 
-	// Notification-state badges. Two distinct hardware paths share one
-	// visual gutter: terminal ding (toggled by /mute, reads
-	// m.dingMuted) and radio buzzer (toggled in /config, reads
-	// m.radioBuzzerEnabled). Always rendered so the user can see at a
-	// glance which side is on; icon swaps to convey state — 🔔 / 🔊
-	// when the surface is live, 🔕 / 🔇 when silenced. Live state
-	// uses the muted "label" tone so it blends into the rest of the
-	// status chrome; silenced state pops in pink so the user notices
-	// without scanning. The buzzer badge is dropped in demo mode
-	// because we don't have a real radio config to mirror.
+	// meshX terminal-ding badge — 🔔 when /mute is off (BEL fires on
+	// inbound text), 🔕 in pink when silenced. Always rendered so the
+	// user can see at a glance which way the toggle is set. The
+	// radio's onboard buzzer is intentionally NOT mirrored here —
+	// that's a radio-side thing the user hears in the room they're
+	// in, not something the terminal needs to visualise. /config
+	// shows the radio buzzer state directly when the panel is open.
 	if m.dingMuted {
 		segs = append(segs, statusSegment(
 			label.Render("🔕 ")+pink.Render("ding"), chrome,
@@ -142,17 +139,6 @@ func (s statusBar) Render(box Box) string {
 		segs = append(segs, statusSegment(
 			label.Render("🔔 ")+val.Render("ding"), chrome,
 		))
-	}
-	if !m.isDemo() {
-		if m.radioBuzzerEnabled {
-			segs = append(segs, statusSegment(
-				label.Render("🔊 ")+val.Render("buzzer"), chrome,
-			))
-		} else {
-			segs = append(segs, statusSegment(
-				label.Render("🔇 ")+pink.Render("buzzer"), chrome,
-			))
-		}
 	}
 
 	// Right-most segment: connection state.

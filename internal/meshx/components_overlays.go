@@ -314,18 +314,18 @@ func nodePresentationFor(n nodeItem, isSelf, isSelected bool) nodePresentation {
 		BracketColor: mhDrained,
 	}
 	switch state {
-	case "online":
+	case stateOnline:
 		p.Sigil = "@"
 		p.SigilColor = mhGreen
-	case "muted":
+	case stateMuted:
 		p.Sigil = "⊘"
 		p.SigilColor = mhLavender
 		p.NameColor = mhLavender
-	case "failed":
+	case stateFailed:
 		p.Sigil = "✗"
 		p.SigilColor = mhPink
 		p.NameColor = mhPink
-	case "offline":
+	case stateOffline:
 		p.Sigil = "·"
 		p.SigilColor = mhDrained
 		p.NameColor = mhDrained
@@ -371,7 +371,7 @@ func peerRowLine(
 	sigil := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(pres.SigilColor)).
 		Background(lipgloss.Color(rowBg)).
-		Bold(state == "online" || n.fav || isSelf).
+		Bold(state == stateOnline || n.fav || isSelf).
 		Render(pres.Sigil)
 	name := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(pres.NameColor)).

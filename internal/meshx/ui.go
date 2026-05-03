@@ -81,7 +81,7 @@ func (m model) findMessageByPacketID(id uint32) *messageItem {
 		return nil
 	}
 	for i := range m.messages {
-		if m.messages[i].packetID == id {
+		if m.messages[i].PacketID == id {
 			return &m.messages[i]
 		}
 	}
@@ -107,10 +107,10 @@ func (m model) findMessageByPacketID(id uint32) *messageItem {
 // column + accent tick and prepend the 👻 marker. Own messages and
 // rows with no fromNum (demo seeds, system rows) are never flagged.
 func (m model) senderUnresolved(msg messageItem) bool {
-	if msg.mine || msg.fromNum == 0 {
+	if msg.Mine || msg.FromNum == 0 {
 		return false
 	}
-	idx, ok := m.nodesByNum[msg.fromNum]
+	idx, ok := m.nodesByNum[msg.FromNum]
 	if !ok || idx < 0 || idx >= len(m.nodes) {
 		return false
 	}
@@ -118,16 +118,16 @@ func (m model) senderUnresolved(msg messageItem) bool {
 }
 
 func (m model) displayFrom(msg messageItem) string {
-	if msg.mine {
+	if msg.Mine {
 		if cs := m.myCallsign(); cs != "" && cs != "—" {
 			return cs
 		}
-		return msg.from
+		return msg.From
 	}
-	if msg.fromNum == 0 {
-		return msg.from
+	if msg.FromNum == 0 {
+		return msg.From
 	}
-	if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx < len(m.nodes) {
+	if idx, ok := m.nodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
 		if cs := m.nodes[idx].callsign; cs != "" {
 			return cs
 		}
@@ -136,7 +136,7 @@ func (m model) displayFrom(msg messageItem) string {
 	// (race, future code) — synthesize the firmware default from
 	// fromNum so the row never shows the legacy "node 0x<hex>"
 	// string we used to bake into the SQLite from column.
-	long, _ := defaultCallsign(msg.fromNum)
+	long, _ := defaultCallsign(msg.FromNum)
 	return long
 }
 
@@ -184,7 +184,7 @@ func (m model) isMsgSearchHit(msg messageItem) bool {
 	if m.searchQuery == "" {
 		return false
 	}
-	return strings.Contains(strings.ToLower(msg.from+" "+msg.text), m.searchQuery)
+	return strings.Contains(strings.ToLower(msg.From+" "+msg.Text), m.searchQuery)
 }
 
 // isStringSearchHit is the plain-string variant — used for channels

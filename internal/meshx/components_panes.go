@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
 // channelsPane is the /channels overlay — a flex VStack of channel
@@ -775,7 +776,7 @@ func renderBorderedPane(
 func tailStartList(msgs []messageItem, rowsBudget int) int {
 	rows := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
-		cost := 1 + strings.Count(msgs[i].text, "\n")
+		cost := 1 + strings.Count(msgs[i].Text, "\n")
 		if msgs[i].acks != "" {
 			cost++
 		}
@@ -862,7 +863,7 @@ func messagesPaneRender(m model, width, height int) string {
 		// typed and read system status. Substring match against the
 		// from column handles the "[shortname] longname" rendering
 		// vs. raw callsign — same lowercase comparison /whois uses.
-		if msg.status != statusSystem && !msg.mine && m.isIgnored(msg.from) {
+		if msg.Status != mdl.StatusSystem && !msg.Mine && m.isIgnored(msg.From) {
 			continue
 		}
 		faded := m.nodeFilter != "" && !m.msgMatchesFilter(msg)
@@ -883,7 +884,7 @@ func messagesPaneRender(m model, width, height int) string {
 			bg = rowBgOdd
 			lastGroup = msg.group
 			groupBg = bg
-		case msg.status == statusSystem || msg.status == statusNotice:
+		case msg.Status == mdl.StatusSystem || msg.Status == mdl.StatusNotice:
 			// Standalone `-!-` rows (storage notices, single-line
 			// system messages) also pin to rowBgOdd so they read
 			// the same shade as grouped system blocks above and
@@ -905,7 +906,7 @@ func messagesPaneRender(m model, width, height int) string {
 		// via n/N visually swaps the highlight without losing the
 		// at-a-glance "these N rows match" cue. Skipped on system
 		// rows since the search semantics target chat content.
-		if msg.status != statusSystem && m.isMsgSearchHit(msg) {
+		if msg.Status != mdl.StatusSystem && m.isMsgSearchHit(msg) {
 			bg = searchHitRowBg
 		}
 

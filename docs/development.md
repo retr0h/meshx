@@ -384,10 +384,11 @@ resolution chain.
 ## Persistence — SQLite scrollback
 
 Live-radio mode opens `~/.meshx/meshx.db` (WAL journal, `_busy_timeout=5000`)
-via `openStorage(path)` and replays the last 500 messages on boot. `storage.go`
-is the whole surface: `defaultStoragePath`, `openStorage`, `saveMessage`,
-`loadMessages`. The schema is one flat `messages` table mirroring `messageItem`
-plus a `channel` column.
+via the `internal/meshx/storage` package and replays the last 500 messages on
+boot. The TUI consumes a narrow `Store` interface (defined in `store.go`); the
+concrete `*storage.Sqlite` implements it. The schema is one flat `messages`
+table mirroring `mdl.Message` (the wire/persistence shape that `messageItem`
+embeds) plus a `channel` column.
 
 Demo mode never touches the DB (`m.db == nil`). System / flash rows are skipped
 on save — stale by the time you read them back. Write errors are
@@ -401,10 +402,11 @@ the outgoing packet pointing at the target's most recent message's
 `MeshPacket.id`. The lookup runs via `replyTargetFor(call)` in `demo.go`;
 `newTextToRadio(text, channel, replyID)` threads it onto the wire.
 
-Receive side: `radioTextMsg` captures both `packetID` (the incoming packet's id)
-and `replyID`, and `applyTextMessage` records them on `messageItem`. The
-renderer checks `msg.replyID != 0` and, when the parent is findable in
-`m.messages`, prepends a dim quoted-parent line above the reply row:
+Receive side: the pump's `mdl.Text` event carries both `PacketID` (the incoming
+packet's id) and `ReplyID`, and `applyTextMessage` records them on the embedded
+`mdl.Message` of `messageItem`. The renderer checks `msg.ReplyID != 0` and, when
+the parent is findable in `m.messages`, prepends a dim quoted-parent line above
+the reply row:
 
 ```
   ┌ KC7XYZ 🦀 13:52  "Test, plz confirm"

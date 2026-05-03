@@ -26,6 +26,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
 // Zebra stripe bgs for message rows — dense mutt-style list where
@@ -159,13 +161,13 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 	if m.senderUnresolved(msg) {
 		accentColor = mhDrained
 	}
-	if msg.mine {
+	if msg.Mine {
 		accentColor = mhMagenta
 	}
-	if msg.bang != "" {
+	if msg.Bang != "" {
 		accentColor = mhYellow
 	}
-	if msg.status == statusFail {
+	if msg.Status == mdl.StatusFail {
 		accentColor = mhPink
 	}
 	accent := lipgloss.NewStyle().
@@ -179,29 +181,29 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 	flagGlyph := " "
 	flagStyle := tstamp
 	switch {
-	case msg.status == statusFail:
+	case msg.Status == mdl.StatusFail:
 		flagGlyph = "✗"
 		flagStyle = fail
-	case msg.bang != "":
+	case msg.Bang != "":
 		flagGlyph = "*"
 		flagStyle = bang
-	case msg.mine:
+	case msg.Mine:
 		flagGlyph = "›"
 		flagStyle = me
 	}
 	flag := flagStyle.Render(flagGlyph + " ")
 
 	// Time.
-	timeCell := tstamp.Render(msg.time + "  ")
+	timeCell := tstamp.Render(msg.Time + "  ")
 
 	// Sender.
 	fromRaw := m.displayFrom(msg)
 	shortName := ""
-	if msg.mine {
+	if msg.Mine {
 		fromRaw = m.myCallsign()
 		shortName = m.myShortName()
 	} else {
-		if idx, ok := m.nodesByNum[msg.fromNum]; ok &&
+		if idx, ok := m.nodesByNum[msg.FromNum]; ok &&
 			idx >= 0 && idx < len(m.nodes) {
 			shortName = m.nodes[idx].shortName
 		}
@@ -213,7 +215,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		fromRaw = "[" + shortName + "] " + fromRaw
 	}
 	senderStyle := peer
-	if msg.mine {
+	if msg.Mine {
 		senderStyle = me
 	}
 	sender := senderStyle.Render(padOrTruncate(fromRaw, fromW))
@@ -221,10 +223,10 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 	// Hop column.
 	hopText := strings.Repeat(" ", hopColW)
 	switch {
-	case msg.mine:
+	case msg.Mine:
 		// blank
-	case msg.hops > 0:
-		hopText = fmt.Sprintf("↝%3dh  ", msg.hops)
+	case msg.Hops > 0:
+		hopText = fmt.Sprintf("↝%3dh  ", msg.Hops)
 	default:
 		hopText = "↝  dx  "
 	}
@@ -232,8 +234,8 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 
 	// SNR column.
 	snrText := strings.Repeat(" ", snrColW)
-	if msg.snr != "" {
-		snrText = fmt.Sprintf("%6sdB", msg.snr)
+	if msg.SNR != "" {
+		snrText = fmt.Sprintf("%6sdB", msg.SNR)
 	}
 	snrCell := hopFg.Render(snrText)
 
@@ -241,13 +243,13 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 	statusGap := lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
 	statusGlyph := " "
 	statusRender := tstamp
-	switch msg.status {
-	case statusPending:
+	switch msg.Status {
+	case mdl.StatusPending:
 		statusGlyph = "…"
-	case statusAck:
+	case mdl.StatusAck:
 		statusGlyph = "✓"
 		statusRender = ack
-	case statusFail:
+	case mdl.StatusFail:
 		statusGlyph = "✗"
 		statusRender = fail
 	}
@@ -270,7 +272,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 
 // chatRowMainLine renders the FIRST visible line of a chat row at
 // exactly contentW cells per ansiCells via Row{Cells:[]Cell{...}}.
-// `body` is msg.text's first line (with optional "(?) " prefix for
+// `body` is msg.Text's first line (with optional "(?) " prefix for
 // corrupted-byte rows); the body cell is the row's flex slot.
 func chatRowMainLine(parts chatRowParts, body string, bodyStyler styler, contentW int) string {
 	const (

@@ -291,76 +291,20 @@ type channelItem struct {
 	psk []byte
 }
 
-// messageStatus is a typed enum for messageItem.status. Strings on
-// the wire / disk (the SQLite messages.status column stays TEXT for
-// debuggability — `sqlite3 meshx.db "select status from messages"`
-// reads as "ack" / "pending" / etc., not opaque ints) but typed in
-// the model so a typo like `statusPendng` becomes a compile error
-// instead of a row that silently never matches a switch case. The
-// boundary lives in storage.go (saveMessage/loadMessages) and uses
-// String() / parseMessageStatus() for the conversion.
-type messageStatus int
-
-const (
-	// _ is the zero value — inbound chat that doesn't carry a delivery
-	// indicator (StatusOK in model). Persisted as empty string "".
-	// Underscore-anchored so the iota chain below stays stable; the
-	// named StatusOK lives in the model package.
-	_ messageStatus = iota
-	// statusAck — outbound message the radio confirmed delivery for
-	// (Routing.NONE on a routing reply OR a real REPLY_APP echo).
-	// Renders the trailing ✓ glyph.
-	statusAck
-	// statusPending — outbound message we've enqueued but haven't
-	// heard back on. Renders the trailing … glyph; the stale-pending
-	// sweep at startup flips any row stuck here past the cutoff to
-	// statusFail.
-	statusPending
-	// statusFail — outbound message the radio actively rejected OR
-	// that aged out without an ack. Renders the trailing ✗ glyph;
-	// the `R` nav-key resends.
-	statusFail
-	// statusSystem — locally generated row (`-!-` notice, /whois /
-	// /info / /config blocks, etc.). NOT persisted to SQLite — the
-	// saveMessage early-return drops these on the floor since they're
-	// regenerated from live state on every launch.
-	statusSystem
-	// statusNotice — TTL-expiring `-!-` row from notices.go. Same
-	// rendering as statusSystem but with a fade + reap path; NOT
-	// persisted for the same reason.
-	statusNotice
-)
-
-// String returns the wire/disk form. Kept stable so historic SQLite
-// rows replay correctly after this refactor (column stays TEXT, no
-// migration needed).
-func (s messageStatus) String() string {
-	switch s {
-	case statusAck:
-		return "ack"
-	case statusPending:
-		return "pending"
-	case statusFail:
-		return "fail"
-	case statusSystem:
-		return "system"
-	case statusNotice:
-		return "notice"
-	default:
-		return ""
-	}
-}
-
+// messageItem is the renderer's row envelope. Embeds mdl.Message
+// (the persisted/wire shape — Time, From, Text, Mine, Bang, Status,
+// Hops, SNR, PacketID, ReplyID, FromNum, SentAt, Corrupted) and
+// adds render-only fields the storage layer doesn't care about
+// (group binding, fade timer, pin state, notice styling, child ack
+// line). The mdl.Message embedding means storage round-trips just
+// pull `.Message` directly — no mapper boilerplate.
 type messageItem struct {
-	time   string
-	from   string
-	text   string
-	mine   bool
-	bang   string // empty or "!cq", "!cqr", "!qth", etc.
-	status messageStatus
-	acks   string // optional child line — "↳ 3 acks — ..."
-	hops   int    // mesh hop count; 0 = direct/self
-	snr    string // "-8.5" etc., empty to hide
+	mdl.Message
+
+	// acks — optional child line ("↳ 3 acks — ...") rendered under
+	// outgoing messages once we've collected receipts.
+	acks string
+
 	// group — non-zero value binds a sequence of rows as a single
 	// logical entry. Used for /whois / /config / /env multi-line
 	// "server reply" blocks so every line in the block shares the
@@ -368,40 +312,6 @@ type messageItem struct {
 	// is rendered only on the first row of a group; continuation
 	// rows hide it.
 	group uint64
-
-	// packetID / replyID — Meshtastic text-message threading.
-	// packetID is MeshPacket.id as seen on the wire; replyID is
-	// Data.reply_id pointing at the message this one is answering.
-	// Both zero for in-memory-only entries (system lines, demo
-	// seeds that pre-date the feature).
-	packetID uint32
-	replyID  uint32
-
-	// sentAt — absolute timestamp the message was received (live)
-	// or originally persisted (replay from sqlite). Populated from
-	// messages.created_at on replay; set to time.Now() on live
-	// inbound/outbound. Used by newModel's startup backfill to
-	// recompute each sender's lastHeardAt from replayed history so
-	// /whois and the nodes overlay don't show stale state right
-	// after a restart. Zero for in-memory-only entries.
-	sentAt time.Time
-
-	// fromNum — Meshtastic node num of the sender, captured at
-	// ingest. Persisted so the renderer can backfill the displayed
-	// callsign from m.nodesByNum LIVE (the stored `from` field is
-	// only a snapshot at receive time — if NodeInfo arrives later
-	// we'd otherwise be stuck showing "node 0xabc" forever). Zero
-	// for "me" / system lines / demo seeds.
-	fromNum uint32
-
-	// corrupted — true when sanitizeMessageText replaced bad bytes
-	// or dropped non-printable runes from the body. Drives the ⚠
-	// marker + dim italic styling on the row so the user knows the
-	// content isn't trustworthy without throwing away the salvageable
-	// printable bits. Not persisted — recomputed from msg.text on
-	// every replay so a future sanitizer change automatically
-	// re-evaluates historic rows.
-	corrupted bool
 
 	// style — notice-row styling knob set by the m.notice() writer.
 	// nil for chat rows; non-nil for every `-!-` entry (storage,
@@ -971,7 +881,15 @@ func newModel(demo *Demo, dest string) model {
 				if pastModels, err := store.LoadMessages(m.radioID, "", 500); err == nil {
 					past := make([]messageItem, 0, len(pastModels))
 					for _, mm := range pastModels {
-						past = append(past, messageItemFromModel(mm))
+						// sanitizeMessageText runs on read so historic
+						// rows written before sanitizeMessageText
+						// landed pick up the ⚠ marker + dim styling
+						// on next launch without a migration. The
+						// Corrupted flag is recomputed from the text
+						// every time, so a future sanitizer change
+						// automatically re-evaluates the row.
+						mm.Text, mm.Corrupted = sanitizeMessageText(mm.Text)
+						past = append(past, messageItem{Message: mm})
 					}
 					baseIdx := len(m.messages)
 					m.messages = append(m.messages, past...)
@@ -987,17 +905,17 @@ func newModel(demo *Demo, dest string) model {
 					// collide and they never arrive from the wire
 					// anyway.
 					for i, msg := range past {
-						if msg.packetID == 0 {
+						if msg.PacketID == 0 {
 							continue
 						}
-						m.messagesByPacketID[msg.packetID] = baseIdx + i
+						m.messagesByPacketID[msg.PacketID] = baseIdx + i
 					}
 					// Ghost-peer replay — every historical message
 					// with a fromNum we haven't seen in m.nodes gets
 					// a synthesized firmware-default entry so /whois
 					// / /cqr / /rs / /ping can target it by shortname
 					// or hex without waiting for a fresh live packet.
-					// Using defaultCallsign rather than msg.from keeps
+					// Using defaultCallsign rather than msg.From keeps
 					// the row consistent with how live applyTextMessage
 					// ingest now ghost-creates peers — single source
 					// of truth, and historical rows that were saved
@@ -1008,24 +926,24 @@ func newModel(demo *Demo, dest string) model {
 					// "identified" notification fires when real
 					// NodeInfo finally lands.
 					for _, msg := range past {
-						if msg.fromNum == 0 {
+						if msg.FromNum == 0 {
 							continue
 						}
-						if _, ok := m.nodesByNum[msg.fromNum]; ok {
+						if _, ok := m.nodesByNum[msg.FromNum]; ok {
 							continue
 						}
-						long, short := defaultCallsign(msg.fromNum)
+						long, short := defaultCallsign(msg.FromNum)
 						m.nodes = append(m.nodes, nodeItem{
 							callsign:   long,
 							shortName:  short,
-							nodeNum:    msg.fromNum,
+							nodeNum:    msg.FromNum,
 							unresolved: true,
 							state:      stateOffline,
-							lastHeard:  msg.time,
-							lastSNR:    msg.snr,
-							lastHops:   msg.hops,
+							lastHeard:  msg.Time,
+							lastSNR:    msg.SNR,
+							lastHops:   msg.Hops,
 						})
-						m.nodesByNum[msg.fromNum] = len(m.nodes) - 1
+						m.nodesByNum[msg.FromNum] = len(m.nodes) - 1
 					}
 				}
 				// Startup backfill — walk the replayed messages once
@@ -1039,15 +957,15 @@ func newModel(demo *Demo, dest string) model {
 				// the expected "online / Xm ago" on the first render.
 				touched := map[uint32]struct{}{}
 				for _, past := range m.messages {
-					if past.fromNum == 0 || past.sentAt.IsZero() {
+					if past.FromNum == 0 || past.SentAt.IsZero() {
 						continue
 					}
-					idx, ok := m.nodesByNum[past.fromNum]
+					idx, ok := m.nodesByNum[past.FromNum]
 					if !ok {
 						continue
 					}
-					if past.sentAt.After(m.nodes[idx].lastHeardAt) {
-						m.nodes[idx].lastHeardAt = past.sentAt
+					if past.SentAt.After(m.nodes[idx].lastHeardAt) {
+						m.nodes[idx].lastHeardAt = past.SentAt
 						// Stamp lastHops + lastSNR off the most-
 						// recent message in history. Without this,
 						// /tr's offline fall-back path (no live
@@ -1057,11 +975,11 @@ func newModel(demo *Demo, dest string) model {
 						// for live packets, but historical messages
 						// replay directly into m.messages and never
 						// touch the node telemetry slots.
-						m.nodes[idx].lastHops = past.hops
-						if past.snr != "" {
-							m.nodes[idx].lastSNR = past.snr
+						m.nodes[idx].lastHops = past.Hops
+						if past.SNR != "" {
+							m.nodes[idx].lastSNR = past.SNR
 						}
-						touched[past.fromNum] = struct{}{}
+						touched[past.FromNum] = struct{}{}
 					}
 				}
 				backfilled := len(touched)
@@ -1140,10 +1058,10 @@ func newModel(demo *Demo, dest string) model {
 	// mentions them so tab-completion disambiguation + nav-w have a
 	// hex to address, same as live mode.
 	for _, msg := range demo.Messages {
-		if msg.fromNum == 0 || msg.mine {
+		if msg.FromNum == 0 || msg.Mine {
 			continue
 		}
-		if _, ok := m.nodesByNum[msg.fromNum]; ok {
+		if _, ok := m.nodesByNum[msg.FromNum]; ok {
 			continue
 		}
 		for i := range m.nodes {
@@ -1153,9 +1071,9 @@ func newModel(demo *Demo, dest string) model {
 			if m.nodes[i].nodeNum != 0 {
 				continue
 			}
-			if m.nodes[i].callsign == msg.from {
-				m.nodes[i].nodeNum = msg.fromNum
-				m.nodesByNum[msg.fromNum] = i
+			if m.nodes[i].callsign == msg.From {
+				m.nodes[i].nodeNum = msg.FromNum
+				m.nodesByNum[msg.FromNum] = i
 				break
 			}
 		}

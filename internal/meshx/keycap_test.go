@@ -7,6 +7,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
+
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
 // TestMessagesPane_KeycapRowFitsBox runs renderMessagesPane with a
@@ -31,22 +33,22 @@ func TestMessagesPane_KeycapRowFitsBox(t *testing.T) {
 		m.w = termW
 		m.h = 30
 		m.messages = []messageItem{
-			{
-				time: "12:16", from: "RumpleDumpleAuto", fromNum: 0xdead0001,
-				text: "6️⃣", hops: 6, snr: "4.5", status: statusAck,
-			},
-			{
-				time: "12:17", from: "RumpleDumpleAuto", fromNum: 0xdead0001,
-				text: "7️⃣", hops: 6, snr: "6.8", status: statusAck,
-			},
-			{
-				time: "12:24", from: "Node",
-				text: "Heard diamond bar", hops: 2, snr: "6.0", status: statusAck,
-			},
-			{
-				time: "12:25", from: "Node",
-				text: "2️⃣ 6️⃣ 7️⃣", hops: 4, snr: "5.5", status: statusAck,
-			},
+			{Message: mdl.Message{
+				Time: "12:16", From: "RumpleDumpleAuto", FromNum: 0xdead0001,
+				Text: "6️⃣", Hops: 6, SNR: "4.5", Status: mdl.StatusAck,
+			}},
+			{Message: mdl.Message{
+				Time: "12:17", From: "RumpleDumpleAuto", FromNum: 0xdead0001,
+				Text: "7️⃣", Hops: 6, SNR: "6.8", Status: mdl.StatusAck,
+			}},
+			{Message: mdl.Message{
+				Time: "12:24", From: "Node",
+				Text: "Heard diamond bar", Hops: 2, SNR: "6.0", Status: mdl.StatusAck,
+			}},
+			{Message: mdl.Message{
+				Time: "12:25", From: "Node",
+				Text: "2️⃣ 6️⃣ 7️⃣", Hops: 4, SNR: "5.5", Status: mdl.StatusAck,
+			}},
 		}
 		boxW := termW - 1 // mirrors View()'s safeW frame
 		paneH := 20

@@ -160,7 +160,7 @@ meshX renders incoming replies as a dim one-line quoted reference above the row:
 › me  13:53  /73 KC7XYZ — 73 KC7XYZ                                  ✓
 ```
 
-The quote resolves from `msg.replyID` → parent `msg.packetID`, so threading only
+The quote resolves from `msg.ReplyID` → parent `msg.PacketID`, so threading only
 renders when both ends are in the loaded scrollback.
 
 ## Messaging /commands
@@ -333,7 +333,7 @@ what protobuf field each display surface reads.
 | incoming `NODEINFO_APP`                            | `MeshPacket` with `Data.portnum = NODEINFO_APP`, payload is a `User` proto                                                                                                                      | surfaces peer longname/shortname, upgrades 👻 ghost peers to real names                       |
 | incoming `POSITION_APP`                            | payload is a `Position` proto                                                                                                                                                                   | feeds `/qth <call>` and status-bar `☖ <grid>`                                                 |
 | incoming `TELEMETRY_APP`                           | payload is a `Telemetry` proto with `DeviceMetrics` or `EnvironmentMetrics` variants                                                                                                            | feeds status-bar `⚡ battery` and `/env <call>`                                               |
-| outgoing packet id                                 | every `TEXT_MESSAGE_APP` packet we send fills `MeshPacket.id` with a random non-zero uint32, stashed on `messageItem.packetID`                                                                  | correlation key for the later Routing reply; without it ack tracking is blind                 |
+| outgoing packet id                                 | every `TEXT_MESSAGE_APP` packet we send fills `MeshPacket.id` with a random non-zero uint32, stashed on `messageItem.PacketID` (the embedded `mdl.Message`)                                     | correlation key for the later Routing reply; without it ack tracking is blind                 |
 | incoming `ROUTING_APP`                             | `Data.portnum = ROUTING_APP`, `Data.request_id = <our sent packetID>`, payload is a `Routing` proto whose `error_reason` is `NONE` on ack or a code (`TIMEOUT`, `MAX_RETRANSMIT`, …) on failure | flips the outbound row's `status` to `ack` / `fail`; drives the `…` → `✓` / `✗` indicator     |
 | `R` in nav mode                                    | rebuilds the original `ToRadio` envelope with a fresh `MeshPacket.id`, re-enqueues                                                                                                              | retransmit of a failed outbound; fresh id so the next routing reply lands cleanly             |
 

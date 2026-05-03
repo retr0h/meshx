@@ -360,20 +360,20 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 	mine := body.FromNum == m.myNodeNum
 
 	cleanText, corrupted := sanitizeMessageText(body.Text)
-	item := messageItem{
-		time:      body.Time,
-		from:      from,
-		mine:      mine,
-		text:      cleanText,
-		corrupted: corrupted,
-		status:    statusAck,
-		hops:      body.Hops,
-		snr:       body.SNR,
-		packetID:  body.PacketID,
-		replyID:   body.ReplyID,
-		fromNum:   body.FromNum,
-		sentAt:    body.SentAt,
-	}
+	item := messageItem{Message: mdl.Message{
+		Time:      body.Time,
+		From:      from,
+		Mine:      mine,
+		Text:      cleanText,
+		Corrupted: corrupted,
+		Status:    mdl.StatusAck,
+		Hops:      body.Hops,
+		SNR:       body.SNR,
+		PacketID:  body.PacketID,
+		ReplyID:   body.ReplyID,
+		FromNum:   body.FromNum,
+		SentAt:    body.SentAt,
+	}}
 
 	// Dedupe replays from the radio's RAM queue. When we reconnect
 	// after a short disconnect, the radio re-drains any packets it
@@ -396,14 +396,14 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 			// Leave status alone unless it was pending and we now
 			// have a real ack.
 			prev := &m.messages[existing]
-			prev.hops = body.Hops
-			prev.snr = body.SNR
-			if prev.status == statusPending {
-				prev.status = statusAck
+			prev.Hops = body.Hops
+			prev.SNR = body.SNR
+			if prev.Status == mdl.StatusPending {
+				prev.Status = mdl.StatusAck
 			}
 			if m.store != nil {
 				m.storagePersist(
-					m.store.SaveMessage(m.radioID, channelName, messageItemToModel(*prev)),
+					m.store.SaveMessage(m.radioID, channelName, prev.Message),
 				)
 			}
 			return nil
@@ -430,7 +430,7 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 
 	// Persist the incoming message so it survives a restart.
 	if m.store != nil {
-		m.storagePersist(m.store.SaveMessage(m.radioID, channelName, messageItemToModel(item)))
+		m.storagePersist(m.store.SaveMessage(m.radioID, channelName, item.Message))
 	}
 
 	// Bump unread count on non-active channels.
@@ -652,19 +652,19 @@ func (m *model) applyRouting(msg mdl.Routing) {
 		return
 	}
 	for i := range m.messages {
-		if m.messages[i].packetID != msg.RequestID || !m.messages[i].mine {
+		if m.messages[i].PacketID != msg.RequestID || !m.messages[i].Mine {
 			continue
 		}
 		if msg.OK {
-			m.messages[i].status = statusAck
+			m.messages[i].Status = mdl.StatusAck
 			m.flash = "ack received"
 		} else {
-			m.messages[i].status = statusFail
+			m.messages[i].Status = mdl.StatusFail
 			m.flash = "delivery failed: " + msg.ErrorName + "  (R to resend)"
 		}
 		if m.store != nil {
 			m.storagePersist(
-				m.store.SaveMessage(m.radioID, m.currentChannel, messageItemToModel(m.messages[i])),
+				m.store.SaveMessage(m.radioID, m.currentChannel, m.messages[i].Message),
 			)
 		}
 		return
@@ -685,14 +685,14 @@ func (m *model) resend(idx int) {
 		return
 	}
 	msg := &m.messages[idx]
-	if !msg.mine {
+	if !msg.Mine {
 		m.flash = "R: can only resend your own messages"
 		return
 	}
-	switch msg.status {
-	case statusFail, statusPending:
+	switch msg.Status {
+	case mdl.StatusFail, mdl.StatusPending:
 		// Fall through to retransmit.
-	case statusAck:
+	case mdl.StatusAck:
 		m.flash = "R: this message already delivered ✓"
 		return
 	default:
@@ -705,10 +705,10 @@ func (m *model) resend(idx int) {
 	}
 	pid, _ := m.pump.Send(mdl.SendText{
 		Channel: int(m.currentChannelIndex()),
-		Text:    msg.text,
-		ReplyID: msg.replyID,
+		Text:    msg.Text,
+		ReplyID: msg.ReplyID,
 	})
-	msg.packetID = pid
-	msg.status = statusPending
+	msg.PacketID = pid
+	msg.Status = mdl.StatusPending
 	m.flash = fmt.Sprintf("↻ retransmit sent (pid=0x%08x) — awaiting ack", pid)
 }

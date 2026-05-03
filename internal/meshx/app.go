@@ -31,6 +31,7 @@ import (
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
+	"github.com/retr0h/meshx/internal/meshx/session"
 	"github.com/retr0h/meshx/internal/meshx/storage"
 )
 
@@ -60,18 +61,6 @@ const meshtasticMaxTextBytes = 228
 // remaining-time portion without losing the original attempt count or
 // error. readyAt is when the pump's backoff sleep is expected to end
 // (the next dial attempt fires) — we display the diff against now.
-type reconnectState struct {
-	// initial is true for the very first connect at app startup —
-	// renders as "connecting" instead of "reconnecting" and skips
-	// the attempt counter (no retries have happened yet). Cleared
-	// the moment the pump actually emits its first
-	// mdl.Reconnecting or the radio sends its first frame.
-	initial bool
-	attempt int
-	err     error
-	readyAt time.Time
-}
-
 // reconnectFlashText renders the current reconnect banner.
 // Pump retries forever, so the previous "retry 3/∞" fraction read as
 // truncation to users — replaced with prose: a leading "reconnecting"
@@ -83,16 +72,16 @@ type reconnectState struct {
 const reconnectErrMaxLen = 64
 
 func (m model) reconnectFlashText() string {
-	if m.reconnect == nil {
+	if m.Reconnect == nil {
 		return ""
 	}
-	r := m.reconnect
-	remaining := time.Until(r.readyAt).Truncate(time.Second)
+	r := m.Reconnect
+	remaining := time.Until(r.ReadyAt).Truncate(time.Second)
 	tail := fmt.Sprintf("next try in %s", remaining)
 	if remaining <= 0 {
 		tail = "dialing now"
 	}
-	if r.initial {
+	if r.Initial {
 		// Startup banner. No attempts have failed yet, and we don't
 		// know whether the pump is still inside its first
 		// transport.Dial (e.g. BLE scan, max 8s) or has moved into
@@ -106,12 +95,12 @@ func (m model) reconnectFlashText() string {
 		return "connecting…"
 	}
 	errText := ""
-	if r.err != nil {
-		errText = " · " + truncateForFlash(r.err.Error(), reconnectErrMaxLen)
+	if r.Err != nil {
+		errText = " · " + truncateForFlash(r.Err.Error(), reconnectErrMaxLen)
 	}
 	return fmt.Sprintf(
 		"reconnecting · attempt %d · %s%s",
-		r.attempt, tail, errText,
+		r.Attempt, tail, errText,
 	)
 }
 
@@ -132,10 +121,10 @@ func truncateForFlash(s string, n int) string {
 // banner active. Also clears the flash slot itself so the status row
 // goes blank rather than freezing on the last "retry N/M" line.
 func (m *model) clearReconnectBanner() {
-	if m.reconnect == nil {
+	if m.Reconnect == nil {
 		return
 	}
-	m.reconnect = nil
+	m.Reconnect = nil
 	m.flash = ""
 	m.flashSeen = ""
 }
@@ -183,33 +172,6 @@ type configDraft struct {
 	shortName string
 }
 
-// pendingTraceroute is the in-flight /tr request the model tracks
-// from outbound enqueue until the matching TRACEROUTE_APP reply (or
-// timeout) lands. packetID is the MeshPacket.id we stamped on the
-// request; matching against mdl.Traceroute.requestID ignores
-// foreign traceroutes that happen to be on the air. target is the
-// callsign / node num the user asked to trace, kept around so the
-// reply card can render "traceroute <call> — N hops" without
-// re-resolving. requestedAt drives the round-trip-time readout in
-// the result block + the timeout deadline.
-type pendingTraceroute struct {
-	packetID    uint32
-	targetNum   uint32
-	targetCall  string
-	requestedAt time.Time
-}
-
-// pendingPing is the in-flight /ping request — same correlation
-// shape as pendingTraceroute. packetID matches the inbound
-// REPLY_APP echo's request_id; fromNum match against targetNum is
-// the fallback for older firmware that doesn't echo request_id.
-type pendingPing struct {
-	packetID    uint32
-	targetNum   uint32
-	targetCall  string
-	requestedAt time.Time
-}
-
 // pingTimeoutMsg fires N seconds after a /ping goes out — same
 // pattern as tracerouteTimeoutMsg. packetID guards against stale
 // ticks colliding with a fresh /ping.
@@ -218,7 +180,7 @@ type pingTimeoutMsg struct {
 }
 
 // tracerouteTimeoutMsg fires N seconds after a /tr request goes out;
-// if it still matches m.pendingTraceroute (i.e. no reply arrived)
+// if it still matches m.PendingTraceroute (i.e. no reply arrived)
 // the handler emits a "no reply" systemBlock and clears the pending
 // slot. packetID is captured at enqueue time so a stale tick from a
 // previous /tr can't clobber a fresh one — same correlation pattern
@@ -341,7 +303,16 @@ type messageItem struct {
 	pinnedRemaining time.Duration
 }
 
+// model is the Bubble Tea state. Session-state fields (nodes,
+// messages, NodeDB indices, radio telemetry, in-flight ping/tr
+// bookkeeping, …) live on the embedded *session.Session — which is
+// also what a future headless `meshx serve` daemon will construct
+// directly without dragging Bubble Tea in. TUI-only state (focus
+// cursors, search query, splash, key bindings, flash banner, config
+// draft, etc.) stays on model proper.
 type model struct {
+	*session.Session
+
 	w, h int
 
 	mode mode
@@ -357,10 +328,15 @@ type model struct {
 	selectedNd  int
 	nodeSort    sortMode
 
-	channels       []channelItem
-	messages       []messageItem
-	nodes          []nodeItem
-	currentChannel string
+	// channels / messages / nodes still live on model because their
+	// element types (channelItem / messageItem / nodeItem) carry
+	// renderer-only fields (notice styling, pin state, fade timer) the
+	// session package can't model without dragging UI-leaning types
+	// in. A follow-up MR-3.5b will untangle the render decoration so
+	// these can move down to *Session alongside the rest.
+	channels []channelItem
+	messages []messageItem
+	nodes    []nodeItem
 
 	input       textinput.Model // always-on bottom input (messages OR /commands)
 	searchInput textinput.Model
@@ -389,10 +365,10 @@ type model struct {
 	historyDraft  string // the line the user was typing before Up-arrowing — restored on Down past end
 
 	// Demo fixture — non-nil means "running off canned data, no radio
-	// transport". When set, its values pre-populate the same model
-	// fields the live radio would fill (myNodeNum, radioFirmware,
-	// batteryLevel, etc.), so every renderer has one code path: read
-	// model state. isDemo() is `m.demo != nil`.
+	// transport". When set, its values pre-populate the same session
+	// fields the live radio would fill (MyNodeNum, RadioFirmware,
+	// BatteryLevel, etc.), so every renderer has one code path: read
+	// session state. isDemo() is `m.demo != nil`.
 	demo *Demo
 
 	// store is the persistence handle — non-nil ONLY in live-radio
@@ -404,13 +380,6 @@ type model struct {
 	// the model never sees the concrete type.
 	store Store
 
-	// radioID is the canonical Meshtastic identity of the radio this
-	// session is bound to — "0x" + hex(my_node_num) once a handshake
-	// reveals it; a "pending:<transport>:<addr>" placeholder before.
-	// Every storage call passes this through so multi-radio data stays
-	// scoped per-radio.
-	radioID string
-
 	// initialFocusCmd captures the tea.Cmd returned by
 	// textinput.Focus() in newModel — the bubbles cursor blink
 	// chain is driven by a cmd-per-tick loop, and the FIRST cmd
@@ -418,31 +387,6 @@ type model struct {
 	// actually gets the cursor blinking; discarding it (which we
 	// were doing) leaves the cursor stuck "on" with no animation.
 	initialFocusCmd tea.Cmd
-
-	// syncPendingGhosts — snapshot of unresolved-peer count at the
-	// moment a /sync fires. When the next mdl.ConfigComplete
-	// lands we diff against the current count to emit a summary
-	// systemLine ("sync complete — N peers identified"). Zero means
-	// no /sync is in flight; setting it to -1 signals "pending but
-	// initial count was zero" to disambiguate from the start-of-day
-	// ConfigComplete that fires after handshake.
-	syncPendingGhosts int
-
-	// syncReceived backs the live peer counter shown in the chanRow
-	// flash during the NodeDB handshake. Bumps once per
-	// mdl.NodeInfo between MyInfo and ConfigComplete; reset to 0
-	// at MyInfo (start) and at ConfigComplete (end). No denominator
-	// because meshtastic doesn't surface the radio's expected
-	// NodeDB total up front.
-	syncReceived int
-
-	// storageAlerted — once any saveMessage / saveNode /
-	// saveNodePrefs fails, flip this flag and emit a single
-	// systemLine so the user knows persistence is degraded. Every
-	// subsequent save-error stays silent so a bad db doesn't
-	// machine-gun the messages pane. In-memory operation continues
-	// normally — losing persistence is preferable to crashing.
-	storageAlerted bool
 
 	// programSlot holds the *tea.Program once the bubbletea runtime is
 	// up. The pump goroutine needs program.Send(), but tea.NewProgram
@@ -455,77 +399,12 @@ type model struct {
 	// state is per-Run and not visible outside this file.
 	programSlot *programSlot
 
-	// Live-radio state. Zero-value is "demo mode — no transport".
-	pump        Pump           // non-nil when connected to a real radio
-	connectDest string         // "" = demo, else "/dev/cu.usbmodem2101" / tcp host
-	connected   bool           // true once ConfigComplete arrives
-	myNodeNum   uint32         // populated by MyNodeInfo
-	nodesByNum  map[uint32]int // radio node id → m.nodes index, for O(1) upsert
-	// messagesByPacketID — Meshtastic wire packet id → m.messages
-	// index, used to dedupe replays. On startup we populate this
-	// from the SQLite backfill; when the radio drains its RAM queue
-	// after WantConfigId, applyTextMessage checks here first and
-	// upgrades the existing row (ack state, signal telemetry)
-	// instead of appending a duplicate. Entries with packetID==0
-	// (system rows, demo seeds, pre-2.x local-only sends) never
-	// go in this map because their zero key would collide.
-	messagesByPacketID map[uint32]int
+	// pump is the live transport bridge — non-nil when connected to a
+	// real radio, nil in demo mode. Stored on model rather than Session
+	// for the same reason `store` is: it's the consumer interface this
+	// package's TUI declares (osapi-io pattern).
+	pump Pump
 
-	// Telemetry + config snapshot — populated as FromRadio packets
-	// arrive. Zero-value means "not yet received" so renderers can
-	// show a — placeholder without branching on a separate flag.
-	radioFirmware    string // FromRadio.Metadata.firmware_version
-	radioDeviceState uint32 // FromRadio.Metadata.device_state_version
-	radioHasWifi     bool
-	radioHasBT       bool
-	radioTxPower     int32   // Config.lora.tx_power (dBm)
-	radioRegion      string  // Config.lora.region (e.g. "US")
-	radioModemPreset string  // Config.lora.modem_preset (e.g. "LONG_FAST")
-	batteryLevel     uint32  // DeviceMetrics.battery_level (0-100, >100 = powered)
-	batteryVoltage   float32 // DeviceMetrics.voltage
-	channelUtil      float32 // DeviceMetrics.channel_utilization (%)
-	airUtilTx        float32 // DeviceMetrics.air_util_tx (%)
-	hasTelemetry     bool    // true once first DeviceMetrics arrives
-	radioRole        string  // Config.device.role — CLIENT / ROUTER / etc.
-	myLatitude       float64 // our own GPS position
-	myLongitude      float64
-	myAltitude       int32
-	myGrid           string // Maidenhead grid square for myLat/myLon
-
-	// Per-peer position + environment metrics. Keyed by node num,
-	// matches nodesByNum so /qth and /env can look these up.
-	peerPositions map[uint32]peerPosition
-	peerEnv       map[uint32]peerEnvMetrics
-
-	flash string
-
-	// dingMuted gates the terminal BEL emit on inbound text packets.
-	// Toggled by /mute, persisted under settings.ding_muted so the
-	// preference rides across restarts. Default false (=ding on)
-	// matches a fresh-install Meshtastic radio's stock notification
-	// behavior; the user has to deliberately silence meshX.
-	dingMuted bool
-	// radioBuzzerEnabled is the DERIVED "is the buzzer actually going
-	// to beep on a text message" state — true only when both
-	// ExternalNotification.Enabled AND AlertMessageBuzzer are set on
-	// the radio. Updated when mdl.ModuleBuzzer lands during the
-	// WantConfigId handshake; before that arrives the value is a
-	// best-effort guess from the persisted settings.radio_buzzer
-	// pref so /config doesn't render a confused empty/false until the
-	// real config trickles in. radioBuzzerKnown distinguishes "never
-	// heard the radio's actual state" from "actually false."
-	radioBuzzerEnabled bool
-	radioBuzzerKnown   bool
-	// radioBuzzerSnapshot holds the full ExternalNotification config
-	// the radio reported, so commitConfigDraft can round-trip every
-	// field other than Enabled / AlertMessageBuzzer when toggling the
-	// buzzer — preserving alert_bell, vibra, output pin, etc. that
-	// the user might have configured via the phone app. The companion
-	// radioBuzzerKnown flag distinguishes "live config arrived" from
-	// "still zero values" so the toggle path can fall back to a fresh
-	// (empty) snapshot if the user toggles before the handshake
-	// completes.
-	radioBuzzerSnapshot mdl.ExternalNotification
 	// selectedCfg is the cursor index for the /config overlay (one
 	// entry per row; j/k walks). Same accounting shape as selectedCh
 	// / selectedNd / selectedMsg — clamped against configEntries() in
@@ -555,38 +434,7 @@ type model struct {
 	// the input handler short-circuits all keys except y/n.
 	cfgConfirmDiscard bool
 
-	// pendingTraceroute tracks an in-flight /tr request so the
-	// inbound TRACEROUTE_APP reply can correlate back. Non-nil
-	// while a discovery is on the wire; cleared by applyTraceroute
-	// when the matching reply lands or by tracerouteTimeoutMsg when
-	// the deadline elapses with no reply.
-	pendingTraceroute *pendingTraceroute
-	// pendingPing tracks an in-flight /ping request — Meshtastic's
-	// REPLY_APP echo service bounces our outbound packet back to us
-	// and we measure RTT against this struct's requestedAt. Same
-	// one-in-flight contract as pendingTraceroute; same correlation
-	// path (request_id with a fromNum fallback for older firmware).
-	pendingPing *pendingPing
-
-	// ignored is the set of callsigns whose chat messages get
-	// filtered out of the messages pane. Toggled by /ignore <call>
-	// and /unignore <call>. In-memory only — restart clears the set
-	// (intentional: the persisted "muted" flag on nodeItem is a
-	// display marker handled by nav-m, not a render-side filter).
-	// Keyed on the lowercase callsign so substring/case-insensitive
-	// matches work the same way /whois lookup does.
-	ignored map[string]bool
-	// reconnect is non-nil while the pump is in its retry loop. Each
-	// mdl.Reconnecting refreshes the struct; noticeTickMsg uses it
-	// to repaint the flash with a live "in Ns" countdown so the user
-	// can watch the backoff clock tick instead of staring at a frozen
-	// "in 30s" for half a minute. Cleared the moment a radio frame
-	// proves we're back (mdl.MyInfo or mdl.ConfigComplete) or
-	// the pump gives up (mdl.TransportError). While set, the flash
-	// auto-clear is bypassed — the user explicitly wants persistent
-	// status during a retry storm, otherwise the message disappears
-	// after 5s and looks like meshx forgot it was reconnecting.
-	reconnect *reconnectState
+	flash string
 
 	// flashSeen / flashSeenAt drive the auto-clear timer for flash.
 	// 109 distinct sites set m.flash; refactoring all of them through
@@ -596,22 +444,6 @@ type model struct {
 	// observed text, flashSeenAt stamps when that observation began.
 	flashSeen   string
 	flashSeenAt time.Time
-}
-
-type peerPosition struct {
-	latitude  float64
-	longitude float64
-	altitude  int32
-	grid      string
-	at        time.Time
-}
-
-type peerEnvMetrics struct {
-	temperature float32
-	humidity    float32
-	pressure    float32
-	gas         float32
-	at          time.Time
 }
 
 // RunDemo launches the tea program with the canonical Demo fixture
@@ -762,18 +594,20 @@ func newModel(demo *Demo, dest string) model {
 	focusCmd := in.Focus()
 
 	chosenSplash := pickSplash()
+	sess := session.New()
+	sess.ConnectDest = dest
+	// Defaults match a stock Meshtastic radio + a fresh meshX install
+	// (radio buzzer beeps on text, terminal also dings). Overridden
+	// below from the settings table when storage opens.
+	sess.RadioBuzzerEnabled = true
 	m := model{
-		mode:               modeInput,
-		focused:            paneMessages,
-		splash:             chosenSplash,
-		connectDest:        dest,
-		demo:               demo,
-		nodesByNum:         make(map[uint32]int),
-		messagesByPacketID: make(map[uint32]int),
-		peerPositions:      make(map[uint32]peerPosition),
-		peerEnv:            make(map[uint32]peerEnvMetrics),
-		input:              in,
-		searchInput:        func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
+		Session:     sess,
+		mode:        modeInput,
+		focused:     paneMessages,
+		splash:      chosenSplash,
+		demo:        demo,
+		input:       in,
+		searchInput: func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
 		// cfgEditInput is the inline textinput that pops over the
 		// /config longname / shortname rows. CharLimit caps at 36 —
 		// the longest field is longname's 36-byte ceiling per the
@@ -786,10 +620,6 @@ func newModel(demo *Demo, dest string) model {
 			return s
 		}(),
 		initialFocusCmd: focusCmd,
-		// Defaults match a stock Meshtastic radio + a fresh meshX
-		// install (radio buzzer beeps on text, terminal also dings).
-		// Overridden below from the settings table when storage opens.
-		radioBuzzerEnabled: true,
 	}
 
 	if demo == nil {
@@ -816,7 +646,7 @@ func newModel(demo *Demo, dest string) model {
 				// real my_node_num.
 				transport, addr := storage.ParseRadioDest(dest)
 				if rid, err := store.ResolveRadioByConnection(transport, addr); err == nil {
-					m.radioID = rid
+					m.RadioID = rid
 				}
 				// Hydrate persisted prefs early — /mute (terminal ding,
 				// global) and /config's radio buzzer state (per-radio).
@@ -826,19 +656,19 @@ func newModel(demo *Demo, dest string) model {
 				// CLIENT preference (terminal beep); pass "" for radioID
 				// so it's stored once globally rather than once per radio.
 				if v, ok := store.GetSetting("", "ding_muted"); ok {
-					m.dingMuted = v == "on"
+					m.DingMuted = v == "on"
 				}
-				if v, ok := store.GetSetting(m.radioID, "radio_buzzer"); ok {
-					m.radioBuzzerEnabled = v != "off"
+				if v, ok := store.GetSetting(m.RadioID, "radio_buzzer"); ok {
+					m.RadioBuzzerEnabled = v != "off"
 				}
 				// Load the cached NodeDB FIRST — every peer we've
 				// ever resolved a real User for gets inserted into
-				// m.nodes / m.nodesByNum before anything else runs.
+				// m.nodes / m.NodesByNum before anything else runs.
 				// That way ghost-peer replay below skips any node we
 				// already know by name, and message rows for
 				// "node 0xd64b01be" instantly render as "WiobooJones"
 				// if we've seen them in a previous session.
-				if cached, err := store.LoadNodes(m.radioID); err == nil {
+				if cached, err := store.LoadNodes(m.RadioID); err == nil {
 					for _, n := range cached {
 						name := n.LongName
 						if name == "" {
@@ -865,20 +695,20 @@ func newModel(demo *Demo, dest string) model {
 							lastHeard: "cached",
 							hwModel:   n.HwModel,
 						})
-						m.nodesByNum[n.NodeNum] = len(m.nodes) - 1
+						m.NodesByNum[n.NodeNum] = len(m.nodes) - 1
 					}
 				}
 				// Stale-pending sweep BEFORE replay — flip any
 				// outbound row stuck "pending" past the cutoff to
 				// "fail" so it renders as `✗` and the user can hit
 				// `R` to resend.
-				expired, _ := store.ExpireStalePendingMessages(m.radioID, 5*time.Minute)
+				expired, _ := store.ExpireStalePendingMessages(m.RadioID, 5*time.Minute)
 				// Primary channel is what the radio tells us, but at
 				// boot we don't have it yet — replay under the name
 				// we'll default to (empty string key until a channel
 				// arrives). Load is by `currentChannel` so messages
 				// migrate as the handshake resolves the channel name.
-				if pastModels, err := store.LoadMessages(m.radioID, "", 500); err == nil {
+				if pastModels, err := store.LoadMessages(m.RadioID, "", 500); err == nil {
 					past := make([]messageItem, 0, len(pastModels))
 					for _, mm := range pastModels {
 						// sanitizeMessageText runs on read so historic
@@ -908,7 +738,7 @@ func newModel(demo *Demo, dest string) model {
 						if msg.PacketID == 0 {
 							continue
 						}
-						m.messagesByPacketID[msg.PacketID] = baseIdx + i
+						m.MessagesByPacketID[msg.PacketID] = baseIdx + i
 					}
 					// Ghost-peer replay — every historical message
 					// with a fromNum we haven't seen in m.nodes gets
@@ -929,7 +759,7 @@ func newModel(demo *Demo, dest string) model {
 						if msg.FromNum == 0 {
 							continue
 						}
-						if _, ok := m.nodesByNum[msg.FromNum]; ok {
+						if _, ok := m.NodesByNum[msg.FromNum]; ok {
 							continue
 						}
 						long, short := defaultCallsign(msg.FromNum)
@@ -943,7 +773,7 @@ func newModel(demo *Demo, dest string) model {
 							lastSNR:    msg.SNR,
 							lastHops:   msg.Hops,
 						})
-						m.nodesByNum[msg.FromNum] = len(m.nodes) - 1
+						m.NodesByNum[msg.FromNum] = len(m.nodes) - 1
 					}
 				}
 				// Startup backfill — walk the replayed messages once
@@ -960,7 +790,7 @@ func newModel(demo *Demo, dest string) model {
 					if past.FromNum == 0 || past.SentAt.IsZero() {
 						continue
 					}
-					idx, ok := m.nodesByNum[past.FromNum]
+					idx, ok := m.NodesByNum[past.FromNum]
 					if !ok {
 						continue
 					}
@@ -1037,7 +867,7 @@ func newModel(demo *Demo, dest string) model {
 	}
 	m.noticeCard(splashAsNotices(chosenSplash, demoCallsign)...)
 	if len(demo.Channels) > 0 {
-		m.currentChannel = demo.Channels[0].name
+		m.CurrentChannel = demo.Channels[0].name
 	}
 	m.selectedMsg = len(m.messages) - 1
 	if m.selectedMsg < 0 {
@@ -1047,9 +877,9 @@ func newModel(demo *Demo, dest string) model {
 	// "Me" node is the first entry in demo.Nodes by convention — bind
 	// myNodeNum + nodesByNum so myNode() and myCallsign() resolve the
 	// same way they do on a live radio.
-	m.myNodeNum = demo.NodeNum
+	m.MyNodeNum = demo.NodeNum
 	if len(demo.Nodes) > 0 {
-		m.nodesByNum[demo.NodeNum] = 0
+		m.NodesByNum[demo.NodeNum] = 0
 		m.nodes[0].nodeNum = demo.NodeNum
 	}
 	// Demo peers don't individually carry node-nums in the fixture,
@@ -1061,7 +891,7 @@ func newModel(demo *Demo, dest string) model {
 		if msg.FromNum == 0 || msg.Mine {
 			continue
 		}
-		if _, ok := m.nodesByNum[msg.FromNum]; ok {
+		if _, ok := m.NodesByNum[msg.FromNum]; ok {
 			continue
 		}
 		for i := range m.nodes {
@@ -1073,7 +903,7 @@ func newModel(demo *Demo, dest string) model {
 			}
 			if m.nodes[i].callsign == msg.From {
 				m.nodes[i].nodeNum = msg.FromNum
-				m.nodesByNum[msg.FromNum] = i
+				m.NodesByNum[msg.FromNum] = i
 				break
 			}
 		}
@@ -1081,22 +911,22 @@ func newModel(demo *Demo, dest string) model {
 
 	// Telemetry + config snapshot — same fields live mode sets from
 	// DeviceMetrics / LoraConfig / DeviceConfig / Position packets.
-	m.radioFirmware = demo.Firmware
-	m.radioHasWifi = demo.HasWifi
-	m.radioHasBT = demo.HasBT
-	m.radioRegion = demo.Region
-	m.radioModemPreset = demo.ModemPreset
-	m.radioTxPower = demo.TxPowerDBm
-	m.radioRole = demo.Role
-	m.batteryLevel = demo.BatteryLevel
-	m.batteryVoltage = demo.Voltage
-	m.channelUtil = demo.ChannelUtil
-	m.airUtilTx = demo.AirUtilTx
-	m.hasTelemetry = true
-	m.myLatitude = demo.Latitude
-	m.myLongitude = demo.Longitude
-	m.myGrid = demo.Grid
-	m.connected = true
+	m.RadioFirmware = demo.Firmware
+	m.RadioHasWifi = demo.HasWifi
+	m.RadioHasBT = demo.HasBT
+	m.RadioRegion = demo.Region
+	m.RadioModemPreset = demo.ModemPreset
+	m.RadioTxPower = demo.TxPowerDBm
+	m.RadioRole = demo.Role
+	m.BatteryLevel = demo.BatteryLevel
+	m.BatteryVoltage = demo.Voltage
+	m.ChannelUtil = demo.ChannelUtil
+	m.AirUtilTx = demo.AirUtilTx
+	m.HasTelemetry = true
+	m.MyLatitude = demo.Latitude
+	m.MyLongitude = demo.Longitude
+	m.MyGrid = demo.Grid
+	m.Connected = true
 
 	return m
 }
@@ -1123,9 +953,9 @@ func (m model) Init() tea.Cmd {
 	// tea's main loop is up before the pump's first p.Send() — no
 	// deadlock. The tea.Cmd returns an openPumpMsg which we handle
 	// in Update by doing the actual Dial+spawn.
-	if m.connectDest != "" {
+	if m.ConnectDest != "" {
 		cmds = append(cmds, func() tea.Msg {
-			return openPumpMsg{dest: m.connectDest}
+			return openPumpMsg{dest: m.ConnectDest}
 		})
 	}
 	return tea.Batch(cmds...)
@@ -1177,7 +1007,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// "sync: N peers received" counter (set in mdl.NodeInfo)
 		// own the flash. Otherwise this tick blows the counter away
 		// every 250ms with the dial banner.
-		if m.reconnect != nil && m.myNodeNum == 0 {
+		if m.Reconnect != nil && m.MyNodeNum == 0 {
 			m.flash = m.reconnectFlashText()
 			m.flashSeen = m.flash
 			m.flashSeenAt = time.Now()
@@ -1212,9 +1042,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// will overwrite this with the full "reconnecting · attempt
 		// N · …" banner if the first dial fails; the first radio
 		// frame clears it.
-		m.reconnect = &reconnectState{
-			initial: true,
-			readyAt: time.Now(),
+		m.Reconnect = &session.ReconnectState{
+			Initial: true,
+			ReadyAt: time.Now(),
 		}
 		m.flash = m.reconnectFlashText()
 		m.flashSeen = m.flash
@@ -1232,11 +1062,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case mdl.MyInfo:
-		m.myNodeNum = msg.NodeNum
+		m.MyNodeNum = msg.NodeNum
 		// First MyNodeInfo of the session locks in the radio's
 		// canonical identity — "0x" + hex(my_node_num), the same
 		// shape the Meshtastic phone app + Python CLI use. If
-		// m.radioID is still a placeholder (a "pending:…" string
+		// m.RadioID is still a placeholder (a "pending:…" string
 		// minted pre-handshake by resolveRadioByConnection, or the
 		// legacy migration-009 seed UUID), claimRadioIdentity does
 		// the atomic rewrite across radios + every FK column
@@ -1244,8 +1074,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// canonical IDs (we've handshaken with this radio before)
 		// just refresh my_node_num + last_seen.
 		if m.store != nil {
-			if newID, err := m.store.ClaimRadioIdentity(m.radioID, msg.NodeNum); err == nil {
-				m.radioID = newID
+			if newID, err := m.store.ClaimRadioIdentity(m.RadioID, msg.NodeNum); err == nil {
+				m.RadioID = newID
 			} else {
 				m.storagePersist(err)
 			}
@@ -1260,24 +1090,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reconnect banner stays up until ConfigComplete; if the
 		// link drops mid-handshake (BLE regularly does), the banner
 		// re-appears in the correct state.
-		if !m.connected {
-			m.syncReceived = 0
+		if !m.Connected {
+			m.SyncReceived = 0
 			m.systemLine("sync: pulling NodeDB from radio…")
 		}
 		return m, nil
 
 	case mdl.NodeInfo:
 		m.upsertNode(msg)
-		// While the handshake is still in flight (m.connected stays
+		// While the handshake is still in flight (m.Connected stays
 		// false until ConfigComplete), bump the received counter and
 		// surface it in the chanRow flash via syncCounterFlash —
 		// the running number renders bright (mesh-green bold) so it
 		// reads as the active live signal, "peers received" stays
 		// in the regular flash green. On ConfigComplete the
 		// systemLine path takes over with the final tally.
-		if !m.connected && m.myNodeNum != 0 {
-			m.syncReceived++
-			m.flash = "sync: " + syncCounterFlash(m.syncReceived) + " peers received"
+		if !m.Connected && m.MyNodeNum != 0 {
+			m.SyncReceived++
+			m.flash = "sync: " + syncCounterFlash(m.SyncReceived) + " peers received"
 		}
 		return m, nil
 
@@ -1303,15 +1133,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pingTimeoutMsg:
 		// Same shape as tracerouteTimeoutMsg — surface "no reply"
 		// only when the matching ping is still in flight.
-		if m.pendingPing != nil && m.pendingPing.packetID == msg.packetID {
-			tgt := m.pendingPing.targetCall
+		if m.PendingPing != nil && m.PendingPing.PacketID == msg.packetID {
+			tgt := m.PendingPing.TargetCall
 			m.systemBlock(
 				fmt.Sprintf("ping %s", tgt),
 				fmt.Sprintf("result:  no echo within %ds", pingTimeoutSeconds),
 				"note:    target may be offline, out of range, or behind a dead relay",
 			)
 			m.flash = fmt.Sprintf("ping: no echo from %s", tgt)
-			m.pendingPing = nil
+			m.PendingPing = nil
 		}
 		return m, nil
 
@@ -1322,19 +1152,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the authoritative state. The buzzer "is on" only when
 		// BOTH enabled AND alert_message_buzzer are true; either
 		// false makes it silent regardless of the other.
-		m.radioBuzzerEnabled = msg.Enabled && msg.AlertMessageBuzzer
-		m.radioBuzzerKnown = true
-		m.radioBuzzerSnapshot = msg.Snapshot
+		m.RadioBuzzerEnabled = msg.Enabled && msg.AlertMessageBuzzer
+		m.RadioBuzzerKnown = true
+		m.RadioBuzzerSnapshot = msg.Snapshot
 		// Re-sync the persisted "last user intent" pref to whatever
 		// the radio actually says — that way next launch's pre-
 		// handshake guess matches reality instead of bouncing back
 		// to a stale value the user changed via the phone app.
 		v := "off"
-		if m.radioBuzzerEnabled {
+		if m.RadioBuzzerEnabled {
 			v = "on"
 		}
 		if m.store != nil {
-			m.storagePersist(m.store.PutSetting(m.radioID, "radio_buzzer", v))
+			m.storagePersist(m.store.PutSetting(m.RadioID, "radio_buzzer", v))
 		}
 		return m, nil
 
@@ -1344,84 +1174,84 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// systemBlock and clear the slot so a fresh /tr can fire.
 		// Stale ticks (request already resolved or replaced) drop
 		// silently — the packetID guard handles both cases.
-		if m.pendingTraceroute != nil && m.pendingTraceroute.packetID == msg.packetID {
-			tgt := m.pendingTraceroute.targetCall
+		if m.PendingTraceroute != nil && m.PendingTraceroute.PacketID == msg.packetID {
+			tgt := m.PendingTraceroute.TargetCall
 			m.systemBlock(
 				fmt.Sprintf("traceroute %s", tgt),
 				fmt.Sprintf("result:  no reply within %ds", tracerouteTimeoutSeconds),
 				"note:    target may be offline, out of range, or behind a dead relay",
 			)
 			m.flash = fmt.Sprintf("tr: no reply from %s", tgt)
-			m.pendingTraceroute = nil
+			m.PendingTraceroute = nil
 		}
 		return m, nil
 
 	case mdl.Metadata:
-		m.radioFirmware = msg.FirmwareVersion
-		m.radioDeviceState = msg.DeviceStateVer
-		m.radioHasWifi = msg.HasWifi
-		m.radioHasBT = msg.HasBluetooth
+		m.RadioFirmware = msg.FirmwareVersion
+		m.RadioDeviceState = msg.DeviceStateVer
+		m.RadioHasWifi = msg.HasWifi
+		m.RadioHasBT = msg.HasBluetooth
 		return m, nil
 
 	case mdl.LoraConfig:
-		m.radioTxPower = msg.TxPowerDBm
-		m.radioRegion = string(msg.Region)
-		m.radioModemPreset = string(msg.ModemPreset)
+		m.RadioTxPower = msg.TxPowerDBm
+		m.RadioRegion = string(msg.Region)
+		m.RadioModemPreset = string(msg.ModemPreset)
 		return m, nil
 
 	case mdl.DeviceMetrics:
 		// Only apply metrics for our own node to the "my radio"
 		// status fields. Peer metrics could later be upserted onto
 		// their nodeItem for per-peer battery display.
-		if msg.FromNodeNum == m.myNodeNum || msg.FromNodeNum == 0 {
-			m.batteryLevel = msg.BatteryLevel
-			m.batteryVoltage = msg.Voltage
-			m.channelUtil = msg.ChannelUtil
-			m.airUtilTx = msg.AirUtilTx
-			m.hasTelemetry = true
+		if msg.FromNodeNum == m.MyNodeNum || msg.FromNodeNum == 0 {
+			m.BatteryLevel = msg.BatteryLevel
+			m.BatteryVoltage = msg.Voltage
+			m.ChannelUtil = msg.ChannelUtil
+			m.AirUtilTx = msg.AirUtilTx
+			m.HasTelemetry = true
 		}
 		return m, nil
 
 	case mdl.DeviceConfig:
-		m.radioRole = string(msg.Role)
+		m.RadioRole = string(msg.Role)
 		return m, nil
 
 	case mdl.Position:
-		if m.peerPositions == nil {
-			m.peerPositions = make(map[uint32]peerPosition)
+		if m.PeerPositions == nil {
+			m.PeerPositions = make(map[uint32]session.PeerPosition)
 		}
-		m.peerPositions[msg.FromNodeNum] = peerPosition{
-			latitude:  msg.Latitude,
-			longitude: msg.Longitude,
-			altitude:  msg.Altitude,
-			grid:      maidenhead(msg.Latitude, msg.Longitude),
-			at:        msg.At,
+		m.PeerPositions[msg.FromNodeNum] = session.PeerPosition{
+			Latitude:  msg.Latitude,
+			Longitude: msg.Longitude,
+			Altitude:  msg.Altitude,
+			Grid:      maidenhead(msg.Latitude, msg.Longitude),
+			At:        msg.At,
 		}
 		// If this is our own position, also populate the top-bar grid.
-		if msg.FromNodeNum == m.myNodeNum {
-			m.myLatitude = msg.Latitude
-			m.myLongitude = msg.Longitude
-			m.myAltitude = msg.Altitude
-			m.myGrid = maidenhead(msg.Latitude, msg.Longitude)
+		if msg.FromNodeNum == m.MyNodeNum {
+			m.MyLatitude = msg.Latitude
+			m.MyLongitude = msg.Longitude
+			m.MyAltitude = msg.Altitude
+			m.MyGrid = maidenhead(msg.Latitude, msg.Longitude)
 		}
 		return m, nil
 
 	case mdl.EnvMetrics:
-		if m.peerEnv == nil {
-			m.peerEnv = make(map[uint32]peerEnvMetrics)
+		if m.PeerEnv == nil {
+			m.PeerEnv = make(map[uint32]session.PeerEnvMetrics)
 		}
-		m.peerEnv[msg.FromNodeNum] = peerEnvMetrics{
-			temperature: msg.Temperature,
-			humidity:    msg.Humidity,
-			pressure:    msg.Pressure,
-			gas:         msg.Gas,
-			at:          time.Now(),
+		m.PeerEnv[msg.FromNodeNum] = session.PeerEnvMetrics{
+			Temperature: msg.Temperature,
+			Humidity:    msg.Humidity,
+			Pressure:    msg.Pressure,
+			Gas:         msg.Gas,
+			At:          time.Now(),
 		}
 		return m, nil
 
 	case mdl.ConfigComplete:
-		wasDisconnected := !m.connected
-		m.connected = true
+		wasDisconnected := !m.Connected
+		m.Connected = true
 		// Definitive end of the handshake — NodeDB and config dump
 		// have all arrived, the user can see live state. Drop the
 		// reconnect banner now and not before; MyInfo isn't strong
@@ -1432,28 +1262,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the user sees that the NodeDB pull finished. The earlier
 		// "sync: pulling NodeDB" notice on MyInfo gives the start;
 		// this one closes the loop.
-		if wasDisconnected && m.syncPendingGhosts == 0 {
+		if wasDisconnected && m.SyncPendingGhosts == 0 {
 			m.systemLine(fmt.Sprintf(
 				"sync: complete — %d peers identified", len(m.nodes),
 			))
 		}
 		// Clear the handshake-progress counter so a future /sync
 		// or post-disconnect rehandshake starts from a clean slate.
-		m.syncReceived = 0
+		m.SyncReceived = 0
 		// If the user issued /sync and we snapshotted a ghost count,
 		// emit a completion systemBlock with the delta so they see
 		// what the re-dump actually changed. syncPendingGhosts > 0
 		// means the snapshot had placeholders; == -1 is the sentinel
 		// for "/sync fired with zero ghosts baseline"; == 0 means
 		// this is the startup handshake and we stay quiet.
-		if m.syncPendingGhosts != 0 {
+		if m.SyncPendingGhosts != 0 {
 			current := 0
 			for _, n := range m.nodes {
 				if strings.HasPrefix(n.callsign, "node 0x") {
 					current++
 				}
 			}
-			baseline := m.syncPendingGhosts
+			baseline := m.SyncPendingGhosts
 			if baseline < 0 {
 				baseline = 0
 			}
@@ -1463,7 +1293,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				fmt.Sprintf("NodeDB re-dump done — %d peers in NodeDB", total),
 				fmt.Sprintf("placeholders: %d → %d  (%d resolved this sync)", baseline, current, resolved),
 			)
-			m.syncPendingGhosts = 0
+			m.SyncPendingGhosts = 0
 		}
 		// Otherwise no flash — the top status bar's "● online" dot is
 		// the canonical connection indicator; flashing "radio
@@ -1478,13 +1308,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// FromRadio_ModuleConfig and routes through the same
 		// mdl.ModuleBuzzer handler. Skipped if we already know
 		// the state (the dump did contain it).
-		if !m.radioBuzzerKnown && m.pump != nil {
+		if !m.RadioBuzzerKnown && m.pump != nil {
 			m.pump.Send(mdl.RequestBuzzerConfig{})
 		}
 		return m, nil
 
 	case mdl.Disconnected:
-		m.connected = false
+		m.Connected = false
 		// Disconnect IS worth a flash — "● online" flips to
 		// "● connecting" up top but users staring at the messages
 		// pane need louder in-band feedback for a state change.
@@ -1496,14 +1326,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// flag so the top status bar shows "connecting" and stash a
 		// reconnectState so noticeTickMsg can repaint the countdown
 		// every second. The banner is sticky (auto-clear is bypassed
-		// while m.reconnect != nil) so the user can watch the retry
+		// while m.Reconnect != nil) so the user can watch the retry
 		// counter climb instead of seeing a 5s flash and then nothing
 		// for the rest of a 30s backoff.
-		m.connected = false
-		m.reconnect = &reconnectState{
-			attempt: msg.Attempt,
-			err:     msg.Err,
-			readyAt: time.Now().Add(msg.After),
+		m.Connected = false
+		m.Reconnect = &session.ReconnectState{
+			Attempt: msg.Attempt,
+			Err:     msg.Err,
+			ReadyAt: time.Now().Add(msg.After),
 		}
 		m.flash = m.reconnectFlashText()
 		m.flashSeen = m.flash
@@ -1514,8 +1344,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Pump exhausted its retry budget. Drop the reconnect banner
 		// — there's nothing more happening — and switch to a regular
 		// (auto-clearing) flash carrying the final error.
-		m.connected = false
-		m.reconnect = nil
+		m.Connected = false
+		m.Reconnect = nil
 		m.flash = fmt.Sprintf("radio error: %v", msg.Err)
 		return m, nil
 

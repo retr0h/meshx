@@ -46,6 +46,7 @@ import (
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
+	"github.com/retr0h/meshx/internal/meshx/session"
 )
 
 // Channel role string constants. The pump stringifies pb.Channel_Role
@@ -81,15 +82,15 @@ func (m *model) sendPlainReply(text string, replyToID uint32) {
 		Time: timeNowHHMM(), From: "me", Mine: true, Text: text,
 		Status: mdl.StatusPending, PacketID: pid,
 		ReplyID: replyToID,
-		FromNum: m.myNodeNum,
+		FromNum: m.MyNodeNum,
 		SentAt:  time.Now(),
 	}}
 	m.messages = append(m.messages, item)
 	m.selectedMsg = len(m.messages) - 1
-	m.flash = fmt.Sprintf("sent in %s", m.currentChannel)
+	m.flash = fmt.Sprintf("sent in %s", m.CurrentChannel)
 
 	if m.store != nil {
-		m.storagePersist(m.store.SaveMessage(m.radioID, m.currentChannel, item.Message))
+		m.storagePersist(m.store.SaveMessage(m.RadioID, m.CurrentChannel, item.Message))
 	}
 }
 
@@ -447,12 +448,12 @@ func (m *model) channelDel(typed string) tea.Cmd {
 		index: idx,
 		role:  roleDisabled,
 	}
-	if m.currentChannel == deletedName {
+	if m.CurrentChannel == deletedName {
 		// User deleted the channel they were on. Snap back to the
 		// primary so the input bar has a valid target.
 		for _, c := range m.channels {
 			if c.role == rolePrimary {
-				m.currentChannel = c.name
+				m.CurrentChannel = c.name
 				break
 			}
 		}
@@ -566,7 +567,7 @@ func pingTimeoutCmd(packetID uint32) tea.Cmd {
 // a 6-hop round trip on a slow LongFast mesh with retries — same
 // ballpark the official Meshtastic clients use. tracerouteTimeoutCmd
 // returns a tea.Cmd that fires tracerouteTimeoutMsg after the
-// deadline; the handler short-circuits if pendingTraceroute already
+// deadline; the handler short-circuits if session.PendingTraceroute already
 // resolved or got replaced by a newer /tr.
 const tracerouteTimeoutSeconds = 30
 
@@ -585,7 +586,7 @@ func tracerouteTimeoutCmd(packetID uint32) tea.Cmd {
 // happen").
 func (m *model) resetConfigDraft() {
 	m.cfgDraft = configDraft{
-		buzzer:    m.radioBuzzerEnabled,
+		buzzer:    m.RadioBuzzerEnabled,
 		longName:  m.myCallsign(),
 		shortName: m.myShortName(),
 	}
@@ -597,7 +598,7 @@ func (m *model) resetConfigDraft() {
 // differs from the live state. Drives the dirty-marker in the panel
 // header + each row, and gates the Esc-on-dirty discard prompt.
 func (m model) configDraftDirty() bool {
-	if m.cfgDraft.buzzer != m.radioBuzzerEnabled {
+	if m.cfgDraft.buzzer != m.RadioBuzzerEnabled {
 		return true
 	}
 	if m.cfgDraft.longName != m.myCallsign() {
@@ -654,21 +655,21 @@ func (m *model) commitConfigDraft() int {
 		changes++
 	}
 	// Radio buzzer — separate AdminMessage path (SetModuleConfig).
-	if m.cfgDraft.buzzer != m.radioBuzzerEnabled {
+	if m.cfgDraft.buzzer != m.RadioBuzzerEnabled {
 		if _, ok := m.pump.Send(mdl.SetBuzzer{
 			Enabled:  m.cfgDraft.buzzer,
-			Snapshot: m.radioBuzzerSnapshot,
+			Snapshot: m.RadioBuzzerSnapshot,
 		}); !ok {
 			m.flash = "/config: buzzer dropped — outbound buffer full"
 			return 0
 		}
-		m.radioBuzzerEnabled = m.cfgDraft.buzzer
+		m.RadioBuzzerEnabled = m.cfgDraft.buzzer
 		v := "on"
 		if !m.cfgDraft.buzzer {
 			v = "off"
 		}
 		if m.store != nil {
-			m.storagePersist(m.store.PutSetting(m.radioID, "radio_buzzer", v))
+			m.storagePersist(m.store.PutSetting(m.RadioID, "radio_buzzer", v))
 		}
 		changes++
 	}
@@ -714,8 +715,8 @@ func buildVersionLines(m *model) []string {
 	}
 	lines = append(lines, fmt.Sprintf("go:       %s", v.GoVersion))
 	switch {
-	case m.radioFirmware != "":
-		lines = append(lines, fmt.Sprintf("firmware: %s", m.radioFirmware))
+	case m.RadioFirmware != "":
+		lines = append(lines, fmt.Sprintf("firmware: %s", m.RadioFirmware))
 	case m.isDemo():
 		lines = append(lines, "firmware: (demo)")
 	default:
@@ -734,12 +735,12 @@ func plural(n int) string {
 	return "s"
 }
 
-// currentChannelIndex maps m.currentChannel back to the Meshtastic
+// currentChannelIndex maps m.CurrentChannel back to the Meshtastic
 // channel index used on the wire. Defaults to 0 (PRIMARY) when the
 // channel name isn't in our list.
 func (m model) currentChannelIndex() uint32 {
 	for i, c := range m.channels {
-		if c.name == m.currentChannel {
+		if c.name == m.CurrentChannel {
 			return uint32(i)
 		}
 	}
@@ -804,7 +805,7 @@ func (m *model) activate() tea.Cmd {
 	case paneChannels:
 		if m.selectedCh < len(m.channels) {
 			c := m.channels[m.selectedCh]
-			m.currentChannel = c.name
+			m.CurrentChannel = c.name
 			m.channels[m.selectedCh].unread = 0
 			m.flash = fmt.Sprintf("switched to %s", c.name)
 			// Land on the input bar in the new channel — same as
@@ -842,7 +843,7 @@ func (m *model) activate() tea.Cmd {
 				m.flash = "system message — no metadata"
 			case msg.Mine:
 				m.flash = fmt.Sprintf("to %s  ·  hop %d  ·  ACK %s",
-					m.currentChannel, msg.Hops, ackWord(msg.Status))
+					m.CurrentChannel, msg.Hops, ackWord(msg.Status))
 			default:
 				parts := []string{"from " + msg.From}
 				if msg.Hops > 0 {
@@ -1000,12 +1001,12 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// query unambiguous.
 		arg := strings.TrimSpace(rest)
 		if arg == "" {
-			if m.myGrid == "" {
+			if m.MyGrid == "" {
 				m.flash = "no GPS fix — /qth <text> to send a custom QTH, or configure position on the radio"
 				return nil
 			}
-			m.sendBang("/qth", "QTH: "+m.myGrid)
-			m.flash = "QTH: " + m.myGrid
+			m.sendBang("/qth", "QTH: "+m.MyGrid)
+			m.flash = "QTH: " + m.MyGrid
 			return nil
 		}
 		m.sendBang("/qth", "QTH: "+arg)
@@ -1025,26 +1026,26 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		n := m.lookupNode(target)
-		env, ok := m.peerEnv[nodeNum]
+		env, ok := m.PeerEnv[nodeNum]
 		if !ok {
 			m.systemLine(fmt.Sprintf("env: %s has no environmental telemetry on file", n.callsign))
 			m.systemLine("     (only peers with temp/humidity/pressure sensors broadcast this)")
 			return nil
 		}
 		var lines []string
-		if env.temperature != 0 {
-			lines = append(lines, fmt.Sprintf("temp:     %.1f °C", env.temperature))
+		if env.Temperature != 0 {
+			lines = append(lines, fmt.Sprintf("temp:     %.1f °C", env.Temperature))
 		}
-		if env.humidity != 0 {
-			lines = append(lines, fmt.Sprintf("humidity: %.0f %%", env.humidity))
+		if env.Humidity != 0 {
+			lines = append(lines, fmt.Sprintf("humidity: %.0f %%", env.Humidity))
 		}
-		if env.pressure != 0 {
-			lines = append(lines, fmt.Sprintf("pressure: %.0f hPa", env.pressure))
+		if env.Pressure != 0 {
+			lines = append(lines, fmt.Sprintf("pressure: %.0f hPa", env.Pressure))
 		}
-		if env.gas != 0 {
-			lines = append(lines, fmt.Sprintf("gas:      %.0f Ω", env.gas))
+		if env.Gas != 0 {
+			lines = append(lines, fmt.Sprintf("gas:      %.0f Ω", env.Gas))
 		}
-		lines = append(lines, fmt.Sprintf("age:      %s ago", humanDuration(time.Since(env.at))))
+		lines = append(lines, fmt.Sprintf("age:      %s ago", humanDuration(time.Since(env.At))))
 		m.systemBlock(fmt.Sprintf("env %s", n.callsign), lines...)
 
 	// ── Extra ham/Meshtastic slang ────────────────────────────────
@@ -1110,7 +1111,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// than /qth which also names the city.
 		grid := rest
 		if grid == "" {
-			grid = m.myGrid
+			grid = m.MyGrid
 		}
 		if grid == "" {
 			m.flash = "no GPS fix — /grid <locator> to send a custom grid"
@@ -1177,19 +1178,19 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		// Self-traceroute is meaningless — firmware drops it.
-		if n.nodeNum != 0 && n.nodeNum == m.myNodeNum {
+		if n.nodeNum != 0 && n.nodeNum == m.MyNodeNum {
 			m.systemLine("tr: that's you — /info for your own config")
 			return nil
 		}
 		// One traceroute in flight at a time. Issuing a second /tr
 		// while the first hasn't resolved would orphan the old
-		// pendingTraceroute (the new packetID overwrites the field
+		// session.PendingTraceroute (the new packetID overwrites the field
 		// and the original timeout tick never finds a match). Refuse
 		// loud rather than silently lose the prior request.
-		if m.pendingTraceroute != nil {
+		if m.PendingTraceroute != nil {
 			m.flash = fmt.Sprintf(
 				"tr: already tracing %s — wait or it'll auto-timeout",
-				m.pendingTraceroute.targetCall,
+				m.PendingTraceroute.TargetCall,
 			)
 			return nil
 		}
@@ -1198,11 +1199,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "tr: dropped — outbound buffer full"
 			return nil
 		}
-		m.pendingTraceroute = &pendingTraceroute{
-			packetID:    pid,
-			targetNum:   n.nodeNum,
-			targetCall:  n.callsign,
-			requestedAt: time.Now(),
+		m.PendingTraceroute = &session.PendingTraceroute{
+			PacketID:    pid,
+			TargetNum:   n.nodeNum,
+			TargetCall:  n.callsign,
+			RequestedAt: time.Now(),
 		}
 		m.flash = fmt.Sprintf(
 			"tr: tracing %s (waiting up to %ds)",
@@ -1231,7 +1232,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// won't echo a packet back to its own node). Refuse with a
 		// note rather than emitting a request that will silently
 		// timeout.
-		if n.nodeNum != 0 && n.nodeNum == m.myNodeNum {
+		if n.nodeNum != 0 && n.nodeNum == m.MyNodeNum {
 			m.systemLine("ping: that's you — /whois for your own config")
 			return nil
 		}
@@ -1245,8 +1246,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 				"note:       live ping needs a real radio connection",
 			}
 			if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
-				if pos, ok := m.peerPositions[nodeNum]; ok && m.myGrid != "" {
-					if km := haversineKm(m.myLatitude, m.myLongitude, pos.latitude, pos.longitude); km > 0 {
+				if pos, ok := m.PeerPositions[nodeNum]; ok && m.MyGrid != "" {
+					if km := haversineKm(m.MyLatitude, m.MyLongitude, pos.Latitude, pos.Longitude); km > 0 {
 						lines = append(lines,
 							fmt.Sprintf("distance:   %.1f km", km),
 						)
@@ -1257,10 +1258,10 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		// One ping in flight at a time. Same shape as pendingTraceroute.
-		if m.pendingPing != nil {
+		if m.PendingPing != nil {
 			m.flash = fmt.Sprintf(
 				"ping: already pinging %s — wait or it'll auto-timeout",
-				m.pendingPing.targetCall,
+				m.PendingPing.TargetCall,
 			)
 			return nil
 		}
@@ -1269,11 +1270,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "ping: dropped — outbound buffer full"
 			return nil
 		}
-		m.pendingPing = &pendingPing{
-			packetID:    pid,
-			targetNum:   n.nodeNum,
-			targetCall:  n.callsign,
-			requestedAt: time.Now(),
+		m.PendingPing = &session.PendingPing{
+			PacketID:    pid,
+			TargetNum:   n.nodeNum,
+			TargetCall:  n.callsign,
+			RequestedAt: time.Now(),
 		}
 		m.flash = fmt.Sprintf(
 			"ping: pinging %s (waiting up to %ds)",
@@ -1304,14 +1305,14 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		fw := n.firmware
 		nodeNum := m.nodeNumOf(target)
-		isSelf := nodeNum != 0 && nodeNum == m.myNodeNum
-		// For our own node, fw lives on m.radioFirmware (from
+		isSelf := nodeNum != 0 && nodeNum == m.MyNodeNum
+		// For our own node, fw lives on m.RadioFirmware (from
 		// FromRadio.Metadata), not on the nodeItem — MyNodeInfo
 		// doesn't carry firmware. Same story for battery /
 		// channel-util telemetry, which arrives via DeviceMetrics
 		// and is stored on the model root for self only.
 		if isSelf && fw == "" {
-			fw = m.radioFirmware
+			fw = m.RadioFirmware
 		}
 		if fw == "" {
 			fw = "?"
@@ -1362,38 +1363,38 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// Battery + channel-util are only tracked model-wide for
 		// self today. For peers we'd need a per-peer DeviceMetrics
 		// cache (TODO). Surface what we have.
-		if isSelf && m.hasTelemetry {
+		if isSelf && m.HasTelemetry {
 			pct := "—"
 			switch {
-			case m.batteryLevel > 100:
+			case m.BatteryLevel > 100:
 				pct = "pwr (USB / solar — no cell)"
-			case m.batteryLevel > 0:
-				pct = fmt.Sprintf("%d%%", m.batteryLevel)
+			case m.BatteryLevel > 0:
+				pct = fmt.Sprintf("%d%%", m.BatteryLevel)
 			}
-			if m.batteryVoltage > 0 {
-				lines = append(lines, fmt.Sprintf("battery: %s  %.2f V", pct, m.batteryVoltage))
+			if m.BatteryVoltage > 0 {
+				lines = append(lines, fmt.Sprintf("battery: %s  %.2f V", pct, m.BatteryVoltage))
 			} else {
 				lines = append(lines, fmt.Sprintf("battery: %s", pct))
 			}
-			lines = append(lines, fmt.Sprintf("chanutl: %.1f%%", m.channelUtil))
+			lines = append(lines, fmt.Sprintf("chanutl: %.1f%%", m.ChannelUtil))
 		}
 		if nodeNum != 0 {
-			if pos, ok := m.peerPositions[nodeNum]; ok {
+			if pos, ok := m.PeerPositions[nodeNum]; ok {
 				lines = append(
 					lines,
-					fmt.Sprintf("grid:   %s", pos.grid),
+					fmt.Sprintf("grid:   %s", pos.Grid),
 					fmt.Sprintf(
 						"coord:  %.5f, %.5f  alt %d m",
-						pos.latitude,
-						pos.longitude,
-						pos.altitude,
+						pos.Latitude,
+						pos.Longitude,
+						pos.Altitude,
 					),
-					fmt.Sprintf("fix age: %s ago", humanDuration(time.Since(pos.at))),
+					fmt.Sprintf("fix age: %s ago", humanDuration(time.Since(pos.At))),
 				)
 				// Distance from us if we also have a fix — same
 				// great-circle helper /ping uses.
-				if !isSelf && m.myLatitude != 0 && m.myLongitude != 0 {
-					if km := haversineKm(m.myLatitude, m.myLongitude, pos.latitude, pos.longitude); km > 0 {
+				if !isSelf && m.MyLatitude != 0 && m.MyLongitude != 0 {
+					if km := haversineKm(m.MyLatitude, m.MyLongitude, pos.Latitude, pos.Longitude); km > 0 {
 						lines = append(lines, fmt.Sprintf("dist:   %.1f km from you", km))
 					}
 				}
@@ -1653,9 +1654,9 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// that's /config → "Radio buzzer". Two separate knobs by
 		// design: the radio beeps in your pocket / on your desk,
 		// meshX dings inside the terminal.
-		m.dingMuted = !m.dingMuted
+		m.DingMuted = !m.DingMuted
 		v := "off"
-		if m.dingMuted {
+		if m.DingMuted {
 			v = "on"
 		}
 		// ding_muted is a meshx-CLIENT preference (terminal beep), not
@@ -1664,7 +1665,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		if m.store != nil {
 			m.storagePersist(m.store.PutSetting("", "ding_muted", v))
 		}
-		if m.dingMuted {
+		if m.DingMuted {
 			m.flash = "/mute on — terminal ding silenced"
 			m.systemLine("ding muted — terminal won't beep on incoming text")
 		} else {
@@ -1710,21 +1711,21 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = fmt.Sprintf("ignore: no node matches %s", target)
 			return nil
 		}
-		if m.ignored == nil {
-			m.ignored = make(map[string]bool)
+		if m.Ignored == nil {
+			m.Ignored = make(map[string]bool)
 		}
-		m.ignored[strings.ToLower(n.callsign)] = true
+		m.Ignored[strings.ToLower(n.callsign)] = true
 		m.flash = fmt.Sprintf("ignoring %s — messages hidden until /unignore", n.callsign)
 		m.systemLine(fmt.Sprintf("ignore: %s — chat messages will be hidden", n.callsign))
 	case "unignore":
 		target := rest
 		if target == "" {
-			if len(m.ignored) == 0 {
+			if len(m.Ignored) == 0 {
 				m.flash = "/unignore: nothing on the ignore list"
 				return nil
 			}
-			calls := make([]string, 0, len(m.ignored))
-			for k := range m.ignored {
+			calls := make([]string, 0, len(m.Ignored))
+			for k := range m.Ignored {
 				calls = append(calls, k)
 			}
 			m.flash = "currently ignoring: " + strings.Join(
@@ -1739,11 +1740,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		key := strings.ToLower(n.callsign)
-		if !m.ignored[key] {
+		if !m.Ignored[key] {
 			m.flash = fmt.Sprintf("unignore: %s wasn't on the list", n.callsign)
 			return nil
 		}
-		delete(m.ignored, key)
+		delete(m.Ignored, key)
 		m.flash = fmt.Sprintf("unignoring %s — messages will show again", n.callsign)
 		m.systemLine(fmt.Sprintf("unignore: %s — chat messages restored", n.callsign))
 	case "reboot":
@@ -1776,12 +1777,12 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			fmt.Sprintf(
 				"self:     %s (0x%x)  shortname=%s",
 				m.myCallsign(),
-				m.myNodeNum,
+				m.MyNodeNum,
 				m.myShortName(),
 			),
 		}
 		if n := m.myNode(); n != nil {
-			lines = append(lines, fmt.Sprintf("hw:       %s  fw=%s", n.hwModel, m.radioFirmware))
+			lines = append(lines, fmt.Sprintf("hw:       %s  fw=%s", n.hwModel, m.RadioFirmware))
 		}
 		var resolved, ghosts int
 		for _, n := range m.nodes {
@@ -1800,11 +1801,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 				ghosts,
 			),
 			fmt.Sprintf("channels: %d", len(m.channels)),
-			fmt.Sprintf("connected: %t  handshake_complete=%t", m.connected, m.connected),
+			fmt.Sprintf("connected: %t  handshake_complete=%t", m.Connected, m.Connected),
 		)
-		if m.radioRegion != "" {
+		if m.RadioRegion != "" {
 			lines = append(lines, fmt.Sprintf("region:   %s  preset=%s  tx=%d dBm  role=%s",
-				m.radioRegion, m.radioModemPreset, m.radioTxPower, m.radioRole))
+				m.RadioRegion, m.RadioModemPreset, m.RadioTxPower, m.RadioRole))
 		}
 		if ghosts > 0 {
 			const maxList = 10
@@ -1852,9 +1853,9 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// the ConfigComplete handler can tell a pending /sync apart
 		// from the startup handshake.
 		if ghosts == 0 {
-			m.syncPendingGhosts = -1
+			m.SyncPendingGhosts = -1
 		} else {
-			m.syncPendingGhosts = ghosts
+			m.SyncPendingGhosts = ghosts
 		}
 		m.systemBlock("sync",
 			"requested NodeDB re-dump",
@@ -2027,7 +2028,7 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 		Status:   status,
 		ReplyID:  replyToID,
 		PacketID: pid,
-		FromNum:  m.myNodeNum,
+		FromNum:  m.MyNodeNum,
 		SentAt:   time.Now(),
 	}}
 	m.messages = append(m.messages, item)
@@ -2037,7 +2038,7 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	// Persist the outgoing so the log survives restart. Skipped in
 	// demo mode (m.db is always nil there).
 	if m.store != nil {
-		m.storagePersist(m.store.SaveMessage(m.radioID, m.currentChannel, item.Message))
+		m.storagePersist(m.store.SaveMessage(m.RadioID, m.CurrentChannel, item.Message))
 	}
 }
 

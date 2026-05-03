@@ -226,11 +226,11 @@ func (n *nodeItem) currentLastHeard() string {
 // ignored entry is the longname alone — same loose-match rule
 // /whois lookup uses.
 func (m model) isIgnored(from string) bool {
-	if len(m.ignored) == 0 || from == "" {
+	if len(m.Ignored) == 0 || from == "" {
 		return false
 	}
 	low := strings.ToLower(from)
-	for k := range m.ignored {
+	for k := range m.Ignored {
 		if k == "" {
 			continue
 		}
@@ -249,13 +249,13 @@ func (m model) myCallsign() string {
 	if m.demo != nil {
 		return m.demo.Callsign
 	}
-	if m.myNodeNum == 0 {
+	if m.MyNodeNum == 0 {
 		return "—" // MyNodeInfo hasn't arrived yet
 	}
-	if idx, ok := m.nodesByNum[m.myNodeNum]; ok && idx < len(m.nodes) {
+	if idx, ok := m.NodesByNum[m.MyNodeNum]; ok && idx < len(m.nodes) {
 		return m.nodes[idx].callsign
 	}
-	return fmt.Sprintf("node 0x%x", m.myNodeNum)
+	return fmt.Sprintf("node 0x%x", m.MyNodeNum)
 }
 
 // myShortName returns our own Meshtastic shortname (4-ish char
@@ -275,14 +275,14 @@ func (m model) myShortName() string {
 
 // myNode returns a pointer to our own node record — works in both
 // demo and live mode since demo-mode initialisation seeds m.nodes
-// and m.nodesByNum the same way a real radio's MyInfo + NodeInfo
+// and m.NodesByNum the same way a real radio's MyInfo + NodeInfo
 // stream would. Returns nil only when MyNodeInfo hasn't arrived yet
 // on a live radio.
 func (m model) myNode() *nodeItem {
-	if m.myNodeNum == 0 {
+	if m.MyNodeNum == 0 {
 		return nil
 	}
-	if idx, ok := m.nodesByNum[m.myNodeNum]; ok && idx < len(m.nodes) {
+	if idx, ok := m.NodesByNum[m.MyNodeNum]; ok && idx < len(m.nodes) {
 		return &m.nodes[idx]
 	}
 	return nil
@@ -297,24 +297,24 @@ func (m model) myNode() *nodeItem {
 func (m *model) nodeNumOf(callsign string) uint32 {
 	target := strings.ToLower(strings.TrimSpace(callsign))
 	if num, ok := parseNodeHex(target); ok {
-		if _, exists := m.nodesByNum[num]; exists {
+		if _, exists := m.NodesByNum[num]; exists {
 			return num
 		}
 		// still return the num even if not in m.nodes so callers
 		// can see we parsed it
 		return num
 	}
-	for num, idx := range m.nodesByNum {
+	for num, idx := range m.NodesByNum {
 		if idx < len(m.nodes) && strings.ToLower(m.nodes[idx].callsign) == target {
 			return num
 		}
 	}
-	for num, idx := range m.nodesByNum {
+	for num, idx := range m.NodesByNum {
 		if idx < len(m.nodes) && strings.HasPrefix(strings.ToLower(m.nodes[idx].callsign), target) {
 			return num
 		}
 	}
-	for num, idx := range m.nodesByNum {
+	for num, idx := range m.NodesByNum {
 		if idx < len(m.nodes) && strings.Contains(strings.ToLower(m.nodes[idx].callsign), target) {
 			return num
 		}
@@ -379,7 +379,7 @@ func (m *model) lookupNode(callsign string) *nodeItem {
 	// nodesByNum so three radios sharing a longname each address
 	// uniquely.
 	if num, ok := parseNodeHex(target); ok {
-		if idx, mapped := m.nodesByNum[num]; mapped && idx < len(m.nodes) {
+		if idx, mapped := m.NodesByNum[num]; mapped && idx < len(m.nodes) {
 			return &m.nodes[idx]
 		}
 		return nil

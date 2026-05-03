@@ -18,7 +18,8 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// Package pump bridges a transport.Client and the Bubble Tea runtime.
+// Package pump bridges a Transport (any wire impl returned from
+// transport.Dial) and the Bubble Tea runtime.
 // One goroutine reads FromRadio frames and publishes typed event
 // values via program.Send(); another drains outbound ToRadio envelopes
 // from the consumer and writes them to the device.
@@ -85,7 +86,7 @@ func reconnectBackoff(attempt int) time.Duration {
 
 // Pump is the running transport ↔ tea bridge.
 type Pump struct {
-	client  transport.Client
+	client  Transport
 	program *tea.Program
 
 	// Destination string from the original Dial — re-used by the
@@ -99,7 +100,7 @@ type Pump struct {
 
 	// Outbound ToRadio envelopes — consumer code enqueues to send.
 	// Survives across reconnects: the channel itself is stable while
-	// the underlying transport.Client gets swapped out.
+	// the underlying Transport gets swapped out.
 	outbound chan *pb.ToRadio
 
 	// Cancellation for the running goroutines.

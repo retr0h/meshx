@@ -210,7 +210,7 @@ func (m *model) upsertNode(msg mdl.NodeInfo) {
 	// "node 0x…" callsigns (both longname and shortname empty) are
 	// skipped inside saveNode itself.
 	if m.store != nil {
-		m.storagePersist(m.store.SaveNode(m.radioID, mdl.CachedNode{
+		m.storagePersist(m.store.SaveNode(m.RadioID, mdl.CachedNode{
 			NodeNum:   msg.NodeNum,
 			LongName:  msg.LongName,
 			ShortName: msg.ShortName,
@@ -218,7 +218,7 @@ func (m *model) upsertNode(msg mdl.NodeInfo) {
 		}))
 	}
 
-	if idx, ok := m.nodesByNum[msg.NodeNum]; ok {
+	if idx, ok := m.NodesByNum[msg.NodeNum]; ok {
 		// Preserve fav flag across updates.
 		item.fav = m.nodes[idx].fav
 		// Preserve the NEWER lastHeardAt — text packets between
@@ -246,7 +246,7 @@ func (m *model) upsertNode(msg mdl.NodeInfo) {
 		}
 		return
 	}
-	m.nodesByNum[msg.NodeNum] = len(m.nodes)
+	m.NodesByNum[msg.NodeNum] = len(m.nodes)
 	m.nodes = append(m.nodes, item)
 }
 
@@ -292,8 +292,8 @@ func (m *model) applyChannel(msg mdl.ChannelInfo) {
 	// Preserve unread count across re-apply.
 	c.unread = m.channels[msg.Index].unread
 	m.channels[msg.Index] = c
-	if m.currentChannel == "" {
-		m.currentChannel = name
+	if m.CurrentChannel == "" {
+		m.CurrentChannel = name
 	}
 }
 
@@ -315,7 +315,7 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 	// shouldn't be the outlier showing "node 0x273cc7f7").
 	defaultLong, _ := defaultCallsign(body.FromNum)
 	from := defaultLong
-	if idx, ok := m.nodesByNum[body.FromNum]; ok {
+	if idx, ok := m.NodesByNum[body.FromNum]; ok {
 		from = m.nodes[idx].callsign
 		// Live RF contact — stamp lastHeardAt + refresh signal
 		// telemetry. currentState / currentLastHeard derive
@@ -354,10 +354,10 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 			lastRSSI:    ev.RSSI,
 			lastHops:    body.Hops,
 		})
-		m.nodesByNum[body.FromNum] = len(m.nodes) - 1
+		m.NodesByNum[body.FromNum] = len(m.nodes) - 1
 		from = long
 	}
-	mine := body.FromNum == m.myNodeNum
+	mine := body.FromNum == m.MyNodeNum
 
 	cleanText, corrupted := sanitizeMessageText(body.Text)
 	item := messageItem{Message: mdl.Message{
@@ -383,12 +383,12 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 	// this replay), duplicating both m.messages and SQLite rows.
 	// The messagesByPacketID index lets us find the existing entry
 	// and upgrade it in place (telemetry refresh) instead.
-	channelName := m.currentChannel
+	channelName := m.CurrentChannel
 	if ev.Channel < len(m.channels) {
 		channelName = m.channels[ev.Channel].name
 	}
 	if body.PacketID != 0 {
-		if existing, ok := m.messagesByPacketID[body.PacketID]; ok &&
+		if existing, ok := m.MessagesByPacketID[body.PacketID]; ok &&
 			existing >= 0 && existing < len(m.messages) {
 			// Refresh signal telemetry in case the replay carries
 			// fresher RSSI/SNR/hops than the stored row (can happen
@@ -403,7 +403,7 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 			}
 			if m.store != nil {
 				m.storagePersist(
-					m.store.SaveMessage(m.radioID, channelName, prev.Message),
+					m.store.SaveMessage(m.RadioID, channelName, prev.Message),
 				)
 			}
 			return nil
@@ -422,7 +422,7 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 	wasAtTail := len(m.messages) == 0 || m.selectedMsg == len(m.messages)-1
 	m.messages = append(m.messages, item)
 	if body.PacketID != 0 {
-		m.messagesByPacketID[body.PacketID] = len(m.messages) - 1
+		m.MessagesByPacketID[body.PacketID] = len(m.messages) - 1
 	}
 	if wasAtTail {
 		m.selectedMsg = len(m.messages) - 1
@@ -430,11 +430,11 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 
 	// Persist the incoming message so it survives a restart.
 	if m.store != nil {
-		m.storagePersist(m.store.SaveMessage(m.radioID, channelName, item.Message))
+		m.storagePersist(m.store.SaveMessage(m.RadioID, channelName, item.Message))
 	}
 
 	// Bump unread count on non-active channels.
-	if ev.Channel < len(m.channels) && m.channels[ev.Channel].name != m.currentChannel && !mine {
+	if ev.Channel < len(m.channels) && m.channels[ev.Channel].name != m.CurrentChannel && !mine {
 		m.channels[ev.Channel].unread++
 	}
 
@@ -443,7 +443,7 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 	// Cmd back through the runtime; /dingtest returns the same Cmd
 	// so manual verification and the live ingress path share one
 	// code path.
-	if !mine && !m.dingMuted {
+	if !mine && !m.DingMuted {
 		return ringTerminalBellCmd()
 	}
 	return nil
@@ -470,7 +470,7 @@ func ringTerminalBellCmd() tea.Cmd {
 }
 
 // applyTraceroute consumes a TRACEROUTE_APP reply that landed for
-// our outbound /tr request. Correlates against m.pendingTraceroute
+// our outbound /tr request. Correlates against m.PendingTraceroute
 // via request_id; foreign traceroutes (replies to someone else's
 // request) silently drop because their request_id won't match.
 //
@@ -480,12 +480,12 @@ func ringTerminalBellCmd() tea.Cmd {
 // at MeshPacket.From / .To), and the resolved callsign of every hop
 // when we know one (placeholder hex when we don't).
 //
-// On match the pendingTraceroute slot clears so the user can fire a
+// On match the session.PendingTraceroute slot clears so the user can fire a
 // fresh /tr without waiting for the timeout to elapse, and the
 // scheduled tracerouteTimeoutMsg becomes a no-op when its tick lands
 // (the packetID guard there falls through silently).
 func (m *model) applyTraceroute(msg mdl.Traceroute) {
-	if m.pendingTraceroute == nil {
+	if m.PendingTraceroute == nil {
 		return
 	}
 	// Correlate by request_id when the firmware sets it (modern
@@ -494,24 +494,24 @@ func (m *model) applyTraceroute(msg mdl.Traceroute) {
 	// TRACEROUTE_APP request with a fresh MeshPacket whose Data does
 	// NOT echo the original packetID, so a strict request_id match
 	// silently times out every time. The fromNum fallback only fires
-	// while a request is in flight, and `pendingTraceroute` enforces
+	// while a request is in flight, and `session.PendingTraceroute` enforces
 	// one-in-flight, so the worst-case false positive is "we accept
 	// a foreign traceroute reply that happens to come from the exact
 	// peer we just asked about" — which IS effectively the right
 	// answer for this user anyway.
 	switch {
-	case msg.RequestID != 0 && msg.RequestID == m.pendingTraceroute.packetID:
-	case msg.RequestID == 0 && msg.FromNum == m.pendingTraceroute.targetNum:
+	case msg.RequestID != 0 && msg.RequestID == m.PendingTraceroute.PacketID:
+	case msg.RequestID == 0 && msg.FromNum == m.PendingTraceroute.TargetNum:
 	default:
 		return
 	}
-	tgt := m.pendingTraceroute.targetCall
-	rtt := msg.At.Sub(m.pendingTraceroute.requestedAt)
+	tgt := m.PendingTraceroute.TargetCall
+	rtt := msg.At.Sub(m.PendingTraceroute.RequestedAt)
 	if rtt < 0 {
 		// Clock skew between the radio's RxTime stamp and our local
 		// clock can yield a negative delta. Round to time.Since so
 		// the displayed RTT is still useful.
-		rtt = time.Since(m.pendingTraceroute.requestedAt)
+		rtt = time.Since(m.PendingTraceroute.RequestedAt)
 	}
 	hops := len(msg.Route)
 	lines := []string{
@@ -528,7 +528,7 @@ func (m *model) applyTraceroute(msg mdl.Traceroute) {
 		hopLabels := make([]string, 0, hops+2)
 		hopLabels = append(hopLabels, m.myCallsign())
 		for _, num := range msg.Route {
-			if idx, ok := m.nodesByNum[num]; ok && idx < len(m.nodes) {
+			if idx, ok := m.NodesByNum[num]; ok && idx < len(m.nodes) {
 				hopLabels = append(hopLabels, m.nodes[idx].callsign)
 				continue
 			}
@@ -541,7 +541,7 @@ func (m *model) applyTraceroute(msg mdl.Traceroute) {
 	// fall-back mode shows the freshly-measured value instead of the
 	// stale zero. lastHops needs the live value even if it's 0
 	// (direct), so this assignment doesn't gate on > 0.
-	if idx, ok := m.nodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
+	if idx, ok := m.NodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
 		m.nodes[idx].lastHops = hops
 	}
 	m.systemBlock(fmt.Sprintf("traceroute %s", tgt), lines...)
@@ -552,30 +552,30 @@ func (m *model) applyTraceroute(msg mdl.Traceroute) {
 		plural(hops),
 		rtt.Round(100*time.Millisecond),
 	)
-	m.pendingTraceroute = nil
+	m.PendingTraceroute = nil
 }
 
 // applyPing consumes a REPLY_APP echo for our outbound /ping.
-// Correlates against m.pendingPing via request_id; falls back to
+// Correlates against m.PendingPing via request_id; falls back to
 // fromNum match when the firmware doesn't echo request_id (older
 // builds). Surfaces an RTT + hop + signal systemBlock and clears
 // the pending slot. Also refreshes the node's lastSNR / lastRSSI /
 // lastHops cache off the live measurement so /whois on the same
 // peer immediately renders fresh telemetry.
 func (m *model) applyPing(msg mdl.Ping) {
-	if m.pendingPing == nil {
+	if m.PendingPing == nil {
 		return
 	}
 	switch {
-	case msg.RequestID != 0 && msg.RequestID == m.pendingPing.packetID:
-	case msg.RequestID == 0 && msg.FromNum == m.pendingPing.targetNum:
+	case msg.RequestID != 0 && msg.RequestID == m.PendingPing.PacketID:
+	case msg.RequestID == 0 && msg.FromNum == m.PendingPing.TargetNum:
 	default:
 		return
 	}
-	tgt := m.pendingPing.targetCall
-	rtt := msg.At.Sub(m.pendingPing.requestedAt)
+	tgt := m.PendingPing.TargetCall
+	rtt := msg.At.Sub(m.PendingPing.RequestedAt)
 	if rtt < 0 {
-		rtt = time.Since(m.pendingPing.requestedAt)
+		rtt = time.Since(m.PendingPing.RequestedAt)
 	}
 	lines := []string{
 		fmt.Sprintf("rtt:     %s", rtt.Round(100*time.Millisecond)),
@@ -583,7 +583,7 @@ func (m *model) applyPing(msg mdl.Ping) {
 		fmt.Sprintf("snr:     %s dB", msg.SNR),
 		fmt.Sprintf("rssi:    %s", msg.RSSI),
 	}
-	if idx, ok := m.nodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
+	if idx, ok := m.NodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
 		m.nodes[idx].lastHops = msg.Hops
 		if msg.SNR != "" {
 			m.nodes[idx].lastSNR = msg.SNR
@@ -601,7 +601,7 @@ func (m *model) applyPing(msg mdl.Ping) {
 		plural(msg.Hops),
 		rtt.Round(100*time.Millisecond),
 	)
-	m.pendingPing = nil
+	m.PendingPing = nil
 }
 
 // applyRouting flips the status of the local messageItem whose
@@ -631,9 +631,9 @@ func (m *model) applyRouting(msg mdl.Routing) {
 	// delivered, but no echo — useful for the "is this peer reachable
 	// at all?" question even when /ping's primary echo path can't
 	// answer it.
-	if m.pendingPing != nil && m.pendingPing.packetID == msg.RequestID {
-		tgt := m.pendingPing.targetCall
-		rtt := time.Since(m.pendingPing.requestedAt).Round(100 * time.Millisecond)
+	if m.PendingPing != nil && m.PendingPing.PacketID == msg.RequestID {
+		tgt := m.PendingPing.TargetCall
+		rtt := time.Since(m.PendingPing.RequestedAt).Round(100 * time.Millisecond)
 		if msg.OK {
 			m.systemBlock(fmt.Sprintf("ping %s", tgt),
 				fmt.Sprintf("rtt:     %s (ack only — no echo)", rtt),
@@ -648,7 +648,7 @@ func (m *model) applyRouting(msg mdl.Routing) {
 			)
 			m.flash = fmt.Sprintf("ping: %s — %s", tgt, msg.ErrorName)
 		}
-		m.pendingPing = nil
+		m.PendingPing = nil
 		return
 	}
 	for i := range m.messages {
@@ -664,7 +664,7 @@ func (m *model) applyRouting(msg mdl.Routing) {
 		}
 		if m.store != nil {
 			m.storagePersist(
-				m.store.SaveMessage(m.radioID, m.currentChannel, m.messages[i].Message),
+				m.store.SaveMessage(m.RadioID, m.CurrentChannel, m.messages[i].Message),
 			)
 		}
 		return

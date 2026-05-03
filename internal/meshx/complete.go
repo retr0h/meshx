@@ -270,7 +270,7 @@ func (m model) nickUniverse(word string) []matchItem {
 	// case-insensitive so this path keeps the lower-case fold.
 	if looksLikeHexStem(stem) {
 		needle := strings.TrimPrefix(strings.ToLower(stem), "0x")
-		for num, idx := range m.nodesByNum {
+		for num, idx := range m.NodesByNum {
 			if idx >= len(m.nodes) {
 				continue
 			}

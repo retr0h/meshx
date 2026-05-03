@@ -227,10 +227,10 @@ func (m *model) storagePersist(err error) {
 	if err == nil {
 		return
 	}
-	if m.storageAlerted {
+	if m.StorageAlerted {
 		return
 	}
-	m.storageAlerted = true
+	m.StorageAlerted = true
 	m.systemLinePermanent("storage: persistence degraded — " + err.Error())
 }
 

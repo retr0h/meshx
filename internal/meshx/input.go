@@ -658,7 +658,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if persistNum != 0 {
 			if m.store != nil {
 				m.storagePersist(
-					m.store.SaveNodePrefs(m.radioID, persistNum, persistFav, persistMute),
+					m.store.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute),
 				)
 			}
 		}
@@ -680,7 +680,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if persistNum != 0 {
 			if m.store != nil {
 				m.storagePersist(
-					m.store.SaveNodePrefs(m.radioID, persistNum, persistFav, persistMute),
+					m.store.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute),
 				)
 			}
 		}
@@ -838,7 +838,7 @@ func (m *model) switchChannelByIndex(i int) {
 	if i < 0 || i >= len(m.channels) {
 		return
 	}
-	m.currentChannel = m.channels[i].name
+	m.CurrentChannel = m.channels[i].name
 	m.channels[i].unread = 0
 	m.selectedCh = i
 	m.flash = fmt.Sprintf("switched to %s", m.channels[i].name)
@@ -851,7 +851,7 @@ func (m *model) cycleChannel(dir int) {
 	}
 	cur := 0
 	for i, c := range m.channels {
-		if c.name == m.currentChannel {
+		if c.name == m.CurrentChannel {
 			cur = i
 			break
 		}

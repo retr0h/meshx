@@ -59,7 +59,7 @@ func (s statusBar) Render(box Box) string {
 	if n != nil && n.hwModel != "" {
 		hw = n.hwModel
 	}
-	fw := shortFirmware(m.radioFirmware)
+	fw := shortFirmware(m.RadioFirmware)
 	segs = append(segs, statusSegment(
 		label.Render("⌂ ")+val.Render(hw)+"  "+label.Render("⚙ ")+val.Render(fw),
 		chrome,
@@ -67,36 +67,36 @@ func (s statusBar) Render(box Box) string {
 
 	// Channel + modem preset.
 	chParts := []string{label.Render("⌬ ")}
-	if m.currentChannel != "" {
-		chParts = append(chParts, val.Render(m.currentChannel))
+	if m.CurrentChannel != "" {
+		chParts = append(chParts, val.Render(m.CurrentChannel))
 	} else {
 		chParts = append(chParts, val.Render("—"))
 	}
-	if m.radioModemPreset != "" {
-		chParts = append(chParts, " "+label.Render(m.radioModemPreset))
+	if m.RadioModemPreset != "" {
+		chParts = append(chParts, " "+label.Render(m.RadioModemPreset))
 	}
 	segs = append(segs, statusSegment(strings.Join(chParts, ""), chrome))
 
 	// TX power.
 	tx := "—"
-	if m.radioTxPower != 0 {
-		tx = fmt.Sprintf("%d dBm", m.radioTxPower)
+	if m.RadioTxPower != 0 {
+		tx = fmt.Sprintf("%d dBm", m.RadioTxPower)
 	}
 	segs = append(segs, statusSegment(label.Render("⟐ ")+warn.Render(tx), chrome))
 
 	// Battery.
 	batt := "—"
-	if m.hasTelemetry {
+	if m.HasTelemetry {
 		pct := "—"
-		if m.batteryLevel > 0 {
-			if m.batteryLevel > 100 {
+		if m.BatteryLevel > 0 {
+			if m.BatteryLevel > 100 {
 				pct = "pwr"
 			} else {
-				pct = fmt.Sprintf("%d%%", m.batteryLevel)
+				pct = fmt.Sprintf("%d%%", m.BatteryLevel)
 			}
 		}
-		if m.batteryVoltage > 0 {
-			batt = fmt.Sprintf("%.2fV %s", m.batteryVoltage, pct)
+		if m.BatteryVoltage > 0 {
+			batt = fmt.Sprintf("%.2fV %s", m.BatteryVoltage, pct)
 		} else {
 			batt = pct
 		}
@@ -105,19 +105,19 @@ func (s statusBar) Render(box Box) string {
 
 	// Channel utilization.
 	util := "—"
-	if m.hasTelemetry {
-		util = fmt.Sprintf("%.1f%%", m.channelUtil)
+	if m.HasTelemetry {
+		util = fmt.Sprintf("%.1f%%", m.ChannelUtil)
 	}
 	segs = append(segs, statusSegment(label.Render("≈ ")+val.Render(util), chrome))
 
-	if m.radioRole != "" {
-		segs = append(segs, statusSegment(label.Render("⌖ ")+val.Render(m.radioRole), chrome))
+	if m.RadioRole != "" {
+		segs = append(segs, statusSegment(label.Render("⌖ ")+val.Render(m.RadioRole), chrome))
 	}
-	if m.radioRegion != "" {
-		segs = append(segs, statusSegment(label.Render("⌘ ")+val.Render(m.radioRegion), chrome))
+	if m.RadioRegion != "" {
+		segs = append(segs, statusSegment(label.Render("⌘ ")+val.Render(m.RadioRegion), chrome))
 	}
-	if m.myGrid != "" {
-		segs = append(segs, statusSegment(label.Render("☖ ")+val.Render(m.myGrid), chrome))
+	if m.MyGrid != "" {
+		segs = append(segs, statusSegment(label.Render("☖ ")+val.Render(m.MyGrid), chrome))
 	}
 	segs = append(
 		segs,
@@ -131,7 +131,7 @@ func (s statusBar) Render(box Box) string {
 	// that's a radio-side thing the user hears in the room they're
 	// in, not something the terminal needs to visualise. /config
 	// shows the radio buzzer state directly when the panel is open.
-	if m.dingMuted {
+	if m.DingMuted {
 		segs = append(segs, statusSegment(
 			label.Render("🔕 ")+pink.Render("ding"), chrome,
 		))
@@ -146,7 +146,7 @@ func (s statusBar) Render(box Box) string {
 	switch {
 	case m.isDemo():
 		state = ok.Render("online") + "  " + demoTag.Render("[DEMO]")
-	case m.connected:
+	case m.Connected:
 		state = ok.Render("● online")
 	default:
 		state = pink.Render("● connecting")
@@ -334,7 +334,7 @@ func (c channelTabsRow) Render(box Box) string {
 			continue
 		}
 		tabs = append(tabs, channelTabCell(
-			ch.name, i, ch.name == m.currentChannel, ch.private, ch.unread,
+			ch.name, i, ch.name == m.CurrentChannel, ch.private, ch.unread,
 		))
 	}
 	if len(tabs) == 0 {
@@ -439,7 +439,7 @@ func (i inputBar) Render(box Box) string {
 	// off-by-one cursor: when the value is non-empty it returns
 	// Width+1 visible cells (cursor block emitted AFTER the typed
 	// text, not over it).
-	prefix := inputPromptCell(m.currentChannel)
+	prefix := inputPromptCell(m.CurrentChannel)
 	const leading = " "
 	const cursorPad = 1
 	tiW := box.Width - cells(leading) - cells(prefix) - cursorPad

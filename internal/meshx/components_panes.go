@@ -279,6 +279,7 @@ func (p helpPane) Render(box Box) string {
 		kv("/who", "alias for /nodes"),
 		kv("/whoami", "alias for /info"),
 		kv("/lastlog [call|text]", "jump to the most recent message — last from <call>, or body match"),
+		kv("/search <pattern>", "highlight matching rows; n / N to next / prev, Esc clears"),
 		kv("/clear", "clear local scrollback (does not unsend)"),
 		kv("/help", "open this help"),
 		kv("/q, /quit", "hint — use Ctrl+X to exit"),
@@ -887,6 +888,17 @@ func messagesPaneRender(m model, width, height int) string {
 			bg = zebraBg(i)
 			lastGroup = 0
 			groupBg = ""
+		}
+
+		// Search-hit highlight — when /search has an active query,
+		// override the zebra/group bg with searchHitRowBg on rows
+		// whose from + text matches the query. Selection still wins
+		// (handled by isSelected below), so cursoring through hits
+		// via n/N visually swaps the highlight without losing the
+		// at-a-glance "these N rows match" cue. Skipped on system
+		// rows since the search semantics target chat content.
+		if msg.status != "system" && m.isMsgSearchHit(msg) {
+			bg = searchHitRowBg
 		}
 
 		// Highlight the whole group when any row in it is selected —

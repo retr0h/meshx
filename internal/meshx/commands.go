@@ -1710,16 +1710,28 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.flash = fmt.Sprintf("lastlog: %s — %s", hit.time, hit.from)
 	case "search":
 		if rest == "" {
-			m.flash = "usage: /search <pattern>"
+			// Toggle behavior — clear an active query, otherwise
+			// hint at the syntax. "/search" with nothing was the
+			// only way to drop a stale query without going through
+			// nav-mode `/` then Esc; bind it here so the muscle-
+			// memory "type /search to manage search" works both
+			// directions.
+			if m.searchQuery != "" {
+				m.searchQuery = ""
+				m.flash = "search cleared"
+				return nil
+			}
+			m.flash = "usage: /search <pattern>  (press / in nav for live-filter)"
 			return nil
 		}
 		m.searchQuery = strings.ToLower(rest)
 		if ok, count := m.jumpToSearchHit(+1); ok {
-			m.flash = fmt.Sprintf("search: %d matches for %q", count, rest)
+			m.flash = fmt.Sprintf("search: %d matches for %q — n/N to step, /search to clear", count, rest)
 			m.mode = modeNav
 			m.input.Blur()
 		} else {
 			m.flash = fmt.Sprintf("no match for %q", rest)
+			m.searchQuery = ""
 		}
 	case "clear":
 		m.messages = nil

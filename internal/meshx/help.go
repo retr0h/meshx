@@ -155,7 +155,7 @@ var helpEntries = map[string]helpEntry{
 	},
 	"search": {
 		usage:   "/search <pattern>",
-		summary: "live-search the message log; aliases: /find",
+		summary: "search the message log — case-insensitive substring match against from + body. Matching rows highlight with a dim-green background; press n to step to the next hit, N for the previous. Esc clears the search. /search alone with no pattern is a usage hint; press / in nav mode for the live-filter prompt instead",
 	},
 	"config": {
 		usage:   "/config",

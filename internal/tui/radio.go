@@ -209,8 +209,8 @@ func (m *model) upsertNode(msg mdl.NodeInfo) {
 	// launch — same behavior as the official phone app. Placeholder
 	// "node 0x…" callsigns (both longname and shortname empty) are
 	// skipped inside saveNode itself.
-	if m.store != nil {
-		m.storagePersist(m.store.SaveNode(m.RadioID, mdl.CachedNode{
+	if m.driver.Store != nil {
+		m.storagePersist(m.driver.Store.SaveNode(m.RadioID, mdl.CachedNode{
 			NodeNum:   msg.NodeNum,
 			LongName:  msg.LongName,
 			ShortName: msg.ShortName,
@@ -402,9 +402,9 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 			if prev.Status == mdl.StatusPending {
 				prev.Status = mdl.StatusAck
 			}
-			if m.store != nil {
+			if m.driver.Store != nil {
 				m.storagePersist(
-					m.store.SaveMessage(m.RadioID, channelName, prev.Message),
+					m.driver.Store.SaveMessage(m.RadioID, channelName, prev.Message),
 				)
 			}
 			return nil
@@ -430,8 +430,8 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 	}
 
 	// Persist the incoming message so it survives a restart.
-	if m.store != nil {
-		m.storagePersist(m.store.SaveMessage(m.RadioID, channelName, item.Message))
+	if m.driver.Store != nil {
+		m.storagePersist(m.driver.Store.SaveMessage(m.RadioID, channelName, item.Message))
 	}
 
 	// Bump unread count on non-active channels.
@@ -663,9 +663,9 @@ func (m *model) applyRouting(msg mdl.Routing) {
 			m.messages[i].Status = mdl.StatusFail
 			m.flash = "delivery failed: " + msg.ErrorName + "  (R to resend)"
 		}
-		if m.store != nil {
+		if m.driver.Store != nil {
 			m.storagePersist(
-				m.store.SaveMessage(m.RadioID, m.CurrentChannel, m.messages[i].Message),
+				m.driver.Store.SaveMessage(m.RadioID, m.CurrentChannel, m.messages[i].Message),
 			)
 		}
 		return
@@ -700,11 +700,11 @@ func (m *model) resend(idx int) {
 		m.flash = "R: nothing to resend on this row"
 		return
 	}
-	if m.pump == nil {
+	if m.driver.Pump == nil {
 		m.flash = "R: no radio connected — cannot resend"
 		return
 	}
-	pid, _ := m.pump.Send(mdl.SendText{
+	pid, _ := m.driver.Pump.Send(mdl.SendText{
 		Channel: int(m.currentChannelIndex()),
 		Text:    msg.Text,
 		ReplyID: msg.ReplyID,

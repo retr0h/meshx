@@ -52,11 +52,13 @@ meshx/
 │   └── ble_probe.go              # `meshx ble probe` — diagnostic packet dump
 ├── internal/meshx/               # public-API shell — BLE CLI helpers + RunBLE / AutoConnectTarget
 │   └── ble.go                    # BLEScan / BLEPair / BLEListDevices / BLEForget / BLEMarkFavorite / BLESetFavorite / RunBLE / AutoConnectTarget (declares its own narrow bleStore consumer interface)
-├── internal/tui/                 # Bubble Tea rendering surface (and, today, the radio driver)
-│   ├── app.go                    # model + View() + Update wiring + RunDemo / RunRadio
+├── internal/driver/              # headless radio session layer — wraps Pump + Store + *session.Session
+│   ├── driver.go                 # *driver.Driver type + New(s, pump, store) + Send / Stop
+│   ├── pump.go                   # consumer interface (Pump) for internal/meshx/pump
+│   └── store.go                  # consumer interface (Store) for internal/meshx/storage
+├── internal/tui/                 # Bubble Tea rendering surface (model dispatches apply* directly today)
+│   ├── app.go                    # model + View() + Update wiring + RunDemo / RunRadio (model holds *driver.Driver)
 │   ├── ui.go                     # View dispatcher, model getters, generic utils
-│   ├── pump.go                   # consumer interface (Pump) — moves to the Driver pkg in MR-3.5b
-│   ├── store.go                  # consumer interface (Store) — moves to the Driver pkg in MR-3.5b
 │   ├── commands.go               # /command dispatcher + ham bangs
 │   ├── input.go                  # key bindings, nav mode, tab completion entry
 │   ├── components_box.go         # Box, Component, Cell/Row, Text, Spacer, RawBlock, Viewport, Centered

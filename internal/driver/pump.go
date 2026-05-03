@@ -18,23 +18,21 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package tui
+package driver
 
 import mdl "github.com/retr0h/meshx/internal/meshx/model"
 
-// Pump is the transport ↔ tea bridge surface the meshx TUI consumes —
+// Pump is the transport ↔ tea bridge surface the Driver consumes —
 // the concrete implementation lives in internal/meshx/pump as
-// *pump.Pump, cast to this interface at construction in the
-// openPumpMsg handler. Defined here (where it's consumed) per the
-// osapi-io pattern: each consumer declares only the methods it
-// actually calls, so a future daemon package can declare its own
-// (likely larger) interface without bloating the TUI's view of the
-// bridge.
+// *pump.Pump, cast to this interface at construction in cmd/. Defined
+// here (where it's consumed) per the osapi-io pattern: each consumer
+// declares only the methods it actually calls, so a future remote
+// client (MR-5) can declare its own (likely smaller) interface
+// without bloating the Driver's view of the bridge.
 //
 // Methods correspond 1:1 with *pump.Pump's exported methods used by
-// the TUI. The compile-time bind `var p Pump = pump.New(...)` at
-// the construction site catches drift the moment a method is added
-// or renamed.
+// the Driver. The compile-time bind at the construction site catches
+// drift the moment a method is added or renamed.
 //
 // Send takes typed mdl.Command values — meshx never touches
 // gomeshproto on the outbound side, mirroring how the inbound side

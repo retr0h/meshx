@@ -46,16 +46,26 @@ import (
 // sanitizeMessageText scrubs peer-originated text so one bad packet
 // can't wreck the message-pane layout for every row that follows.
 //
-// Two distinct hazards we cleanse:
+// Three distinct hazards we cleanse:
 //
-//  1. **CR / CRLF.** Real-radio payloads (e.g. solar-node end-of-day
+//  1. **Edge whitespace.** Sender clients (iOS / Android / web)
+//     routinely emit trailing newlines or stray leading spaces from
+//     their compose buffers — the user typed "hi" + Enter and the
+//     client packaged "hi\n" on the wire. Internal \n is meaningful
+//     (solar-node multi-line reports); edge \n is incidental to the
+//     compose path. Without trimming, "hi\n" splits to ["hi", ""]
+//     and renders an empty `▎` continuation row under every such
+//     message. Stock Meshtastic clients trim too; not trimming makes
+//     meshX the outlier.
+//
+//  2. **CR / CRLF.** Real-radio payloads (e.g. solar-node end-of-day
 //     reports) ship CRLF; a lone \r left on a continuation line
 //     ships to the terminal as a carriage-return and snaps the
 //     cursor back to column 0, smearing the next row's left pane
 //     border into the message body. Normalize CRLF → \n, drop
 //     bare \r.
 //
-//  2. **Invalid UTF-8 / non-printable bytes.** A buggy firmware
+//  3. **Invalid UTF-8 / non-printable bytes.** A buggy firmware
 //     can drop a byte mid-codepoint, or a custom app can misuse
 //     the TEXT_MESSAGE_APP port to ship binary, or an RF bit-flip
 //     can corrupt the payload. Go's UTF-8 decoder substitutes
@@ -96,6 +106,10 @@ func okMessageRune(r rune) bool {
 
 func sanitizeMessageText(s string) (string, bool) {
 	s = messageTextSanitizer.Replace(s)
+	// Trim edge whitespace — leading/trailing spaces, tabs, newlines.
+	// Internal \n is preserved (multi-line reports stay multi-line);
+	// only the edges get touched. See the doc comment above for why.
+	s = strings.TrimSpace(s)
 	// Fast path: well-behaved UTF-8 with no control bytes goes
 	// straight through. Saves an allocation on the common case
 	// (every legitimate chat message).

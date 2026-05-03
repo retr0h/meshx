@@ -21,8 +21,10 @@
 package meshx
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,6 +37,14 @@ import (
 	// SQLite driver registration — we talk to it via database/sql.
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// defaultRadioID is the seed UUID inserted by migration 009 for the
+// pre-existing single-radio data. The first time meshx connects after
+// the multi-radio migration, resolveOrCreateRadio claims this row by
+// rewriting its transport + addr to the live values — keeping every
+// historical message + node row correctly attributed without a
+// rewrite-foreign-keys backfill.
+const defaultRadioID = "00000000-0000-0000-0000-000000000001"
 
 // embedMigrations ships every SQL file under migrations/ into the
 // binary so goose can apply them against a user's ~/.meshx/meshx.db
@@ -190,15 +200,15 @@ func backfillFromNum(db *sql.DB) (int, error) {
 // stale rows as `✗` (and can hit `R` to resend them) rather than `…`
 // ghosts that nothing will ever ack. Returns the count updated so
 // the caller can surface it as a systemLine. Safe on nil db.
-func expireStalePendingMessages(db *sql.DB, ttl time.Duration) (int, error) {
+func expireStalePendingMessages(db *sql.DB, radioID string, ttl time.Duration) (int, error) {
 	if db == nil {
 		return 0, nil
 	}
 	cutoff := time.Now().Add(-ttl)
 	res, err := db.Exec(
 		`UPDATE messages SET status = 'fail'
-         WHERE status = 'pending' AND created_at < ?`,
-		cutoff,
+         WHERE radio_id = ? AND status = 'pending' AND created_at < ?`,
+		radioID, cutoff,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("expire stale pending: %w", err)
@@ -214,7 +224,7 @@ func expireStalePendingMessages(db *sql.DB, ttl time.Duration) (int, error) {
 // and entries without any wire origin (demo seeds, local-only) are
 // skipped — they'd be stale on replay anyway. Failure is logged but
 // non-fatal: losing history is preferable to crashing the UI.
-func saveMessage(db *sql.DB, channel string, msg messageItem) error {
+func saveMessage(db *sql.DB, radioID, channel string, msg messageItem) error {
 	if db == nil {
 		return nil
 	}
@@ -237,13 +247,13 @@ func saveMessage(db *sql.DB, channel string, msg messageItem) error {
 	// to them, so those still append freely.
 	_, err := db.Exec(`
         INSERT INTO messages
-        (channel, time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (radio_id, channel, time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(packet_id) WHERE packet_id > 0 DO UPDATE SET
             status = excluded.status,
             hops   = excluded.hops,
             snr    = excluded.snr`,
-		channel, msg.time, msg.from, msg.text, mine, msg.bang, msg.status.String(),
+		radioID, channel, msg.time, msg.from, msg.text, mine, msg.bang, msg.status.String(),
 		msg.hops, msg.snr, msg.packetID, msg.replyID, msg.fromNum,
 	)
 	if err != nil {
@@ -259,22 +269,35 @@ func saveMessage(db *sql.DB, channel string, msg messageItem) error {
 // "node 0x…" callsigns are skipped; the point is to preserve
 // the RESOLVED name, not the fallback. Failure is logged but
 // non-fatal.
-func saveNode(db *sql.DB, nodeNum uint32, longName, shortName, hwModel string) error {
+func saveNode(
+	db *sql.DB,
+	radioID string,
+	nodeNum uint32,
+	longName, shortName, hwModel string,
+) error {
 	if db == nil {
 		return nil
 	}
 	if longName == "" && shortName == "" {
 		return nil
 	}
+	// ON CONFLICT(node_num) — the existing unique index is on node_num
+	// alone, which means TWO radios reporting the same peer share one
+	// row. That's intentional for now: same Meshtastic peer => same
+	// identity regardless of which of the user's radios heard it. If
+	// per-radio peer state ever matters (different RSSI per radio,
+	// per-radio mute), the unique index becomes (node_num, radio_id)
+	// in a future migration.
 	_, err := db.Exec(`
-        INSERT INTO nodes (node_num, long_name, short_name, hw_model, last_seen)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO nodes (radio_id, node_num, long_name, short_name, hw_model, last_seen)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(node_num) DO UPDATE SET
+            radio_id   = excluded.radio_id,
             long_name  = excluded.long_name,
             short_name = excluded.short_name,
             hw_model   = excluded.hw_model,
             last_seen  = CURRENT_TIMESTAMP`,
-		nodeNum, longName, shortName, hwModel,
+		radioID, nodeNum, longName, shortName, hwModel,
 	)
 	if err != nil {
 		return fmt.Errorf("insert node: %w", err)
@@ -298,12 +321,14 @@ type cachedNode struct {
 // pre-populate m.nodes / m.nodesByNum with real callsigns AND the
 // user's sticky favorite / muted preferences, so the star next to
 // a node and the "⊘ muted" state survive restarts.
-func loadNodes(db *sql.DB) ([]cachedNode, error) {
+func loadNodes(db *sql.DB, radioID string) ([]cachedNode, error) {
 	if db == nil {
 		return nil, nil
 	}
 	rows, err := db.Query(
-		`SELECT node_num, long_name, short_name, hw_model, favorite, muted FROM nodes`,
+		`SELECT node_num, long_name, short_name, hw_model, favorite, muted
+         FROM nodes WHERE radio_id = ?`,
+		radioID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query nodes: %w", err)
@@ -336,7 +361,9 @@ func loadNodes(db *sql.DB) ([]cachedNode, error) {
 // saveNode fills them in later; saveNode's ON CONFLICT UPDATE
 // explicitly does NOT touch favorite / muted so this pref never
 // gets clobbered.
-func saveNodePrefs(db *sql.DB, nodeNum uint32, favorite, muted bool) error {
+func saveNodePrefs(
+	db *sql.DB, radioID string, nodeNum uint32, favorite, muted bool,
+) error {
 	if db == nil {
 		return nil
 	}
@@ -348,12 +375,13 @@ func saveNodePrefs(db *sql.DB, nodeNum uint32, favorite, muted bool) error {
 		mu = 1
 	}
 	_, err := db.Exec(`
-        INSERT INTO nodes (node_num, favorite, muted)
-        VALUES (?, ?, ?)
+        INSERT INTO nodes (radio_id, node_num, favorite, muted)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(node_num) DO UPDATE SET
+            radio_id = excluded.radio_id,
             favorite = excluded.favorite,
             muted    = excluded.muted`,
-		nodeNum, fav, mu,
+		radioID, nodeNum, fav, mu,
 	)
 	if err != nil {
 		return fmt.Errorf("save node prefs: %w", err)
@@ -362,34 +390,58 @@ func saveNodePrefs(db *sql.DB, nodeNum uint32, favorite, muted bool) error {
 }
 
 // getSetting returns the persisted value for `key` or ("", false) when
-// the row is missing. Used for /mute (key="ding_muted") and /config's
-// radio buzzer pref (key="radio_buzzer"). Treats a nil db (demo mode
-// or storage open failure) as "no row" so callers fall back to default
-// without branching on storage state.
-func getSetting(db *sql.DB, key string) (string, bool) {
+// the row is missing. radioID scopes the lookup: pass "" for global
+// (meshx-client) prefs like /mute's "ding_muted"; pass a radio UUID
+// for per-radio prefs (none today; reserved for things like per-
+// radio default channel or per-radio nicknames). Treats nil db as
+// "no row" so demo mode and storage-open failures don't branch at
+// the call site.
+func getSetting(db *sql.DB, radioID, key string) (string, bool) {
 	if db == nil {
 		return "", false
 	}
 	var v string
-	if err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v); err != nil {
+	var err error
+	if radioID == "" {
+		err = db.QueryRow(
+			`SELECT value FROM settings WHERE key = ? AND radio_id IS NULL`,
+			key,
+		).Scan(&v)
+	} else {
+		err = db.QueryRow(
+			`SELECT value FROM settings WHERE key = ? AND radio_id = ?`,
+			key, radioID,
+		).Scan(&v)
+	}
+	if err != nil {
 		return "", false
 	}
 	return v, true
 }
 
-// putSetting writes `value` under `key`, upserting when the row already
-// exists. Nil db is a silent no-op so demo mode and storage-open failures
-// don't have to special-case at the call site. Failure is returned so
-// callers can route through storagePersist for the same one-shot
-// "persistence degraded" warning every other write goes through.
-func putSetting(db *sql.DB, key, value string) error {
+// putSetting writes `value` under `(key, radioID)`, upserting when the
+// row already exists. Pass "" for radioID to write a global pref.
+//
+// The settings PRIMARY KEY today is just (key) — see migration 007.
+// Multi-radio per-key support requires migration to a composite PK
+// (key, COALESCE(radio_id, '__global__')); deferred until a per-
+// radio setting actually exists. For now, attempting a per-radio
+// setting + a global setting under the same key would conflict on
+// the existing PK; not a problem because no caller does that today.
+func putSetting(db *sql.DB, radioID, key, value string) error {
 	if db == nil {
 		return nil
 	}
+	var rid any
+	if radioID != "" {
+		rid = radioID
+	}
 	_, err := db.Exec(`
-        INSERT INTO settings (key, value) VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		key, value,
+        INSERT INTO settings (key, value, radio_id) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value    = excluded.value,
+            radio_id = excluded.radio_id`,
+		key, value, rid,
 	)
 	if err != nil {
 		return fmt.Errorf("put setting %s: %w", key, err)
@@ -403,16 +455,19 @@ func putSetting(db *sql.DB, key, value string) error {
 // channel" — used at boot before the handshake resolves which
 // channel the user is on. A limit of 0 returns nothing; negative
 // means "no cap".
-func loadMessages(db *sql.DB, channel string, limit int) ([]messageItem, error) {
+func loadMessages(
+	db *sql.DB, radioID, channel string, limit int,
+) ([]messageItem, error) {
 	if db == nil {
 		return nil, nil
 	}
 	query := `
         SELECT time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num, created_at
-        FROM messages`
-	var args []any
+        FROM messages
+        WHERE radio_id = ?`
+	args := []any{radioID}
 	if channel != "" {
-		query += " WHERE channel = ?"
+		query += " AND channel = ?"
 		args = append(args, channel)
 	}
 	query += " ORDER BY id DESC"
@@ -611,6 +666,138 @@ func forgetBLEDevice(db *sql.DB, uuid string) error {
 	_, err := db.Exec(`DELETE FROM ble_devices WHERE uuid = ?`, uuid)
 	if err != nil {
 		return fmt.Errorf("forget ble device: %w", err)
+	}
+	return nil
+}
+
+// parseRadioDest splits a meshx Dial dest string into transport +
+// addr components for radio identity lookup. Handles the three
+// schemes transport.Dial recognizes:
+//
+//	"ble:<uuid>"            → ("ble", "<uuid>")
+//	"host:port"             → ("tcp", "host:port")    (port is numeric)
+//	"/dev/cu.usbserial-…"   → ("usb", "/dev/cu.usbserial-…")  (anything else)
+//
+// Empty dest returns ("unknown", "unknown") — same placeholder the
+// 009 migration seeds, so demo-mode / never-connected radios still
+// have a stable identity.
+func parseRadioDest(dest string) (transport, addr string) {
+	dest = strings.TrimSpace(dest)
+	if dest == "" {
+		return "unknown", "unknown"
+	}
+	if rest, ok := strings.CutPrefix(dest, "ble:"); ok {
+		return "ble", rest
+	}
+	if i := strings.LastIndex(dest, ":"); i > 0 {
+		// Numeric tail = TCP host:port; non-numeric tail (e.g. a
+		// Windows COM path containing ":") falls through to usb.
+		if _, err := strconv.Atoi(dest[i+1:]); err == nil {
+			return "tcp", dest
+		}
+	}
+	return "usb", dest
+}
+
+// randomUUID returns a v4-style UUID string built from crypto/rand.
+// We hand-roll the 16-byte format rather than pull in a uuid package
+// — the dependency surface is one function and one stdlib import.
+// Returns the error so callers can flash a message instead of
+// panicking inside an Update path.
+func randomUUID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("crypto/rand: %w", err)
+	}
+	b[6] = (b[6] & 0x0F) | 0x40 // version 4
+	b[8] = (b[8] & 0x3F) | 0x80 // variant 10
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
+
+// resolveOrCreateRadio looks up a radio row by (transport, addr) and
+// returns its UUID. If no row matches, the migration's seeded
+// "default" row is claimed by rewriting its transport + addr to the
+// live values — that keeps every historical message + node row
+// (which carries radio_id = defaultRadioID after the migration)
+// correctly attributed to whatever radio connects first. Subsequent
+// connects to a different (transport, addr) create fresh UUID rows.
+//
+// Always succeeds when db is non-nil; demo mode (db == nil) returns
+// (defaultRadioID, nil) so callers don't need to special-case.
+func resolveOrCreateRadio(db *sql.DB, transport, addr string) (string, error) {
+	if db == nil {
+		return defaultRadioID, nil
+	}
+	// Exact (transport, addr) hit — this is the steady-state path
+	// after a radio has connected at least once before.
+	var id string
+	err := db.QueryRow(
+		`SELECT id FROM radios WHERE transport = ? AND addr = ?`,
+		transport, addr,
+	).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("lookup radio: %w", err)
+	}
+
+	// No exact match. Try to claim the migration's seeded default row
+	// — but only if it's still in its placeholder state. Once any
+	// radio has connected, the default row's transport/addr have
+	// been rewritten and a second radio coming online creates its
+	// own row instead.
+	var defaultAddr string
+	err = db.QueryRow(
+		`SELECT addr FROM radios WHERE id = ?`, defaultRadioID,
+	).Scan(&defaultAddr)
+	if err == nil && defaultAddr == "unknown" {
+		_, err = db.Exec(
+			`UPDATE radios SET transport = ?, addr = ?, last_seen = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+			transport, addr, defaultRadioID,
+		)
+		if err != nil {
+			return "", fmt.Errorf("claim default radio: %w", err)
+		}
+		return defaultRadioID, nil
+	}
+
+	// Default row is taken (or missing); mint a new UUID for this
+	// radio. This is the path a second / third / Nth radio takes
+	// when meshx serve grows multi-radio support in PR #3.
+	newID, err := randomUUID()
+	if err != nil {
+		return "", err
+	}
+	_, err = db.Exec(
+		`INSERT INTO radios (id, name, transport, addr, last_seen)
+         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		newID, "radio", transport, addr,
+	)
+	if err != nil {
+		return "", fmt.Errorf("insert radio: %w", err)
+	}
+	return newID, nil
+}
+
+// updateRadioMyNodeNum fills in the my_node_num column once the
+// pump's MyNodeInfo packet arrives. Best-effort — failure is
+// non-fatal (the value is denormalized convenience data, not load-
+// bearing for any query). Idempotent: same value re-saved every
+// reconnect.
+func updateRadioMyNodeNum(db *sql.DB, radioID string, myNodeNum uint32) error {
+	if db == nil || radioID == "" {
+		return nil
+	}
+	_, err := db.Exec(
+		`UPDATE radios SET my_node_num = ?, last_seen = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+		myNodeNum, radioID,
+	)
+	if err != nil {
+		return fmt.Errorf("update radio my_node_num: %w", err)
 	}
 	return nil
 }

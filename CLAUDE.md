@@ -49,14 +49,25 @@ meshx/
 │   ├── probe.go                  # body of `meshx usb probe`
 │   ├── tcp.go                    # `meshx tcp connect`
 │   ├── ble.go                    # `meshx ble {scan,pair,list,forget,connect,disconnect,fav}`
-│   └── ble_probe.go              # `meshx ble probe` — diagnostic packet dump
+│   ├── ble_probe.go              # `meshx ble probe` — diagnostic packet dump
+│   └── serve.go                  # `meshx serve` — headless HTTP+SSE daemon (declares daemonRunner consumer interface)
 ├── internal/meshx/               # public-API shell — BLE CLI helpers + RunBLE / AutoConnectTarget
 │   └── ble.go                    # BLEScan / BLEPair / BLEListDevices / BLEForget / BLEMarkFavorite / BLESetFavorite / RunBLE / AutoConnectTarget (declares its own narrow bleStore consumer interface)
 ├── internal/driver/              # headless radio session layer — wraps Pump + Store + *session.Session
-│   ├── driver.go                 # *driver.Driver type + New(s, pump, store) + Send / Stop
+│   ├── driver.go                 # *driver.Driver type + New(s, pump, store) + Send / Stop / Session
 │   ├── pump.go                   # consumer interface (Pump) for internal/meshx/pump
 │   └── store.go                  # consumer interface (Store) for internal/meshx/storage
+├── internal/server/              # HTTP+SSE daemon (Huma framework) — middleman between driver + clients
+│   ├── server.go                 # *server.Server type + New(Driver) + Run(ctx, addr); declares Driver consumer interface (driver.go)
+│   ├── driver.go                 # consumer interface (Driver) declared at the consumer seam — concrete *driver.Driver satisfies it via Session() + Send()
+│   ├── routes.go                 # huma.Register calls — operationIDs become OpenAPI / generated-client method names
+│   └── handlers.go               # request/response DTOs + per-route handlers; Channel / Node / Message DTOs redact PSK
 ├── internal/tui/                 # Bubble Tea rendering surface (model dispatches apply* directly today)
+│   #                             # GAP: TUI consumes *driver.Driver concretely (m.driver.Pump.Send, m.driver.Store.SaveMessage,
+│   #                             # m.driver.Pump = p). Should declare a narrow consumer interface per osapi-io once apply*
+│   #                             # handlers + outbound dispatch land as methods on driver.Driver — then TUI calls go through
+│   #                             # the interface (Send / SaveMessage / Subscribe) and a remote-driver-over-HTTP variant can
+│   #                             # satisfy the same seam for the (α) "TUI-as-HTTP-client" mode.
 │   ├── app.go                    # model + View() + Update wiring + RunDemo / RunRadio (model holds *driver.Driver)
 │   ├── ui.go                     # View dispatcher, model getters, generic utils
 │   ├── commands.go               # /command dispatcher + ham bangs

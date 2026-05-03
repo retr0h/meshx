@@ -98,6 +98,50 @@ const (
 	ChannelSecondary ChannelRole = "SECONDARY"
 )
 
+// NodeState is the displayed state of a peer in the nodes pane —
+// online / offline / failed / muted. Lives in model/ because the
+// daemon emits it over HTTP+SSE to remote clients (it's part of the
+// API surface), even though it's never persisted in SQLite. The
+// canonical derivation (LastHeardAt → Online/Offline, with Muted as
+// a sticky override) lives on the server side; clients just render
+// whatever the API returns.
+type NodeState int
+
+const (
+	// StateUnknown — never heard from this peer (LastHeardAt zero, no
+	// fixture seed). Stringifies to "" so display printf("%s") gets
+	// nothing visible for a never-heard peer instead of a literal
+	// "unknown" leaking into the UI.
+	StateUnknown NodeState = iota
+	// StateOnline — heard from in the last 15 minutes.
+	StateOnline
+	// StateOffline — known peer we haven't heard from recently.
+	StateOffline
+	// StateFailed — peer we've actively failed to reach (currently
+	// only set by /tr / /ping timeout flows).
+	StateFailed
+	// StateMuted — user-sticky preference (the `m` nav key flips
+	// this). Always wins over the LastHeardAt-derived states; persists
+	// across restarts via the nodes.muted column.
+	StateMuted
+)
+
+// String returns the human/wire form. StateUnknown → "" by design.
+func (s NodeState) String() string {
+	switch s {
+	case StateOnline:
+		return "online"
+	case StateOffline:
+		return "offline"
+	case StateFailed:
+		return "failed"
+	case StateMuted:
+		return "muted"
+	default:
+		return ""
+	}
+}
+
 // RoutingError is Routing.error_reason — the firmware's verdict on
 // an outbound packet. RoutingNone means delivered.
 type RoutingError string

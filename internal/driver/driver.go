@@ -95,3 +95,15 @@ func (d *Driver) Stop() {
 	}
 	d.Pump.Stop()
 }
+
+// Session returns the canonical session state. Method (rather than
+// just touching d.Sess) lets consumers depend on a narrow interface
+// at their own seam — see internal/server/driver.go for the server's
+// Driver interface, which uses Session() so a test or future variant
+// can satisfy the seam without the concrete struct.
+func (d *Driver) Session() *session.Session {
+	if d == nil {
+		return nil
+	}
+	return d.Sess
+}

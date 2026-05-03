@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -36,6 +37,58 @@ import (
 	// SQLite driver registration — we talk to it via database/sql.
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// bootNotes is the process-level diagnostics buffer for the very
+// first openStorage call (which is the ONE call that actually runs
+// goose migrations — every subsequent call sees a fully-migrated DB
+// and produces nothing interesting). Notes captured here include
+// every "OK 010_xxx.sql (Xms)" apply line plus the trailing
+// "successfully migrated" summary that goose emits during the upgrade
+// path on a freshly-pulled binary.
+//
+// Capturing globally is what lets the TUI surface the migration
+// trace via systemLine even when the migration itself was triggered
+// upstream by a CLI helper that opened storage first (e.g. RunBLE
+// resolves the friendly-name → uuid via openSharedStorage before
+// handing off to RunRadio). Without this buffer those upstream
+// migrations would log silently and the TUI's later openStorage
+// would only see the boring "no migrations to run" line.
+//
+// Drained by consumeBootNotes — the slice resets on every consume so
+// the same notes don't get displayed twice across multiple frontends
+// in the same process (CLI prints to stderr, TUI surfaces via
+// systemLine; whichever consumes first gets them).
+var bootNotes struct {
+	mu    sync.Mutex
+	notes []string
+}
+
+// recordBootNotes appends the migration trace from a runMigrations
+// call to the process-level buffer. Called from openStorage right
+// after goose finishes; safe to call concurrently though in practice
+// only ever runs from the first openStorage of the process.
+func recordBootNotes(notes []string) {
+	if len(notes) == 0 {
+		return
+	}
+	bootNotes.mu.Lock()
+	defer bootNotes.mu.Unlock()
+	bootNotes.notes = append(bootNotes.notes, notes...)
+}
+
+// consumeBootNotes drains and returns the captured migration trace.
+// Returns nil when nothing is buffered. Callers display the result
+// however they like (systemLine for the TUI, fmt.Fprintln(stderr)
+// for CLI subcommands, an SSE startup event for the future daemon)
+// — the buffer is single-consumer so once drained the slice is
+// gone, preventing double-display.
+func consumeBootNotes() []string {
+	bootNotes.mu.Lock()
+	defer bootNotes.mu.Unlock()
+	out := bootNotes.notes
+	bootNotes.notes = nil
+	return out
+}
 
 // legacyRadioID is the placeholder UUID migration 009 used to seed
 // pre-existing single-radio data. Migration 010 rewrites it to
@@ -124,6 +177,11 @@ func openStorage(path string) (*sql.DB, []string, error) {
 		_ = db.Close()
 		return nil, notes, err
 	}
+	// Stash the trace in the process-level boot buffer so any frontend
+	// (TUI, CLI helper, future daemon) can surface migration apply
+	// lines even when this openStorage was triggered by an upstream
+	// caller that didn't itself surface notes — see consumeBootNotes.
+	recordBootNotes(notes)
 	return db, notes, nil
 }
 

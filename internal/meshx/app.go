@@ -904,7 +904,12 @@ func newModel(demo *Demo, dest string) model {
 		// db) just leaves m.db nil, and the session runs in-memory
 		// for that boot. Losing history is preferable to crashing.
 		if path, err := defaultStoragePath(); err == nil {
-			if db, notes, err := openStorage(path); err == nil {
+			// openStorage's returned notes are also stashed in the
+			// process-level bootNotes buffer; consumeBootNotes below
+			// is the single source of truth for what we surface, so
+			// ignoring the return here avoids the same migration
+			// trace getting displayed twice.
+			if db, _, err := openStorage(path); err == nil {
 				m.db = db
 				// Bind this session to a radio identity before any
 				// storage call references radioID. resolveRadioByConnection
@@ -1080,12 +1085,17 @@ func newModel(demo *Demo, dest string) model {
 					}
 				}
 				backfilled := len(touched)
-				// Emit storage notes AFTER NodeDB + message replay so
-				// they land at the tail of the log (bottom-pinned in
-				// the pane) where the user naturally looks for the
-				// latest activity — not buried above a wall of
-				// replayed chat.
-				for _, n := range notes {
+				// Drain the migration trace from the process-level
+				// boot buffer. Goose's apply lines + "successfully
+				// migrated" / "no migrations to run" summary all flow
+				// through this single sink regardless of who triggered
+				// the upgrade — RunBLE's pre-handoff openSharedStorage,
+				// the TUI's own openStorage, or (future) the daemon.
+				// Emit AFTER NodeDB + message replay so they land at
+				// the tail of the log (bottom-pinned in the pane)
+				// where the user looks for latest activity, not buried
+				// above a wall of replayed chat.
+				for _, n := range consumeBootNotes() {
 					m.systemLine("storage: " + n)
 				}
 				if backfilled > 0 {

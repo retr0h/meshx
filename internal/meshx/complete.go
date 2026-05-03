@@ -76,11 +76,11 @@ type tabState struct {
 // so order matters for predictability.
 var slashCommands = []string{
 	"73", "88", "channel", "channels", "clear", "config",
-	"cq", "cqr", "exit", "grid", "h", "help", "info", "join",
-	"k", "mesh", "msg", "mute", "nearby", "nick", "nodes", "part", "pin",
-	"ping", "q", "qrm", "qrz", "qsb", "qsl", "qth", "quit", "r", "radar",
-	"reply", "rs", "search", "sk", "sync", "tr",
-	"w", "whois", "wx",
+	"cq", "cqr", "exit", "grid", "h", "help", "ignore", "info", "join",
+	"k", "lastlog", "list", "me", "mesh", "msg", "mute", "nearby", "nick",
+	"nodes", "part", "pin", "ping", "q", "qrm", "qrz", "qsb", "qsl", "qth",
+	"quit", "r", "radar", "reboot", "reply", "rs", "search", "sk", "sync",
+	"tr", "unignore", "version", "w", "who", "whoami", "whois", "wx",
 }
 
 // callsignArgCommands is the set of /verbs whose first argument is a

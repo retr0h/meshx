@@ -569,6 +569,15 @@ type model struct {
 	// one-in-flight contract as pendingTraceroute; same correlation
 	// path (request_id with a fromNum fallback for older firmware).
 	pendingPing *pendingPing
+
+	// ignored is the set of callsigns whose chat messages get
+	// filtered out of the messages pane. Toggled by /ignore <call>
+	// and /unignore <call>. In-memory only — restart clears the set
+	// (intentional: the persisted "muted" flag on nodeItem is a
+	// display marker handled by nav-m, not a render-side filter).
+	// Keyed on the lowercase callsign so substring/case-insensitive
+	// matches work the same way /whois lookup does.
+	ignored map[string]bool
 	// reconnect is non-nil while the pump is in its retry loop. Each
 	// radioReconnectingMsg refreshes the struct; noticeTickMsg uses it
 	// to repaint the flash with a live "in Ns" countdown so the user

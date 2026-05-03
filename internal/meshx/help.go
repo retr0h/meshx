@@ -165,6 +165,42 @@ var helpEntries = map[string]helpEntry{
 		usage:   "/mute",
 		summary: "toggle the meshX terminal ding (BEL on incoming text). Persists across restarts. The radio's own buzzer is unaffected — for that, use /config → \"radio buzzer\"",
 	},
+	"me": {
+		usage:   "/me <action>",
+		summary: "IRC-style action — broadcasts \"* <action>\" on the current channel; receivers see it as your row with the leading \"* \" marker",
+	},
+	"version": {
+		usage:   "/version",
+		summary: "show meshX build identity (commit, build date) plus the connected radio's firmware version. Same data `meshx version` prints",
+	},
+	"ignore": {
+		usage:   "/ignore <call>",
+		summary: "hide chat messages from <call> in the messages pane (local-only filter, doesn't touch the wire). Use /unignore to drop the filter. Cleared on restart",
+	},
+	"unignore": {
+		usage:   "/unignore [call]",
+		summary: "remove <call> from the /ignore list. With no args, lists currently ignored callsigns",
+	},
+	"reboot": {
+		usage:   "/reboot",
+		summary: "send AdminMessage_RebootSeconds(5) to the radio — restarts in 5s. Useful when a module-config write needs a reboot or when the radio is wedged. meshx reconnects automatically",
+	},
+	"who": {
+		usage:   "/who",
+		summary: "alias for /nodes — IRC convention for \"show me the user list\"",
+	},
+	"whoami": {
+		usage:   "/whoami",
+		summary: "alias for /info — IRC convention for \"who am I?\"",
+	},
+	"list": {
+		usage:   "/list",
+		summary: "alias for /channels — IRC convention for \"show me the channels\"",
+	},
+	"lastlog": {
+		usage:   "/lastlog <pattern>",
+		summary: "alias for /search — IRC convention for searching the message log",
+	},
 	"info": {
 		usage:   "/info",
 		summary: "dump meshX's current knowledge — self id, peer-count breakdown, and which peers are still unresolved \"node 0x…\" placeholders",

@@ -268,9 +268,17 @@ func (p helpPane) Render(box Box) string {
 		"",
 		sec("CHANNEL / UTIL /COMMANDS"),
 		kv("/join <channel>", "switch to named channel"),
-		kv("/channel list", "list known channels"),
+		kv("/channel list", "list known channels (alias /list)"),
 		kv("/config", "open interactive radio config panel (Enter toggles radio buzzer)"),
 		kv("/mute", "toggle meshX terminal ding (does not touch radio buzzer)"),
+		kv("/me <action>", "IRC-style action — broadcasts \"* <action>\""),
+		kv("/ignore <call>", "hide chat messages from <call> locally"),
+		kv("/unignore [call]", "drop /ignore filter, or list currently ignored"),
+		kv("/version", "meshX build identity + radio firmware version"),
+		kv("/reboot", "AdminMessage reboot — radio restarts in 5s"),
+		kv("/who", "alias for /nodes"),
+		kv("/whoami", "alias for /info"),
+		kv("/lastlog <pat>", "alias for /search"),
 		kv("/clear", "clear local scrollback (does not unsend)"),
 		kv("/help", "open this help"),
 		kv("/q, /quit", "hint — use Ctrl+X to exit"),
@@ -839,6 +847,15 @@ func messagesPaneRender(m model, width, height int) string {
 	var groupBg string
 	for i := startIdx; i < len(m.messages); i++ {
 		msg := m.messages[i]
+		// /ignore filter — drop chat rows from peers the user has
+		// silenced. System rows (status=="system") and our own
+		// messages always render so the user can see what they
+		// typed and read system status. Substring match against the
+		// from column handles the "[shortname] longname" rendering
+		// vs. raw callsign — same lowercase comparison /whois uses.
+		if msg.status != "system" && !msg.mine && m.isIgnored(msg.from) {
+			continue
+		}
 		faded := m.nodeFilter != "" && !m.msgMatchesFilter(msg)
 
 		// Group rows share one zebra stripe — every line in a /whois

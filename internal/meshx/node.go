@@ -171,6 +171,28 @@ func (n *nodeItem) currentLastHeard() string {
 	return humanDuration(age)
 }
 
+// isIgnored reports whether the given chat row's "from" string maps
+// to a callsign on /ignore's list. Compares lowercased so case-only
+// differences don't slip through, and uses HasPrefix so the chat
+// row's "[shortname] longname" rendering still matches when the
+// ignored entry is the longname alone — same loose-match rule
+// /whois lookup uses.
+func (m model) isIgnored(from string) bool {
+	if len(m.ignored) == 0 || from == "" {
+		return false
+	}
+	low := strings.ToLower(from)
+	for k := range m.ignored {
+		if k == "" {
+			continue
+		}
+		if strings.Contains(low, k) {
+			return true
+		}
+	}
+	return false
+}
+
 // myCallsign returns the call to use for "me" in outbound messages,
 // the status bar, etc. Demo mode: whatever the Demo fixture's
 // Callsign says. Live mode: look up our own node by myNodeNum in

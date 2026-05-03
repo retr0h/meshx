@@ -286,6 +286,33 @@ func newAdminSetBuzzer(
 	}, nil
 }
 
+// newAdminReboot builds an AdminMessage.RebootSeconds envelope. The
+// firmware reboots after `secs` seconds — 5 gives the radio time to
+// finish flushing pending writes (queued ACKs, NodeDB persistence)
+// before the restart. Used by /reboot and as a recovery path for
+// radios that need a kick after a module-config write.
+func newAdminReboot(myNodeNum uint32, secs int32) (*pb.ToRadio, error) {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_RebootSeconds{
+			RebootSeconds: secs,
+		},
+	}
+	payload, err := proto.Marshal(admin)
+	if err != nil {
+		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
+	}
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			To:      myNodeNum,
+			WantAck: true,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum: pb.PortNum_ADMIN_APP,
+				Payload: payload,
+			}},
+		}},
+	}, nil
+}
+
 // newAdminGetModuleConfigBuzzer asks the radio to send back its
 // current ExternalNotification ModuleConfig. Used as a backstop after
 // the WantConfigId handshake — some firmware doesn't push module
@@ -505,6 +532,49 @@ func (m *model) commitConfigDraft() int {
 	m.flash = fmt.Sprintf("/config: %d change%s saved — radio updating", changes, plural(changes))
 	m.systemLine(fmt.Sprintf("config: committed %d change%s", changes, plural(changes)))
 	return changes
+}
+
+// buildVersionLines returns the rows /version dumps as a systemBlock.
+// Reads from BuildInfo() (the same goversion.Info `meshx version`
+// JSON-prints) so the in-app surface and the CLI surface report
+// identical data — caarlos0/go-version backfills sensible defaults
+// from runtime/debug.ReadBuildInfo when goreleaser ldflags weren't
+// applied (e.g. plain `go build`), so we get the commit SHA + dirty
+// flag for free without forking the discovery logic.
+//
+// Also includes the radio's firmware version when known, so the user
+// can see at a glance whether their firmware is current.
+func buildVersionLines(m *model) []string {
+	v := BuildInfo()
+	lines := []string{
+		fmt.Sprintf("meshx:    %s", v.GitVersion),
+	}
+	if v.GitCommit != "" {
+		commit := v.GitCommit
+		if len(commit) > 7 {
+			commit = commit[:7]
+		}
+		if v.GitTreeState == "dirty" {
+			commit += "-dirty"
+		}
+		lines = append(lines, fmt.Sprintf("commit:   %s", commit))
+	}
+	if v.BuildDate != "" {
+		lines = append(lines, fmt.Sprintf("built:    %s", v.BuildDate))
+	}
+	if v.BuiltBy != "" {
+		lines = append(lines, fmt.Sprintf("by:       %s", v.BuiltBy))
+	}
+	lines = append(lines, fmt.Sprintf("go:       %s", v.GoVersion))
+	switch {
+	case m.radioFirmware != "":
+		lines = append(lines, fmt.Sprintf("firmware: %s", m.radioFirmware))
+	case m.isDemo():
+		lines = append(lines, "firmware: (demo)")
+	default:
+		lines = append(lines, "firmware: (waiting on Metadata packet)")
+	}
+	return lines
 }
 
 // plural returns "s" when n != 1 — micro-helper to keep config save
@@ -1278,12 +1348,14 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			"meshX will stop seeing it once the radio drops the slot.",
 		)
 		m.flash = "/part: channels are radio-configured — see the log"
-	case "channels":
+	case "channels", "list":
+		// /list is the IRC convention for "show me the channels."
 		m.openOverlay(overlayChannels)
-	case "nodes":
-		// "Node" is the canonical Meshtastic term — radios on the
-		// mesh are nodes, not users. We dropped the /users and
-		// /names IRC aliases to keep the vocabulary consistent.
+	case "nodes", "who":
+		// /who is the IRC convention for "show me the user list" —
+		// alias for /nodes so muscle memory from IRC clients lands
+		// where users expect. "Node" is the canonical Meshtastic
+		// term (we dropped /users + /names).
 		m.openOverlay(overlayNodes)
 	case "nearby":
 		// Distance-sorted roster of peers with a GPS fix — "who
@@ -1354,7 +1426,106 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "/mute off — terminal ding restored"
 			m.systemLine("ding unmuted — terminal will beep on incoming text")
 		}
-	case "info":
+	case "me":
+		// IRC ASCII-action convention. /me waves → broadcasts the
+		// literal "* waves" as a TEXT_MESSAGE_APP packet on the
+		// current channel; receivers see "[shortname] longname * waves"
+		// with the leading "* " marking it as an action. We don't
+		// prefix with the sender's nick in the body — the chat row's
+		// from column already does that, so adding it would duplicate.
+		// Same wire format every IRC bridge expects.
+		if rest == "" {
+			m.flash = "usage: /me <action>"
+			return nil
+		}
+		m.sendBang("/me", "* "+rest)
+		m.flash = fmt.Sprintf("* %s %s", m.myCallsign(), rest)
+	case "version":
+		// Surface meshX version + radio firmware in one shot. Useful
+		// for support tickets, "is my firmware current?" checks, and
+		// just-curious. Reads runtime/debug.ReadBuildInfo() so the
+		// VCS revision is always accurate without a manual version
+		// constant to bump.
+		m.systemBlock("/version", buildVersionLines(m)...)
+	case "ignore":
+		// Local-only filter — hide chat messages from a peer in the
+		// messages pane. Doesn't touch the wire (the radio still
+		// receives the packets), doesn't persist (in-memory set,
+		// cleared on restart). Distinct from nav-m mute which is
+		// just a state-marker on the nodes pane. Use /unignore to
+		// drop the filter.
+		target := rest
+		if target == "" {
+			m.flash = "usage: /ignore <callsign>"
+			return nil
+		}
+		n := m.lookupNode(target)
+		if n == nil {
+			m.flash = fmt.Sprintf("ignore: no node matches %s", target)
+			return nil
+		}
+		if m.ignored == nil {
+			m.ignored = make(map[string]bool)
+		}
+		m.ignored[strings.ToLower(n.callsign)] = true
+		m.flash = fmt.Sprintf("ignoring %s — messages hidden until /unignore", n.callsign)
+		m.systemLine(fmt.Sprintf("ignore: %s — chat messages will be hidden", n.callsign))
+	case "unignore":
+		target := rest
+		if target == "" {
+			if len(m.ignored) == 0 {
+				m.flash = "/unignore: nothing on the ignore list"
+				return nil
+			}
+			calls := make([]string, 0, len(m.ignored))
+			for k := range m.ignored {
+				calls = append(calls, k)
+			}
+			m.flash = "currently ignoring: " + strings.Join(
+				calls,
+				", ",
+			) + "  (use /unignore <call>)"
+			return nil
+		}
+		n := m.lookupNode(target)
+		if n == nil {
+			m.flash = fmt.Sprintf("unignore: no node matches %s", target)
+			return nil
+		}
+		key := strings.ToLower(n.callsign)
+		if !m.ignored[key] {
+			m.flash = fmt.Sprintf("unignore: %s wasn't on the list", n.callsign)
+			return nil
+		}
+		delete(m.ignored, key)
+		m.flash = fmt.Sprintf("unignoring %s — messages will show again", n.callsign)
+		m.systemLine(fmt.Sprintf("unignore: %s — chat messages restored", n.callsign))
+	case "reboot":
+		// Sends AdminMessage_RebootSeconds(5) to our own radio. Some
+		// firmware needs a reboot for module-config writes to take
+		// effect; also a top-level "my radio is wedged" recovery.
+		// 5 seconds gives the radio time to flush queued ACKs +
+		// persist NodeDB before the restart.
+		if m.isDemo() {
+			m.flash = "/reboot: needs a real radio (demo mode)"
+			return nil
+		}
+		if m.pump == nil {
+			m.flash = "/reboot: needs a live radio connection"
+			return nil
+		}
+		envelope, err := newAdminReboot(m.myNodeNum, 5)
+		if err != nil {
+			m.flash = fmt.Sprintf("/reboot: build failed: %v", err)
+			return nil
+		}
+		if !m.pump.Enqueue(envelope) {
+			m.flash = "/reboot: dropped — outbound buffer full"
+			return nil
+		}
+		m.flash = "/reboot: radio will restart in 5s — meshx will reconnect automatically"
+		m.systemLine("reboot: AdminMessage sent — radio restarting in 5s")
+	case "info", "whoami":
 		// /info — dump meshx's current knowledge to the log so you
 		// can diagnose "why don't I have a name for this peer?"
 		// without external tooling. Shows our own identity, a
@@ -1480,7 +1651,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			"usage:   "+entry.usage,
 			"summary: "+entry.summary,
 		)
-	case "search":
+	case "search", "lastlog":
 		if rest == "" {
 			m.flash = "usage: /search <pattern>"
 			return nil

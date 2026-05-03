@@ -135,6 +135,31 @@ type (
 		replyID  uint32
 	}
 
+	// radioModuleBuzzerMsg arrives when the radio sends a ModuleConfig
+	// envelope carrying its ExternalNotification submodule. Captured
+	// during the WantConfigId handshake (the radio dumps every module
+	// config during the same NodeDB-replay phase that already streams
+	// FromRadio_Config). The full snapshot lets us round-trip every
+	// field on a buzzer-toggle save, so meshx never blows away other
+	// settings (alert_bell, vibra, output pin, …) the user configured
+	// elsewhere.
+	//
+	// "on" for the user means BOTH enabled=true AND
+	// alertMessageBuzzer=true — many radios ship with the module
+	// disabled entirely, in which case alert_message_buzzer doesn't
+	// matter and the buzzer never fires. Tracking both fields lets
+	// /config display the truth instead of a default-true guess.
+	radioModuleBuzzerMsg struct {
+		enabled            bool
+		alertMessageBuzzer bool
+		// snapshot is the full ExternalNotificationConfig the radio
+		// reported, kept on the model so commitConfigDraft can flip
+		// the two fields we care about while preserving everything
+		// else verbatim. Pointer so the renderer can detect
+		// "snapshot not yet received" via nil-check.
+		snapshot *pb.ModuleConfig_ExternalNotificationConfig
+	}
+
 	// radioTracerouteMsg arrives when a TRACEROUTE_APP reply lands —
 	// the result of an outbound /tr that issued a RouteDiscovery
 	// request. requestID matches MeshPacket.Data.request_id and
@@ -697,6 +722,32 @@ func (p *pump) translate(msg *pb.FromRadio) []tea.Msg {
 				hops:        int(p.GetHopStart()) - int(p.GetHopLimit()),
 				lastHeardAt: time.Unix(int64(p.GetRxTime()), 0),
 			}}
+		case pb.PortNum_ADMIN_APP:
+			// AdminMessage replies — the radio answers our
+			// GetModuleConfigRequest with a MeshPacket carrying an
+			// AdminMessage whose oneof is GetModuleConfigResponse.
+			// Same decode shape the WantConfigId dump uses, just
+			// arriving via the data port instead of FromRadio_*. We
+			// only consume the ExternalNotification variant; other
+			// AdminMessage replies (Owner, Channel, … responses we
+			// didn't request) drop silently.
+			adm := &pb.AdminMessage{}
+			if err := proto.Unmarshal(dec.GetPayload(), adm); err != nil {
+				return nil
+			}
+			resp := adm.GetGetModuleConfigResponse()
+			if resp == nil {
+				return nil
+			}
+			ext := resp.GetExternalNotification()
+			if ext == nil {
+				return nil
+			}
+			return []tea.Msg{radioModuleBuzzerMsg{
+				enabled:            ext.GetEnabled(),
+				alertMessageBuzzer: ext.GetAlertMessageBuzzer(),
+				snapshot:           ext,
+			}}
 		case pb.PortNum_TRACEROUTE_APP:
 			// Reply to a /tr request. Payload is a RouteDiscovery
 			// proto whose Route is the ordered list of node nums the
@@ -768,7 +819,32 @@ func (p *pump) translate(msg *pb.FromRadio) []tea.Msg {
 
 	case *pb.FromRadio_ConfigCompleteId:
 		return []tea.Msg{radioConfigCompleteMsg{}}
+
+	case *pb.FromRadio_ModuleConfig:
+		// Module configs ship during the same WantConfigId NodeDB
+		// replay phase Config envelopes do. We only consume the
+		// ExternalNotification variant — that's what governs the
+		// radio buzzer /config exposes. Other modules (mqtt,
+		// store-and-forward, range_test, …) don't have a meshx
+		// surface yet, so we drop them silently.
+		mc := v.ModuleConfig
+		if mc == nil {
+			return nil
+		}
+		switch pl := mc.GetPayloadVariant().(type) {
+		case *pb.ModuleConfig_ExternalNotification:
+			ext := pl.ExternalNotification
+			if ext == nil {
+				return nil
+			}
+			return []tea.Msg{radioModuleBuzzerMsg{
+				enabled:            ext.GetEnabled(),
+				alertMessageBuzzer: ext.GetAlertMessageBuzzer(),
+				snapshot:           ext,
+			}}
+		}
+		return nil
 	}
-	// ModuleConfig and other variants — ignore.
+	// Other FromRadio variants we don't consume yet — drop.
 	return nil
 }

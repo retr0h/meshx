@@ -227,26 +227,45 @@ func newAdminSetOwner(
 	}, nil
 }
 
-// newAdminSetBuzzer builds an AdminMessage.SetModuleConfig ToRadio
-// envelope toggling ModuleConfig.external_notification.alert_message_buzzer
-// — the firmware field that controls "radio beeps when a text message
-// arrives." We only set the single field we care about; firmware
-// merges the message into the live ExternalNotificationConfig, so
-// other fields (alert_bell_buzzer, output_buzzer pin, …) keep their
-// existing values. Same MeshPacket envelope shape as setOwner.
+// newAdminSetBuzzer builds an AdminMessage.SetModuleConfig envelope
+// for ExternalNotificationConfig. snapshot is the full live config
+// the radio reported (or a fresh empty config if we never saw one);
+// we copy it and overwrite only Enabled + AlertMessageBuzzer so other
+// fields the user might have configured via the phone app (output
+// pin, alert_bell, vibra, nag_timeout, …) ride through verbatim.
+// Both fields move together: a meaningful "buzzer on" requires
+// Enabled=true AND AlertMessageBuzzer=true, and "off" forces both
+// false so the module doesn't keep firing on bell or vibra paths
+// users probably don't realize were enabled.
 //
 // Like setOwner this skips the reboot the official phone app issues
 // after a module-config write — modern firmware accepts module config
 // hot. If a future radio refuses the change without a reboot we'd
 // need to chain an AdminMessage_RebootSeconds packet here.
-func newAdminSetBuzzer(myNodeNum uint32, enabled bool) (*pb.ToRadio, error) {
+func newAdminSetBuzzer(
+	myNodeNum uint32,
+	enabled bool,
+	snapshot *pb.ModuleConfig_ExternalNotificationConfig,
+) (*pb.ToRadio, error) {
+	// proto.Clone on the snapshot preserves every field the radio
+	// reported (including ones we never surface in /config) without
+	// copying the proto's internal MessageState mutex — direct struct
+	// assignment trips go-vet's copylocks. Empty fallback covers
+	// "user toggled before the live config arrived" — we still get a
+	// usable payload, just without round-tripping unrelated fields.
+	var ext *pb.ModuleConfig_ExternalNotificationConfig
+	if snapshot != nil {
+		ext = proto.Clone(snapshot).(*pb.ModuleConfig_ExternalNotificationConfig)
+	} else {
+		ext = &pb.ModuleConfig_ExternalNotificationConfig{}
+	}
+	ext.Enabled = enabled
+	ext.AlertMessageBuzzer = enabled
 	admin := &pb.AdminMessage{
 		PayloadVariant: &pb.AdminMessage_SetModuleConfig{
 			SetModuleConfig: &pb.ModuleConfig{
 				PayloadVariant: &pb.ModuleConfig_ExternalNotification{
-					ExternalNotification: &pb.ModuleConfig_ExternalNotificationConfig{
-						AlertMessageBuzzer: enabled,
-					},
+					ExternalNotification: ext,
 				},
 			},
 		},
@@ -262,6 +281,36 @@ func newAdminSetBuzzer(myNodeNum uint32, enabled bool) (*pb.ToRadio, error) {
 			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
 				Portnum: pb.PortNum_ADMIN_APP,
 				Payload: payload,
+			}},
+		}},
+	}, nil
+}
+
+// newAdminGetModuleConfigBuzzer asks the radio to send back its
+// current ExternalNotification ModuleConfig. Used as a backstop after
+// the WantConfigId handshake — some firmware doesn't push module
+// configs proactively, in which case meshx would otherwise render a
+// default-true guess in /config until the user hit save. The reply
+// flows through the same FromRadio_ModuleConfig path the dump uses,
+// so applyModuleBuzzer doesn't have to know whether it was solicited.
+func newAdminGetModuleConfigBuzzer(myNodeNum uint32) (*pb.ToRadio, error) {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_GetModuleConfigRequest{
+			GetModuleConfigRequest: pb.AdminMessage_EXTNOTIF_CONFIG,
+		},
+	}
+	payload, err := proto.Marshal(admin)
+	if err != nil {
+		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
+	}
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			To:      myNodeNum,
+			WantAck: true,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum:      pb.PortNum_ADMIN_APP,
+				Payload:      payload,
+				WantResponse: true,
 			}},
 		}},
 	}, nil
@@ -395,7 +444,7 @@ func (m *model) commitConfigDraft() int {
 	}
 	// Radio buzzer — separate AdminMessage path (SetModuleConfig).
 	if m.cfgDraft.buzzer != m.radioBuzzerEnabled {
-		envelope, err := newAdminSetBuzzer(m.myNodeNum, m.cfgDraft.buzzer)
+		envelope, err := newAdminSetBuzzer(m.myNodeNum, m.cfgDraft.buzzer, m.radioBuzzerSnapshot)
 		if err != nil {
 			m.flash = fmt.Sprintf("/config: buzzer build failed: %v", err)
 			return 0

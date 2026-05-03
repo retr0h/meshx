@@ -381,11 +381,20 @@ func boolToOnOff(b bool) string {
 // wire until Ctrl+S. The saved-value column lets the renderer mark
 // dirty rows without re-deriving live state per render.
 func (m model) configEntries() []configEntry {
+	// Buzzer "saved" reflects what we know the radio actually thinks.
+	// Until radioModuleBuzzerMsg lands (handshake dump or the proactive
+	// AdminMessage_GetModuleConfigRequest fired at ConfigComplete), we
+	// show "(querying)" so the user doesn't trust a default-true guess
+	// — same shape the rest of the panel uses for not-yet-known fields.
+	buzzerSaved := boolToOnOff(m.radioBuzzerEnabled)
+	if !m.radioBuzzerKnown && !m.isDemo() {
+		buzzerSaved = "querying…"
+	}
 	out := []configEntry{
 		{
 			label: "radio buzzer",
 			value: boolToOnOff(m.cfgDraft.buzzer),
-			saved: boolToOnOff(m.radioBuzzerEnabled),
+			saved: buzzerSaved,
 			kind:  cfgEntryToggle,
 			action: func(mm *model) {
 				mm.cfgDraft.buzzer = !mm.cfgDraft.buzzer

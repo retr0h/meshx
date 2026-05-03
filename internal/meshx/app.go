@@ -29,6 +29,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 )
 
 // clientTag is the meshx self-identifier we splice into `/cq` beacons
@@ -489,15 +490,26 @@ type model struct {
 	// matches a fresh-install Meshtastic radio's stock notification
 	// behavior; the user has to deliberately silence meshX.
 	dingMuted bool
-	// radioBuzzerEnabled mirrors the radio's
-	// ModuleConfig.external_notification.alert_message_buzzer field
-	// — true when the LoRa radio beeps on incoming text. We track it
-	// locally because the firmware doesn't push module config on
-	// every connect; the value is persisted to settings.radio_buzzer
-	// so the /config panel renders the right state immediately on
-	// next launch instead of showing a stale guess until the user
-	// re-runs the toggle. Defaults true to match a stock radio.
+	// radioBuzzerEnabled is the DERIVED "is the buzzer actually going
+	// to beep on a text message" state — true only when both
+	// ExternalNotification.Enabled AND AlertMessageBuzzer are set on
+	// the radio. Updated when radioModuleBuzzerMsg lands during the
+	// WantConfigId handshake; before that arrives the value is a
+	// best-effort guess from the persisted settings.radio_buzzer
+	// pref so /config doesn't render a confused empty/false until the
+	// real config trickles in. radioBuzzerKnown distinguishes "never
+	// heard the radio's actual state" from "actually false."
 	radioBuzzerEnabled bool
+	radioBuzzerKnown   bool
+	// radioBuzzerSnapshot holds the full ExternalNotificationConfig
+	// the radio reported, so commitConfigDraft can round-trip every
+	// field other than Enabled / AlertMessageBuzzer when toggling the
+	// buzzer — preserving alert_bell, vibra, output pin, etc. that
+	// the user might have configured via the phone app. Nil until
+	// the first radioModuleBuzzerMsg lands; toggle path falls back
+	// to a fresh empty config in that case (rare, only matters if
+	// the user toggles before the handshake completes).
+	radioBuzzerSnapshot *pb.ModuleConfig_ExternalNotificationConfig
 	// selectedCfg is the cursor index for the /config overlay (one
 	// entry per row; j/k walks). Same accounting shape as selectedCh
 	// / selectedNd / selectedMsg — clamped against configEntries() in
@@ -742,7 +754,7 @@ func newModel(demo *Demo, dest string) model {
 			s.CharLimit = 36
 			return s
 		}(),
-		initialFocusCmd:    focusCmd,
+		initialFocusCmd: focusCmd,
 		// Defaults match a stock Meshtastic radio + a fresh meshX
 		// install (radio buzzer beeps on text, terminal also dings).
 		// Overridden below from the settings table when storage opens.
@@ -1204,6 +1216,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyTraceroute(msg)
 		return m, nil
 
+	case radioModuleBuzzerMsg:
+		// Live ExternalNotificationConfig — comes either as part of
+		// the WantConfigId dump or in response to our explicit
+		// AdminMessage_GetModuleConfigRequest. Either way, this is
+		// the authoritative state. The buzzer "is on" only when
+		// BOTH enabled AND alert_message_buzzer are true; either
+		// false makes it silent regardless of the other.
+		m.radioBuzzerEnabled = msg.enabled && msg.alertMessageBuzzer
+		m.radioBuzzerKnown = true
+		m.radioBuzzerSnapshot = msg.snapshot
+		// Re-sync the persisted "last user intent" pref to whatever
+		// the radio actually says — that way next launch's pre-
+		// handshake guess matches reality instead of bouncing back
+		// to a stale value the user changed via the phone app.
+		v := "off"
+		if m.radioBuzzerEnabled {
+			v = "on"
+		}
+		m.storagePersist(putSetting(m.db, "radio_buzzer", v))
+		return m, nil
+
 	case tracerouteTimeoutMsg:
 		// Timeout for an outbound /tr. If the matching request is
 		// still in flight (packetID matches), surface a "no reply"
@@ -1335,6 +1368,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the canonical connection indicator; flashing "radio
 		// connected" at the bottom was duplicate signal in the same
 		// mesh-green.
+		//
+		// Proactively pull the radio's actual ExternalNotification
+		// module config — some firmware doesn't push it during the
+		// WantConfigId dump, so without an explicit GetModuleConfig
+		// the /config buzzer row would render our default-true
+		// guess forever. The reply lands as another
+		// FromRadio_ModuleConfig and routes through the same
+		// radioModuleBuzzerMsg handler. Skipped if we already know
+		// the state (the dump did contain it).
+		if !m.radioBuzzerKnown && m.pump != nil {
+			if envelope, err := newAdminGetModuleConfigBuzzer(m.myNodeNum); err == nil {
+				m.pump.Enqueue(envelope)
+			}
+		}
 		return m, nil
 
 	case radioDisconnectedMsg:

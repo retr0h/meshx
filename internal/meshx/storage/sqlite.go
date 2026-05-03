@@ -224,23 +224,7 @@ func recordBootNotes(notes []string) {
 	}
 	bootNotes.mu.Lock()
 	defer bootNotes.mu.Unlock()
-	for _, n := range notes {
-		// Skip goose's steady-state "nothing to do" line. The
-		// autoconnect flow opens storage two-to-three times per
-		// launch (AutoConnectTarget reads ble_devices → RunBLE
-		// resolves friendly name → newModel for the TUI session),
-		// and every open re-runs goose. Without this filter the
-		// log shows "no migrations to run" once per open, which
-		// is pure noise. Apply lines ("OK   010_xxx.sql (Xms)")
-		// and the post-apply success summary still pass through —
-		// those are the genuinely useful trace and only fire on
-		// the first open of a process where a migration actually
-		// applied.
-		if strings.Contains(n, "no migrations to run") {
-			continue
-		}
-		bootNotes.notes = append(bootNotes.notes, n)
-	}
+	bootNotes.notes = append(bootNotes.notes, notes...)
 }
 
 // ConsumeBootNotes drains and returns the captured migration trace.
@@ -281,10 +265,17 @@ func (l noticesLogger) Fatalf(format string, v ...any) {
 }
 
 // runMigrations applies every embedded migration via goose and runs
-// one-off backfills. Captures all informational output (goose's
-// "applied vN", "no migrations to run", our backfill count) into an
-// in-memory slice the caller routes into systemLine entries inside
-// the messages pane.
+// one-off backfills. When goose actually applies migrations, the
+// captured trace ("OK 010_xxx.sql (Xms)" + post-apply summary) gets
+// returned for the caller to surface; when goose finds nothing to
+// do (steady state — autoconnect alone re-opens storage two-to-three
+// times per launch, every open re-runs goose), we drop the captured
+// notes entirely so the log doesn't spam the same status line N
+// times.
+//
+// The "did goose apply anything" check uses goose.GetDBVersion
+// before and after rather than parsing log output — that's robust
+// against any future goose log-format change.
 func runMigrations(db *sql.DB) ([]string, error) {
 	var notes []string
 	goose.SetBaseFS(embedMigrations)
@@ -292,8 +283,26 @@ func runMigrations(db *sql.DB) ([]string, error) {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return notes, fmt.Errorf("goose dialect: %w", err)
 	}
+	beforeVersion, err := goose.GetDBVersion(db)
+	if err != nil {
+		// Brand-new DB — goose_db_version doesn't exist yet, but
+		// goose.Up below creates it on first run. Treat that as
+		// version 0; any applied migration bumps the version above
+		// 0 and the trace surfaces normally.
+		beforeVersion = 0
+	}
 	if err := goose.Up(db, "migrations"); err != nil {
 		return notes, fmt.Errorf("goose up: %w", err)
+	}
+	afterVersion, _ := goose.GetDBVersion(db)
+	if afterVersion == beforeVersion {
+		// Steady state — goose had nothing to apply. Drop captured
+		// notes so subsequent opens in the same process (autoconnect
+		// → RunBLE → newModel each open storage) don't flood the
+		// log with duplicate status lines. Apply traces and post-
+		// apply summaries only ever land here when afterVersion >
+		// beforeVersion, and those pass through unchanged.
+		notes = nil
 	}
 	// One-off retroactive fix — rows written before saveMessage
 	// learned about from_num still have it set to 0. Parse the

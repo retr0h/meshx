@@ -92,11 +92,14 @@ meshx/
     │   ├── node.go               # CachedNode (NodeDB cache row)
     │   ├── ble.go                # BLEDevice (BLE pairing row)
     │   ├── events.go             # pump-emitted events: Text, NodeInfo, Position, Ping, …
+    │   ├── commands.go           # consumer-issued commands: SendText, SetOwner, SetBuzzer, RequestSync, …
     │   ├── config.go             # modeled radio configs (ExternalNotification today)
     │   └── enums.go              # Region, ModemPreset, DeviceRole, ChannelRole, RoutingError typed strings
     ├── pump/                     # transport ↔ tea bridge (concrete *pump.Pump)
-    │   ├── pump.go               # New / Stop / Enqueue + run loop with reconnect policy
-    │   ├── translate.go          # FromRadio → []model.X (the only proto<->model boundary inbound)
+    │   ├── pump.go               # New / Stop + run loop with reconnect policy
+    │   ├── translate.go          # FromRadio → []model.X (proto→model inbound boundary)
+    │   ├── outbound.go           # (*Pump).Send(model.Command) + envelope builders (model→proto outbound)
+    │   ├── channel_url.go        # Parse/Build meshtastic:// share URLs as model values
     │   └── config.go             # ExternalNotificationFromProto / ToProto bridges (grows with config writes)
     ├── storage/                  # SQLite persistence (concrete *storage.Sqlite)
     │   ├── sqlite.go             # CRUD against model.Message / CachedNode / BLEDevice
@@ -150,11 +153,14 @@ in the codebase speaks. Three consumers all traffic in `mdl.X`:
         (case mdl.Text / NodeInfo / Position / …)
 ```
 
-`pump/translate.go` is the **only** place in the codebase where `gomeshproto`
-types meet `model` types. Everywhere else — the meshx TUI, the storage layer,
-future daemon — sees only `mdl.X`. The proto<->model bridges for full-record
-configs that need round-trip preservation (today: `ExternalNotification`) live
-in `pump/config.go`; `commands.go` calls those bridges when crafting outbound
+Inbound, `pump/translate.go` projects `*pb.FromRadio` → `model.X` events.
+Outbound, `pump/outbound.go::Send(model.Command)` is a type-switch dispatcher
+that builds the matching `*pb.ToRadio` envelope. The pump package is the
+**only** place in the codebase where `gomeshproto` types meet `model` types in
+either direction. Everywhere else — the meshx TUI, the storage layer, future
+daemon — sees only `mdl.X`. The proto<->model bridges for full-record configs
+that need round-trip preservation (today: `ExternalNotification`) live in
+`pump/config.go`; `commands.go` calls those bridges when crafting outbound
 `AdminMessage` envelopes so it never directly assembles a config proto.
 
 ### Consumer interfaces (osapi-io pattern)

@@ -82,11 +82,14 @@ meshx/
 │   │   ├── node.go               # CachedNode (NodeDB cache row)
 │   │   ├── ble.go                # BLEDevice (BLE pairing row)
 │   │   ├── events.go             # pump-emitted events: Text, NodeInfo, Position, Ping, Routing, …
+│   │   ├── commands.go           # consumer-issued outbound: SendText, SetOwner, SetBuzzer, RequestSync, …
 │   │   ├── config.go             # modeled radio configs (ExternalNotification today; Owner / LoRa / Device next)
 │   │   └── enums.go              # Region, ModemPreset, DeviceRole, ChannelRole, RoutingError typed strings
 │   ├── pump/                     # transport ↔ tea bridge (concrete *pump.Pump)
-│   │   ├── pump.go               # New / Stop / Enqueue + run loop with reconnect policy
-│   │   ├── translate.go          # FromRadio → []model.X (the only proto<->model boundary inbound)
+│   │   ├── pump.go               # New / Stop + run loop with reconnect policy
+│   │   ├── translate.go          # FromRadio → []model.X (proto→model inbound boundary)
+│   │   ├── outbound.go           # (*Pump).Send(model.Command) + envelope builders (model→proto outbound)
+│   │   ├── channel_url.go        # ParseChannelShareURL / BuildChannelShareURL (model.ChannelInfo ↔ meshtastic://)
 │   │   └── config.go             # ExternalNotificationFromProto/ToProto bridges (grows with config writes)
 │   ├── storage/                  # SQLite persistence (concrete *storage.Sqlite)
 │   │   ├── sqlite.go             # CRUD against model.Message / model.CachedNode / model.BLEDevice

@@ -20,9 +20,7 @@
 
 package meshx
 
-import (
-	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
-)
+import mdl "github.com/retr0h/meshx/internal/meshx/model"
 
 // Pump is the transport ↔ tea bridge surface the meshx TUI consumes —
 // the concrete implementation lives in internal/meshx/pump as
@@ -34,13 +32,18 @@ import (
 // bridge.
 //
 // Methods correspond 1:1 with *pump.Pump's exported methods used by
-// the TUI. The `var _ Pump = (*pump.Pump)(nil)` check in the
-// openPumpMsg construction site catches any drift the moment a
-// method is added or renamed.
+// the TUI. The compile-time bind `var p Pump = pump.New(...)` at
+// the construction site catches drift the moment a method is added
+// or renamed.
+//
+// Send takes typed mdl.Command values — meshx never touches
+// gomeshproto on the outbound side, mirroring how the inbound side
+// receives mdl.* events. Returns the generated MeshPacket.id for
+// commands that allocate one (SendText / SendPing / SendTraceroute);
+// returns 0 for fire-and-forget commands. ok is false when the
+// outbound buffer is full or the proto build failed.
 type Pump interface {
-	// Enqueue ships an outbound ToRadio envelope. Non-blocking;
-	// returns false when the outbound buffer is full.
-	Enqueue(*pb.ToRadio) bool
+	Send(mdl.Command) (packetID uint32, ok bool)
 	// Stop tears down the pump goroutine + closes the live client.
 	Stop()
 }

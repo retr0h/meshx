@@ -1561,9 +1561,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// mdl.ModuleBuzzer handler. Skipped if we already know
 		// the state (the dump did contain it).
 		if !m.radioBuzzerKnown && m.pump != nil {
-			if envelope, err := newAdminGetModuleConfigBuzzer(m.myNodeNum); err == nil {
-				m.pump.Enqueue(envelope)
-			}
+			m.pump.Send(mdl.RequestBuzzerConfig{})
 		}
 		return m, nil
 

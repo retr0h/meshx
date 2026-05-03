@@ -39,13 +39,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	mathrand "math/rand"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
-	"google.golang.org/protobuf/proto"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
@@ -73,9 +70,12 @@ func (m *model) sendPlainMessage(text string) {
 // `*` bang flag.
 func (m *model) sendPlainReply(text string, replyToID uint32) {
 	var pid uint32
-	var envelope *pb.ToRadio
 	if m.pump != nil {
-		envelope, pid = newTextToRadio(text, m.currentChannelIndex(), replyToID)
+		pid, _ = m.pump.Send(mdl.SendText{
+			Channel: int(m.currentChannelIndex()),
+			Text:    text,
+			ReplyID: replyToID,
+		})
 	}
 	item := messageItem{
 		time: timeNowHHMM(), from: "me", mine: true, text: text,
@@ -90,50 +90,6 @@ func (m *model) sendPlainReply(text string, replyToID uint32) {
 
 	if m.store != nil {
 		m.storagePersist(m.store.SaveMessage(m.radioID, m.currentChannel, messageItemToModel(item)))
-	}
-
-	if envelope != nil {
-		m.pump.Enqueue(envelope)
-	}
-}
-
-// newTextToRadio builds the ToRadio envelope for a plain text chat
-// message on a named channel index. Broadcast (to = 0xFFFFFFFF) on
-// PortNum TEXT_MESSAGE_APP (1) — the canonical Meshtastic chat path.
-// When replyID != 0 the packet threads to the referenced parent
-// (Data.reply_id) — this is how /73 <call> and friends tie their
-// outgoing text to the specific message from that operator.
-//
-// Returns both the envelope and the generated MeshPacket.id so the
-// caller can stash it on the local messageItem.packetID — that's
-// the correlation key the ROUTING_APP reply lands on when the
-// radio acks (or errors) delivery.
-func newTextToRadio(text string, channel, replyID uint32) (*pb.ToRadio, uint32) {
-	pid := randPacketID()
-	return &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
-			Id:      pid,
-			To:      0xFFFFFFFF,
-			Channel: channel,
-			WantAck: true,
-			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
-				Portnum: pb.PortNum_TEXT_MESSAGE_APP,
-				Payload: []byte(text),
-				ReplyId: replyID,
-			}},
-		}},
-	}, pid
-}
-
-// randPacketID returns a non-zero 32-bit id suitable for
-// MeshPacket.id. Zero is reserved (the firmware treats 0 as
-// "unassigned") so we re-roll on the unlikely collision.
-func randPacketID() uint32 {
-	for {
-		pid := mathrand.Uint32()
-		if pid != 0 {
-			return pid
-		}
 	}
 }
 
@@ -192,12 +148,11 @@ func (m *model) setOwner(longName, shortName, which string) tea.Cmd {
 		// stays however the user configured it via the phone app.
 		_ = n
 	}
-	envelope, err := newAdminSetOwner(m.myNodeNum, longName, shortName, isLicensed)
-	if err != nil {
-		m.flash = fmt.Sprintf("/%sname failed: %v", which, err)
-		return nil
-	}
-	if !m.pump.Enqueue(envelope) {
+	if _, ok := m.pump.Send(mdl.SetOwner{
+		LongName:   longName,
+		ShortName:  shortName,
+		IsLicensed: isLicensed,
+	}); !ok {
 		m.flash = "/" + which + "name dropped — outbound buffer full"
 		return nil
 	}
@@ -214,170 +169,11 @@ func (m *model) setOwner(longName, shortName, which string) tea.Cmd {
 	return nil
 }
 
-// newAdminSetOwner builds an AdminMessage.SetOwner ToRadio envelope,
-// wrapped in a MeshPacket addressed to our own node. This is how
-// meshX updates the radio's User config (longname / shortname) over
-// the wire — same AdminMessage path the official Meshtastic phone
-// apps and Python CLI use.
-//
-// The phone apps chase SetOwner with a reboot; we don't. Meshtastic
-// firmware >= 2.3 accepts User updates hot (updates in-memory,
-// persists to flash, keeps running). Skipping the reboot saves
-// ~20 seconds of downtime per rename and is safe on any current
-// build.
-func newAdminSetOwner(
-	myNodeNum uint32,
-	longName, shortName string,
-	isLicensed bool,
-) (*pb.ToRadio, error) {
-	admin := &pb.AdminMessage{
-		PayloadVariant: &pb.AdminMessage_SetOwner{
-			SetOwner: &pb.User{
-				LongName:   longName,
-				ShortName:  shortName,
-				IsLicensed: isLicensed,
-			},
-		},
-	}
-	payload, err := proto.Marshal(admin)
-	if err != nil {
-		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
-	}
-	return &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
-			// AdminMessage is addressed to OUR OWN node num — the
-			// radio treats it as a local config write.
-			To:      myNodeNum,
-			WantAck: true,
-			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
-				Portnum: pb.PortNum_ADMIN_APP,
-				Payload: payload,
-			}},
-		}},
-	}, nil
-}
-
-// newAdminSetBuzzer builds an AdminMessage.SetModuleConfig envelope
-// for ExternalNotificationConfig. snapshot is the full live config
-// the radio reported (or a fresh empty config if we never saw one);
-// we copy it and overwrite only Enabled + AlertMessageBuzzer so other
-// fields the user might have configured via the phone app (output
-// pin, alert_bell, vibra, nag_timeout, …) ride through verbatim.
-// Both fields move together: a meaningful "buzzer on" requires
-// Enabled=true AND AlertMessageBuzzer=true, and "off" forces both
-// false so the module doesn't keep firing on bell or vibra paths
-// users probably don't realize were enabled.
-//
-// Like setOwner this skips the reboot the official phone app issues
-// after a module-config write — modern firmware accepts module config
-// hot. If a future radio refuses the change without a reboot we'd
-// need to chain an AdminMessage_RebootSeconds packet here.
-func newAdminSetBuzzer(
-	myNodeNum uint32,
-	enabled bool,
-	snapshot mdl.ExternalNotification,
-) (*pb.ToRadio, error) {
-	// pump.ExternalNotificationToProto is the only place gomeshproto
-	// types meet model types on the outbound side — meshx never sees
-	// the proto. Snapshot's zero value (the user toggled before the
-	// live config arrived) just produces an empty proto, which the
-	// Set+Alert overrides below populate with a usable payload.
-	ext := pump.ExternalNotificationToProto(snapshot)
-	// Set ALL three message-alert output paths together. Meshtastic
-	// firmware fires whichever path the hardware has wired — a
-	// piezo on output_buzzer, a vibra motor on output_vibra, or a
-	// simple LED on output. Setting just AlertMessageBuzzer left
-	// radios with the notification on a different pin silent. Bell
-	// paths (alert_bell_*) stay at whatever the snapshot had — that
-	// flag is for the BEL character on incoming text, separate from
-	// the message-arrival alert /config exposes.
-	//
-	// UsePwm rides with the toggle because most ham-radio boards
-	// (T-Beam, Heltec, RAK 4631 with WisBlock buzzer) have a hardware
-	// buzzer on the device-level `device.buzzer_gpio` pin, NOT on
-	// External Notification's per-module output_pin (which is "Unset"
-	// out of the box). With UsePwm=true the module ignores the
-	// per-module output pin / duration / active polarity and routes
-	// through device.buzzer_gpio — which is what's actually wired.
-	// Without it, "buzzer on" sets every alert flag but the firmware
-	// has no GPIO to drive and the radio stays silent. The phone app
-	// surfaces this same field as "Use PWM Buzzer".
-	ext.Enabled = enabled
-	ext.AlertMessage = enabled
-	ext.AlertMessageBuzzer = enabled
-	ext.AlertMessageVibra = enabled
-	ext.UsePwm = enabled
-	admin := &pb.AdminMessage{
-		PayloadVariant: &pb.AdminMessage_SetModuleConfig{
-			SetModuleConfig: &pb.ModuleConfig{
-				PayloadVariant: &pb.ModuleConfig_ExternalNotification{
-					ExternalNotification: ext,
-				},
-			},
-		},
-	}
-	payload, err := proto.Marshal(admin)
-	if err != nil {
-		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
-	}
-	return &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
-			To:      myNodeNum,
-			WantAck: true,
-			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
-				Portnum: pb.PortNum_ADMIN_APP,
-				Payload: payload,
-			}},
-		}},
-	}, nil
-}
-
 // meshtasticChannelSlots is the firmware's hard cap on simultaneous
 // channels. Slot 0 is always PRIMARY; 1..7 are SECONDARY. /channel
 // new + add allocate into the first DISABLED slot >= 1; PRIMARY is
 // off-limits because the radio refuses to operate without one.
 const meshtasticChannelSlots = 8
-
-// newAdminSetChannel builds an AdminMessage.SetChannel ToRadio
-// envelope for a single channel slot. Same wire path as setOwner /
-// newAdminSetBuzzer — admin packet addressed to our own node, the
-// radio applies it locally and rebroadcasts NodeInfo so peers see the
-// new channel name. role is one of pb.Channel_PRIMARY (slot 0 only),
-// pb.Channel_SECONDARY (1..7), or pb.Channel_DISABLED (delete).
-//
-// settings can be nil for the disable case — the radio frees the slot
-// and wipes the PSK either way. For add / new, settings carries the
-// PSK + name + uplink/downlink flags.
-func newAdminSetChannel(
-	myNodeNum uint32,
-	index int32,
-	role pb.Channel_Role,
-	settings *pb.ChannelSettings,
-) (*pb.ToRadio, error) {
-	admin := &pb.AdminMessage{
-		PayloadVariant: &pb.AdminMessage_SetChannel{
-			SetChannel: &pb.Channel{
-				Index:    index,
-				Settings: settings,
-				Role:     role,
-			},
-		},
-	}
-	payload, err := proto.Marshal(admin)
-	if err != nil {
-		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
-	}
-	return &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
-			To:      myNodeNum,
-			WantAck: true,
-			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
-				Portnum: pb.PortNum_ADMIN_APP,
-				Payload: payload,
-			}},
-		}},
-	}, nil
-}
 
 // findFreeChannelSlot returns the first slot index >= 1 that is
 // DISABLED (or beyond the radio's reported set), suitable for /channel
@@ -464,11 +260,10 @@ func (m *model) channelShare(typed string) tea.Cmd {
 		m.flash = "/channel share: the default channel is on every radio — nothing to share"
 		return nil
 	}
-	settings := &pb.ChannelSettings{
+	shareURL, err := pump.BuildChannelShareURL(mdl.ChannelInfo{
 		Name: bareChannelName(c.name),
-		Psk:  c.psk,
-	}
-	shareURL, err := buildChannelShareURL(settings, nil)
+		PSK:  c.psk,
+	})
 	if err != nil {
 		m.flash = fmt.Sprintf("/channel share failed: %v", err)
 		return nil
@@ -554,19 +349,16 @@ func (m *model) channelNew(name string) tea.Cmd {
 		m.flash = fmt.Sprintf("/channel new: %v", err)
 		return nil
 	}
-	settings := &pb.ChannelSettings{
-		Name: name,
-		Psk:  psk,
-		Id:   channelID,
-	}
-	envelope, err := newAdminSetChannel(
-		m.myNodeNum, int32(slot), pb.Channel_SECONDARY, settings,
-	)
-	if err != nil {
-		m.flash = fmt.Sprintf("/channel new failed: %v", err)
-		return nil
-	}
-	if !m.pump.Enqueue(envelope) {
+	if _, ok := m.pump.Send(mdl.SetChannel{
+		Slot: mdl.ChannelInfo{
+			Index:  slot,
+			Name:   name,
+			Role:   mdl.ChannelSecondary,
+			ID:     channelID,
+			HasPSK: true,
+			PSK:    psk,
+		},
+	}); !ok {
 		m.flash = "/channel new dropped — outbound buffer full"
 		return nil
 	}
@@ -643,14 +435,7 @@ func (m *model) channelDel(typed string) tea.Cmd {
 		m.flash = "/channel del: cannot delete the primary channel — use /config to rename"
 		return nil
 	}
-	envelope, err := newAdminSetChannel(
-		m.myNodeNum, int32(idx), pb.Channel_DISABLED, nil,
-	)
-	if err != nil {
-		m.flash = fmt.Sprintf("/channel del failed: %v", err)
-		return nil
-	}
-	if !m.pump.Enqueue(envelope) {
+	if _, ok := m.pump.Send(mdl.DeleteChannel{Index: idx}); !ok {
 		m.flash = "/channel del dropped — outbound buffer full"
 		return nil
 	}
@@ -693,15 +478,15 @@ func (m *model) channelAdd(rawURL string) tea.Cmd {
 		m.flash = "/channel add needs a live radio connection"
 		return nil
 	}
-	cs, err := parseChannelShareURL(rawURL)
+	slots, err := pump.ParseChannelShareURL(rawURL)
 	if err != nil {
 		m.flash = "/channel add: " + err.Error()
 		return nil
 	}
 	added, skipped := 0, 0
 	var summary []string
-	for _, s := range cs.GetSettings() {
-		name := s.GetName()
+	for _, s := range slots {
+		name := s.Name
 		if name == "" {
 			// Empty-name in a share URL means "default channel" —
 			// almost certainly a mistake (sharing the well-known
@@ -724,15 +509,10 @@ func (m *model) channelAdd(rawURL string) tea.Cmd {
 			skipped++
 			continue
 		}
-		envelope, err := newAdminSetChannel(
-			m.myNodeNum, int32(slot), pb.Channel_SECONDARY, s,
-		)
-		if err != nil {
-			summary = append(summary, fmt.Sprintf("fail: %q — %v", name, err))
-			skipped++
-			continue
-		}
-		if !m.pump.Enqueue(envelope) {
+		// Place the imported channel into the next free slot. The model
+		// already carries Role=Secondary, ID, PSK from the share URL.
+		s.Index = slot
+		if _, ok := m.pump.Send(mdl.SetChannel{Slot: s}); !ok {
 			summary = append(summary, fmt.Sprintf("fail: %q — outbound buffer full", name))
 			skipped++
 			continue
@@ -742,15 +522,15 @@ func (m *model) channelAdd(rawURL string) tea.Cmd {
 		// radio's ChannelInfo broadcast will overwrite this row with
 		// the canonical state shortly.
 		display := "#" + name
-		if len(s.GetPsk()) > 0 {
+		if len(s.PSK) > 0 {
 			display = "*" + name + "*"
 		}
 		m.channels[slot] = channelItem{
 			name:    display,
-			private: len(s.GetPsk()) > 0,
+			private: len(s.PSK) > 0,
 			index:   slot,
 			role:    roleSecondary,
-			psk:     s.GetPsk(),
+			psk:     s.PSK,
 		}
 		summary = append(summary, fmt.Sprintf("add:  %s → slot %d", display, slot))
 		added++
@@ -767,118 +547,6 @@ func (m *model) channelAdd(rawURL string) tea.Cmd {
 		m.flash = "no channels added — see log"
 	}
 	return nil
-}
-
-// newAdminReboot builds an AdminMessage.RebootSeconds envelope. The
-// firmware reboots after `secs` seconds — 5 gives the radio time to
-// finish flushing pending writes (queued ACKs, NodeDB persistence)
-// before the restart. Used by /reboot and as a recovery path for
-// radios that need a kick after a module-config write.
-func newAdminReboot(myNodeNum uint32, secs int32) (*pb.ToRadio, error) {
-	admin := &pb.AdminMessage{
-		PayloadVariant: &pb.AdminMessage_RebootSeconds{
-			RebootSeconds: secs,
-		},
-	}
-	payload, err := proto.Marshal(admin)
-	if err != nil {
-		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
-	}
-	return &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
-			To:      myNodeNum,
-			WantAck: true,
-			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
-				Portnum: pb.PortNum_ADMIN_APP,
-				Payload: payload,
-			}},
-		}},
-	}, nil
-}
-
-// newAdminGetModuleConfigBuzzer asks the radio to send back its
-// current ExternalNotification ModuleConfig. Used as a backstop after
-// the WantConfigId handshake — some firmware doesn't push module
-// configs proactively, in which case meshx would otherwise render a
-// default-true guess in /config until the user hit save. The reply
-// flows through the same FromRadio_ModuleConfig path the dump uses,
-// so applyModuleBuzzer doesn't have to know whether it was solicited.
-func newAdminGetModuleConfigBuzzer(myNodeNum uint32) (*pb.ToRadio, error) {
-	admin := &pb.AdminMessage{
-		PayloadVariant: &pb.AdminMessage_GetModuleConfigRequest{
-			GetModuleConfigRequest: pb.AdminMessage_EXTNOTIF_CONFIG,
-		},
-	}
-	payload, err := proto.Marshal(admin)
-	if err != nil {
-		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
-	}
-	return &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
-			To:      myNodeNum,
-			WantAck: true,
-			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
-				Portnum:      pb.PortNum_ADMIN_APP,
-				Payload:      payload,
-				WantResponse: true,
-			}},
-		}},
-	}, nil
-}
-
-// newTraceroutePacket builds a TRACEROUTE_APP MeshPacket addressed
-// to `targetNum` with an empty RouteDiscovery payload. WantResponse
-// tells the firmware to relay the discovery back populated with the
-// traversed route; WantAck so we still get a Routing receipt to
-// distinguish "request landed on the mesh" from "request never made
-// it to the wire." Returns the envelope plus the generated packetID
-// the model stashes in m.pendingTraceroute so the inbound reply can
-// correlate via Data.request_id.
-func newTraceroutePacket(targetNum uint32) (*pb.ToRadio, uint32, error) {
-	rd := &pb.RouteDiscovery{}
-	payload, err := proto.Marshal(rd)
-	if err != nil {
-		return nil, 0, fmt.Errorf("marshal RouteDiscovery: %w", err)
-	}
-	pid := randPacketID()
-	return &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
-			Id:       pid,
-			To:       targetNum,
-			WantAck:  true,
-			HopLimit: 7, // Meshtastic firmware default; gives the discovery enough headroom for a typical multi-hop mesh
-			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
-				Portnum:      pb.PortNum_TRACEROUTE_APP,
-				Payload:      payload,
-				WantResponse: true,
-			}},
-		}},
-	}, pid, nil
-}
-
-// newPingPacket builds a REPLY_APP MeshPacket addressed to
-// `targetNum`. Meshtastic's REPLY_APP service is a built-in echo:
-// the firmware automatically bounces whatever payload it receives
-// back to the sender, which is the closest thing to ICMP echo the
-// mesh has. WantAck so we still get a Routing receipt, WantResponse
-// so the firmware actually relays the echo back. Returns the
-// envelope plus the generated packetID the model stashes in
-// m.pendingPing for correlation.
-func newPingPacket(targetNum uint32) (*pb.ToRadio, uint32, error) {
-	pid := randPacketID()
-	return &pb.ToRadio{
-		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
-			Id:       pid,
-			To:       targetNum,
-			WantAck:  true,
-			HopLimit: 7,
-			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
-				Portnum:      pb.PortNum_REPLY_APP,
-				Payload:      []byte("ping"),
-				WantResponse: true,
-			}},
-		}},
-	}, pid, nil
 }
 
 // pingTimeoutSeconds bounds how long /ping waits for the REPLY_APP
@@ -976,14 +644,10 @@ func (m *model) commitConfigDraft() int {
 	// fields; firmware overwrites the whole User record, so we round-
 	// trip both even if only one changed. Same path /nick uses.
 	if m.cfgDraft.longName != m.myCallsign() || m.cfgDraft.shortName != m.myShortName() {
-		envelope, err := newAdminSetOwner(
-			m.myNodeNum, m.cfgDraft.longName, m.cfgDraft.shortName, false,
-		)
-		if err != nil {
-			m.flash = fmt.Sprintf("/config: SetOwner build failed: %v", err)
-			return 0
-		}
-		if !m.pump.Enqueue(envelope) {
+		if _, ok := m.pump.Send(mdl.SetOwner{
+			LongName:  m.cfgDraft.longName,
+			ShortName: m.cfgDraft.shortName,
+		}); !ok {
 			m.flash = "/config: SetOwner dropped — outbound buffer full"
 			return 0
 		}
@@ -991,12 +655,10 @@ func (m *model) commitConfigDraft() int {
 	}
 	// Radio buzzer — separate AdminMessage path (SetModuleConfig).
 	if m.cfgDraft.buzzer != m.radioBuzzerEnabled {
-		envelope, err := newAdminSetBuzzer(m.myNodeNum, m.cfgDraft.buzzer, m.radioBuzzerSnapshot)
-		if err != nil {
-			m.flash = fmt.Sprintf("/config: buzzer build failed: %v", err)
-			return 0
-		}
-		if !m.pump.Enqueue(envelope) {
+		if _, ok := m.pump.Send(mdl.SetBuzzer{
+			Enabled:  m.cfgDraft.buzzer,
+			Snapshot: m.radioBuzzerSnapshot,
+		}); !ok {
 			m.flash = "/config: buzzer dropped — outbound buffer full"
 			return 0
 		}
@@ -1531,12 +1193,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			)
 			return nil
 		}
-		envelope, pid, err := newTraceroutePacket(n.nodeNum)
-		if err != nil {
-			m.flash = fmt.Sprintf("tr: build failed: %v", err)
-			return nil
-		}
-		if !m.pump.Enqueue(envelope) {
+		pid, ok := m.pump.Send(mdl.SendTraceroute{TargetNum: n.nodeNum})
+		if !ok {
 			m.flash = "tr: dropped — outbound buffer full"
 			return nil
 		}
@@ -1606,12 +1264,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			)
 			return nil
 		}
-		envelope, pid, err := newPingPacket(n.nodeNum)
-		if err != nil {
-			m.flash = fmt.Sprintf("ping: build failed: %v", err)
-			return nil
-		}
-		if !m.pump.Enqueue(envelope) {
+		pid, ok := m.pump.Send(mdl.SendPing{TargetNum: n.nodeNum})
+		if !ok {
 			m.flash = "ping: dropped — outbound buffer full"
 			return nil
 		}
@@ -2106,12 +1760,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "/reboot: needs a live radio connection"
 			return nil
 		}
-		envelope, err := newAdminReboot(m.myNodeNum, 5)
-		if err != nil {
-			m.flash = fmt.Sprintf("/reboot: build failed: %v", err)
-			return nil
-		}
-		if !m.pump.Enqueue(envelope) {
+		if _, ok := m.pump.Send(mdl.Reboot{Seconds: 5}); !ok {
 			m.flash = "/reboot: dropped — outbound buffer full"
 			return nil
 		}
@@ -2187,14 +1836,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "/sync needs a live radio connection (demo mode)"
 			return nil
 		}
-		nonce := mathrand.Uint32()
-		if nonce == 0 {
-			nonce = 1
-		}
-		ok := m.pump.Enqueue(&pb.ToRadio{
-			PayloadVariant: &pb.ToRadio_WantConfigId{WantConfigId: nonce},
-		})
-		if !ok {
+		if _, ok := m.pump.Send(mdl.RequestSync{}); !ok {
 			m.flash = "/sync dropped — outbound buffer full"
 			return nil
 		}
@@ -2215,7 +1857,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.syncPendingGhosts = ghosts
 		}
 		m.systemBlock("sync",
-			fmt.Sprintf("requested NodeDB re-dump (nonce=0x%x)", nonce),
+			"requested NodeDB re-dump",
 			fmt.Sprintf("baseline: %d unresolved peers", ghosts),
 			"watching for incoming NodeInfo — any placeholder that resolves",
 			"will fire its own `identified` line; summary lands on completion.",
@@ -2366,12 +2008,15 @@ func (m *model) sendBang(bang, body string) {
 func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	status := statusAck
 	var pid uint32
-	var envelope *pb.ToRadio
 	if !m.isDemo() {
 		status = statusPending // flipped by mdl.Routing handler
 	}
 	if m.pump != nil {
-		envelope, pid = newTextToRadio(body, m.currentChannelIndex(), replyToID)
+		pid, _ = m.pump.Send(mdl.SendText{
+			Channel: int(m.currentChannelIndex()),
+			Text:    body,
+			ReplyID: replyToID,
+		})
 	}
 	item := messageItem{
 		time:     timeNowHHMM(),
@@ -2393,10 +2038,6 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	// demo mode (m.db is always nil there).
 	if m.store != nil {
 		m.storagePersist(m.store.SaveMessage(m.radioID, m.currentChannel, messageItemToModel(item)))
-	}
-
-	if envelope != nil {
-		m.pump.Enqueue(envelope)
 	}
 }
 

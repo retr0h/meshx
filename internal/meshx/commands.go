@@ -46,10 +46,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 	"google.golang.org/protobuf/proto"
+
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/meshx/pump"
 )
 
 // Channel role string constants. The pump stringifies pb.Channel_Role
-// at the radioChannelMsg boundary (FromRadio_Channel decoder); these
+// at the mdl.ChannelInfo boundary (FromRadio_Channel decoder); these
 // keep the comparison sites in this file from being typo-bait.
 const (
 	roleDisabled  = "DISABLED"
@@ -272,20 +275,14 @@ func newAdminSetOwner(
 func newAdminSetBuzzer(
 	myNodeNum uint32,
 	enabled bool,
-	snapshot *pb.ModuleConfig_ExternalNotificationConfig,
+	snapshot mdl.ExternalNotification,
 ) (*pb.ToRadio, error) {
-	// proto.Clone on the snapshot preserves every field the radio
-	// reported (including ones we never surface in /config) without
-	// copying the proto's internal MessageState mutex — direct struct
-	// assignment trips go-vet's copylocks. Empty fallback covers
-	// "user toggled before the live config arrived" — we still get a
-	// usable payload, just without round-tripping unrelated fields.
-	var ext *pb.ModuleConfig_ExternalNotificationConfig
-	if snapshot != nil {
-		ext = proto.Clone(snapshot).(*pb.ModuleConfig_ExternalNotificationConfig)
-	} else {
-		ext = &pb.ModuleConfig_ExternalNotificationConfig{}
-	}
+	// pump.ExternalNotificationToProto is the only place gomeshproto
+	// types meet model types on the outbound side — meshx never sees
+	// the proto. Snapshot's zero value (the user toggled before the
+	// live config arrived) just produces an empty proto, which the
+	// Set+Alert overrides below populate with a usable payload.
+	ext := pump.ExternalNotificationToProto(snapshot)
 	// Set ALL three message-alert output paths together. Meshtastic
 	// firmware fires whichever path the hardware has wired — a
 	// piezo on output_buzzer, a vibra motor on output_vibra, or a
@@ -2371,7 +2368,7 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 	var pid uint32
 	var envelope *pb.ToRadio
 	if !m.isDemo() {
-		status = statusPending // flipped by radioRoutingMsg handler
+		status = statusPending // flipped by mdl.Routing handler
 	}
 	if m.pump != nil {
 		envelope, pid = newTextToRadio(body, m.currentChannelIndex(), replyToID)

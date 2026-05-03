@@ -398,7 +398,7 @@ func boolToOnOff(b bool) string {
 // dirty rows without re-deriving live state per render.
 func (m model) configEntries() []configEntry {
 	// Buzzer "saved" reflects what we know the radio actually thinks.
-	// Until radioModuleBuzzerMsg lands (handshake dump or the proactive
+	// Until mdl.ModuleBuzzer lands (handshake dump or the proactive
 	// AdminMessage_GetModuleConfigRequest fired at ConfigComplete), we
 	// show "(querying)" so the user doesn't trust a default-true guess
 	// — same shape the rest of the panel uses for not-yet-known fields.

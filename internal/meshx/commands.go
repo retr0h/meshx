@@ -1725,8 +1725,18 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		m.searchQuery = strings.ToLower(rest)
-		if ok, count := m.jumpToSearchHit(+1); ok {
-			m.flash = fmt.Sprintf("search: %d matches for %q — n/N to step, /search to clear", count, rest)
+		// Walk backward from the current selection — chat logs read
+		// newest-first, so /search should land on the MOST RECENT
+		// match (just-above-the-cursor or near-the-tail), not the
+		// oldest one. n/N still step in their bound directions, so
+		// once we're on the most-recent hit n walks further back
+		// through history and N walks forward toward newer matches.
+		if ok, count := m.jumpToSearchHit(-1); ok {
+			m.flash = fmt.Sprintf(
+				"search: %d matches for %q — n/N to step, /search to clear",
+				count,
+				rest,
+			)
 			m.mode = modeNav
 			m.input.Blur()
 		} else {

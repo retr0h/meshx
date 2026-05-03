@@ -174,6 +174,15 @@ type Message struct {
 	// for "me" / system lines / demo seeds.
 	FromNum uint32
 
+	// ToNum is the Meshtastic node num of the addressee, captured
+	// from MeshPacket.to at ingest. 0xFFFFFFFF (4294967295) means
+	// broadcast, anything else is a directed message (DM) — the row
+	// was sent specifically to ToNum and not to the channel at large.
+	// Zero on outbound rows we built before ToNum was introduced and
+	// on system / demo rows that have no addressee. Future MR-7b
+	// uses this to split DMs into per-peer @threads in the tab strip.
+	ToNum uint32
+
 	// SentAt is the absolute timestamp the message was received
 	// (live) or originally persisted (replay). Populated from
 	// messages.created_at on replay; set to time.Now() on live

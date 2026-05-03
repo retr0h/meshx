@@ -18,9 +18,9 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package meshx
+package pump
 
-// channel_url.go — encode + decode for the meshtastic:// share link
+// channel_url.go — encode + decode for the meshtastic:// share-link
 // format. The link is just a base64-url protobuf — no network round-
 // trip is involved. meshtastic.org's `/e/` page is a fallback landing
 // surface that decodes the URL fragment client-side; the PSK never
@@ -32,8 +32,12 @@ package meshx
 //   https://meshtastic.org/e/#<base64url ChannelSet>[?add=true]
 //
 // The `?add=true` query is the official phone app's "add to existing
-// channels" hint; we always treat imports as additive (never wipe the
-// radio's other channels) so the flag is informational only.
+// channels" hint; consumers always treat imports as additive (never
+// wipe the radio's other channels) so the flag is informational.
+//
+// Lives in pump because it touches gomeshproto — meshx never sees
+// pb.ChannelSet / pb.ChannelSettings on either side. The functions
+// take + return model.* types; the proto encode/decode is internal.
 
 import (
 	"encoding/base64"
@@ -44,20 +48,27 @@ import (
 
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/retr0h/meshx/internal/meshx/model"
 )
 
-// channelShareURLPrefix is the "universal link" form of the share URL.
-// We emit this from /channel share because it's the form that works
+// channelShareURLPrefix is the "universal link" form of the share
+// URL. /channel share emits this because it's the form that works
 // for recipients regardless of whether they have a Meshtastic app
 // installed — with the app, the OS deep-links into it; without, the
 // browser falls back to meshtastic.org's landing page.
 const channelShareURLPrefix = "https://meshtastic.org/e/#"
 
-// parseChannelShareURL accepts either a `meshtastic://e/#…` deep link
-// or an `https://meshtastic.org/e/#…` universal link, extracts the
-// base64-url payload, and decodes it into a ChannelSet. The fragment
-// after `#` is the protobuf — anything before is just routing.
-func parseChannelShareURL(raw string) (*pb.ChannelSet, error) {
+// ParseChannelShareURL accepts either a `meshtastic://e/#…` deep
+// link or an `https://meshtastic.org/e/#…` universal link, decodes
+// the base64-url protobuf payload, and returns the contained
+// channels as flat model values. Used by /channel add — meshx never
+// sees pb.ChannelSet.
+//
+// LoraConfig from the share URL is dropped today (matches the
+// previous behavior — no consumer applies it). When that lands,
+// extend the return signature to surface model.LoraConfig.
+func ParseChannelShareURL(raw string) ([]model.ChannelInfo, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, errors.New("empty url")
@@ -82,16 +93,15 @@ func parseChannelShareURL(raw string) (*pb.ChannelSet, error) {
 	if frag == "" {
 		return nil, errors.New("url has no payload after #")
 	}
-	// Strip optional `?add=true` (or any trailing query) — the channel
-	// set is everything up to the first `?`.
+	// Strip optional `?add=true` (or any trailing query) — the
+	// channel set is everything up to the first `?`.
 	if i := strings.IndexByte(frag, '?'); i >= 0 {
 		frag = frag[:i]
 	}
-	// Meshtastic uses URL-safe base64 *without padding*, matching the
-	// canonical Python `urlsafe_b64encode().rstrip("=")`. Be lenient if
-	// a sender included padding by stripping `=` then running the
-	// unpadded decoder once — single error path, no codec confusion in
-	// the wrapped message.
+	// Meshtastic uses URL-safe base64 *without padding*, matching
+	// the canonical Python `urlsafe_b64encode().rstrip("=")`. Be
+	// lenient if a sender included padding by stripping `=` then
+	// running the unpadded decoder once.
 	frag = strings.TrimRight(frag, "=")
 	payload, err := base64.RawURLEncoding.DecodeString(frag)
 	if err != nil {
@@ -101,24 +111,46 @@ func parseChannelShareURL(raw string) (*pb.ChannelSet, error) {
 	if err := proto.Unmarshal(payload, cs); err != nil {
 		return nil, fmt.Errorf("unmarshal ChannelSet: %w", err)
 	}
-	if len(cs.GetSettings()) == 0 {
+	settings := cs.GetSettings()
+	if len(settings) == 0 {
 		return nil, errors.New("channel set has no channels")
 	}
-	return cs, nil
+	out := make([]model.ChannelInfo, 0, len(settings))
+	for _, s := range settings {
+		// Defensive copy: the proto's Psk slice aliases the decoded
+		// payload buffer, which the consumer might pin past the
+		// lifetime of cs. Cheap to copy 16-32 bytes.
+		var pskCopy []byte
+		if psk := s.GetPsk(); len(psk) > 0 {
+			pskCopy = append([]byte(nil), psk...)
+		}
+		out = append(out, model.ChannelInfo{
+			Name:   s.GetName(),
+			Role:   model.ChannelSecondary, // share URLs always carry secondaries
+			ID:     s.GetId(),
+			HasPSK: len(pskCopy) > 0,
+			PSK:    pskCopy,
+		})
+	}
+	return out, nil
 }
 
-// buildChannelShareURL is the inverse — wraps a single ChannelSettings
-// in a ChannelSet (the URL format always carries a set, even of one)
-// and emits the universal `https://meshtastic.org/e/#…` link.
+// BuildChannelShareURL is the inverse — wraps a single channel slot
+// in a ChannelSet (the URL format always carries a set, even of
+// one) and emits the universal `https://meshtastic.org/e/#…` link.
 //
-// loraConfig is optional. The phone app's share-channel flow includes
-// the radio's current LoRa config so the recipient can match region /
-// modem preset; we leave it nil for now (PSK + name is enough to join
-// a single channel) and leave room to wire it through later.
-func buildChannelShareURL(s *pb.ChannelSettings, loraConfig *pb.Config_LoRaConfig) (string, error) {
+// LoRa config from the live radio could ride along so the recipient
+// matches region / modem preset — the official phone app does that.
+// Today we leave it nil (PSK + name is enough to join a single
+// channel) and leave room to thread it through later via a second
+// argument.
+func BuildChannelShareURL(slot model.ChannelInfo) (string, error) {
 	cs := &pb.ChannelSet{
-		Settings:   []*pb.ChannelSettings{s},
-		LoraConfig: loraConfig,
+		Settings: []*pb.ChannelSettings{{
+			Name: slot.Name,
+			Psk:  slot.PSK,
+			Id:   slot.ID,
+		}},
 	}
 	raw, err := proto.Marshal(cs)
 	if err != nil {

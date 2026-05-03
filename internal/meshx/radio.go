@@ -703,9 +703,12 @@ func (m *model) resend(idx int) {
 		m.flash = "R: no radio connected — cannot resend"
 		return
 	}
-	envelope, pid := newTextToRadio(msg.text, m.currentChannelIndex(), msg.replyID)
+	pid, _ := m.pump.Send(mdl.SendText{
+		Channel: int(m.currentChannelIndex()),
+		Text:    msg.text,
+		ReplyID: msg.replyID,
+	})
 	msg.packetID = pid
 	msg.status = statusPending
-	m.pump.Enqueue(envelope)
 	m.flash = fmt.Sprintf("↻ retransmit sent (pid=0x%08x) — awaiting ack", pid)
 }

@@ -156,6 +156,7 @@ func (p *Pump) translate(msg *pb.FromRadio) []tea.Msg {
 			Index:  int(v.Channel.GetIndex()),
 			Name:   s.GetName(),
 			Role:   model.ChannelRole(v.Channel.GetRole().String()),
+			ID:     s.GetId(),
 			HasPSK: len(pskCopy) > 0,
 			PSK:    pskCopy,
 		}}

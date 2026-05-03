@@ -79,10 +79,16 @@ type NodeInfo struct {
 // share can round-trip the channel into a meshtastic:// URL without
 // a second GetChannel roundtrip; the bytes stay RAM-only (no SQLite
 // column).
+//
+// ID is ChannelSettings.id — a 32-bit collision-avoidance value the
+// firmware uses to disambiguate same-named channels across meshes.
+// /channel new mints a fresh random one; /channel add carries
+// whatever the URL had.
 type ChannelInfo struct {
 	Index  int
 	Name   string
 	Role   ChannelRole
+	ID     uint32
 	HasPSK bool
 	PSK    []byte
 }

@@ -135,6 +135,23 @@ type (
 		replyID  uint32
 	}
 
+	// radioTracerouteMsg arrives when a TRACEROUTE_APP reply lands —
+	// the result of an outbound /tr that issued a RouteDiscovery
+	// request. requestID matches MeshPacket.Data.request_id and
+	// correlates back to the in-flight pendingTraceroute the model
+	// recorded when the user pressed /tr. fromNum is the responder's
+	// node num; route is the ordered list of intermediate node nums
+	// the discovery walked through (does NOT include source or dest
+	// per the Meshtastic firmware convention). hops = len(route) is
+	// the actual mesh hop count for the round-trip.
+	radioTracerouteMsg struct {
+		requestID uint32
+		fromNum   uint32
+		toNum     uint32
+		route     []uint32
+		at        time.Time
+	}
+
 	// radioRoutingMsg is the Meshtastic delivery receipt — the radio
 	// echoes a Routing packet with request_id == our packetID once it
 	// finishes the send (or gives up). errorReason == NONE means the
@@ -679,6 +696,26 @@ func (p *pump) translate(msg *pb.FromRadio) []tea.Msg {
 				rssi:        fmt.Sprintf("%d", p.GetRxRssi()),
 				hops:        int(p.GetHopStart()) - int(p.GetHopLimit()),
 				lastHeardAt: time.Unix(int64(p.GetRxTime()), 0),
+			}}
+		case pb.PortNum_TRACEROUTE_APP:
+			// Reply to a /tr request. Payload is a RouteDiscovery
+			// proto whose Route is the ordered list of node nums the
+			// packet traversed (intermediate hops only; the source
+			// and dest are implicit at MeshPacket.From / .To).
+			// request_id correlates back to the outbound packetID we
+			// stashed in m.pendingTraceroute. Foreign traceroutes
+			// (replies to someone else's request) silently drop in
+			// the UI handler because their request_id won't match.
+			rd := &pb.RouteDiscovery{}
+			if err := proto.Unmarshal(dec.GetPayload(), rd); err != nil {
+				return nil
+			}
+			return []tea.Msg{radioTracerouteMsg{
+				requestID: dec.GetRequestId(),
+				fromNum:   p.GetFrom(),
+				toNum:     p.GetTo(),
+				route:     append([]uint32(nil), rd.GetRoute()...),
+				at:        time.Unix(int64(p.GetRxTime()), 0),
 			}}
 		case pb.PortNum_ROUTING_APP:
 			// Routing payload carries the radio's verdict on a packet

@@ -267,6 +267,51 @@ func newAdminSetBuzzer(myNodeNum uint32, enabled bool) (*pb.ToRadio, error) {
 	}, nil
 }
 
+// newTraceroutePacket builds a TRACEROUTE_APP MeshPacket addressed
+// to `targetNum` with an empty RouteDiscovery payload. WantResponse
+// tells the firmware to relay the discovery back populated with the
+// traversed route; WantAck so we still get a Routing receipt to
+// distinguish "request landed on the mesh" from "request never made
+// it to the wire." Returns the envelope plus the generated packetID
+// the model stashes in m.pendingTraceroute so the inbound reply can
+// correlate via Data.request_id.
+func newTraceroutePacket(targetNum uint32) (*pb.ToRadio, uint32, error) {
+	rd := &pb.RouteDiscovery{}
+	payload, err := proto.Marshal(rd)
+	if err != nil {
+		return nil, 0, fmt.Errorf("marshal RouteDiscovery: %w", err)
+	}
+	pid := randPacketID()
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			Id:       pid,
+			To:       targetNum,
+			WantAck:  true,
+			HopLimit: 7, // Meshtastic firmware default; gives the discovery enough headroom for a typical multi-hop mesh
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum:      pb.PortNum_TRACEROUTE_APP,
+				Payload:      payload,
+				WantResponse: true,
+			}},
+		}},
+	}, pid, nil
+}
+
+// tracerouteTimeoutSeconds bounds how long /tr waits for a
+// TRACEROUTE_APP reply before declaring the request lost. 30s covers
+// a 6-hop round trip on a slow LongFast mesh with retries — same
+// ballpark the official Meshtastic clients use. tracerouteTimeoutCmd
+// returns a tea.Cmd that fires tracerouteTimeoutMsg after the
+// deadline; the handler short-circuits if pendingTraceroute already
+// resolved or got replaced by a newer /tr.
+const tracerouteTimeoutSeconds = 30
+
+func tracerouteTimeoutCmd(packetID uint32) tea.Cmd {
+	return tea.Tick(tracerouteTimeoutSeconds*time.Second, func(time.Time) tea.Msg {
+		return tracerouteTimeoutMsg{packetID: packetID}
+	})
+}
+
 // resetConfigDraft snapshots the live radio state into m.cfgDraft so
 // the /config panel opens populated with current values. Called from
 // openOverlay(overlayConfig) so re-opening the panel always starts
@@ -820,15 +865,63 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		n := m.lookupNode(target)
 		if n == nil {
-			m.systemLine(fmt.Sprintf("tr: no route data for %s", target))
+			m.systemLine(fmt.Sprintf("tr: node %s unknown", target))
 			return nil
 		}
-		m.systemBlock(
-			fmt.Sprintf("traceroute %s", n.callsign),
-			fmt.Sprintf("hops:   %d", n.lastHops),
-			fmt.Sprintf("signal: %s", signalReport(n)),
-			"note:   live path not yet queried — showing last-known telemetry",
+		// Fast paths first — no live wire traffic possible in demo
+		// mode or when the pump isn't up yet, so fall back to cached
+		// telemetry with a clear "no live path" tag instead of
+		// silently no-opping.
+		if m.isDemo() || m.pump == nil {
+			m.systemBlock(
+				fmt.Sprintf("traceroute %s", n.callsign),
+				fmt.Sprintf("hops:   %d (cached)", n.lastHops),
+				fmt.Sprintf("signal: %s", signalReport(n)),
+				"note:   live traceroute needs a real radio connection",
+			)
+			return nil
+		}
+		// Self-traceroute is meaningless — firmware drops it.
+		if n.nodeNum != 0 && n.nodeNum == m.myNodeNum {
+			m.systemLine("tr: that's you — /info for your own config")
+			return nil
+		}
+		// One traceroute in flight at a time. Issuing a second /tr
+		// while the first hasn't resolved would orphan the old
+		// pendingTraceroute (the new packetID overwrites the field
+		// and the original timeout tick never finds a match). Refuse
+		// loud rather than silently lose the prior request.
+		if m.pendingTraceroute != nil {
+			m.flash = fmt.Sprintf(
+				"tr: already tracing %s — wait or it'll auto-timeout",
+				m.pendingTraceroute.targetCall,
+			)
+			return nil
+		}
+		envelope, pid, err := newTraceroutePacket(n.nodeNum)
+		if err != nil {
+			m.flash = fmt.Sprintf("tr: build failed: %v", err)
+			return nil
+		}
+		if !m.pump.Enqueue(envelope) {
+			m.flash = "tr: dropped — outbound buffer full"
+			return nil
+		}
+		m.pendingTraceroute = &pendingTraceroute{
+			packetID:    pid,
+			targetNum:   n.nodeNum,
+			targetCall:  n.callsign,
+			requestedAt: time.Now(),
+		}
+		m.flash = fmt.Sprintf(
+			"tr: tracing %s (waiting up to %ds)",
+			n.callsign, tracerouteTimeoutSeconds,
 		)
+		m.systemLine(fmt.Sprintf(
+			"traceroute %s — request sent (id 0x%x), awaiting reply",
+			n.callsign, pid,
+		))
+		return tracerouteTimeoutCmd(pid)
 	case "ping":
 		target := rest
 		if target == "" {

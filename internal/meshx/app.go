@@ -180,6 +180,32 @@ type configDraft struct {
 	shortName string
 }
 
+// pendingTraceroute is the in-flight /tr request the model tracks
+// from outbound enqueue until the matching TRACEROUTE_APP reply (or
+// timeout) lands. packetID is the MeshPacket.id we stamped on the
+// request; matching against radioTracerouteMsg.requestID ignores
+// foreign traceroutes that happen to be on the air. target is the
+// callsign / node num the user asked to trace, kept around so the
+// reply card can render "traceroute <call> — N hops" without
+// re-resolving. requestedAt drives the round-trip-time readout in
+// the result block + the timeout deadline.
+type pendingTraceroute struct {
+	packetID    uint32
+	targetNum   uint32
+	targetCall  string
+	requestedAt time.Time
+}
+
+// tracerouteTimeoutMsg fires N seconds after a /tr request goes out;
+// if it still matches m.pendingTraceroute (i.e. no reply arrived)
+// the handler emits a "no reply" systemBlock and clears the pending
+// slot. packetID is captured at enqueue time so a stale tick from a
+// previous /tr can't clobber a fresh one — same correlation pattern
+// radioRoutingMsg uses.
+type tracerouteTimeoutMsg struct {
+	packetID uint32
+}
+
 // Pane indices — used for overlay-focus accounting and accent colors.
 const (
 	paneChannels = 0
@@ -500,6 +526,13 @@ type model struct {
 	// /config panel; while true the panel renders a y/n prompt and
 	// the input handler short-circuits all keys except y/n.
 	cfgConfirmDiscard bool
+
+	// pendingTraceroute tracks an in-flight /tr request so the
+	// inbound TRACEROUTE_APP reply can correlate back. Non-nil
+	// while a discovery is on the wire; cleared by applyTraceroute
+	// when the matching reply lands or by tracerouteTimeoutMsg when
+	// the deadline elapses with no reply.
+	pendingTraceroute *pendingTraceroute
 	// reconnect is non-nil while the pump is in its retry loop. Each
 	// radioReconnectingMsg refreshes the struct; noticeTickMsg uses it
 	// to repaint the flash with a live "in Ns" countdown so the user
@@ -867,6 +900,19 @@ func newModel(demo *Demo, dest string) model {
 					}
 					if past.sentAt.After(m.nodes[idx].lastHeardAt) {
 						m.nodes[idx].lastHeardAt = past.sentAt
+						// Stamp lastHops + lastSNR off the most-
+						// recent message in history. Without this,
+						// /tr's offline fall-back path (no live
+						// pump) reads zero hops + empty snr even
+						// when the row right above shows the real
+						// values — applyTextMessage updates these
+						// for live packets, but historical messages
+						// replay directly into m.messages and never
+						// touch the node telemetry slots.
+						m.nodes[idx].lastHops = past.hops
+						if past.snr != "" {
+							m.nodes[idx].lastSNR = past.snr
+						}
 						touched[past.fromNum] = struct{}{}
 					}
 				}
@@ -1152,6 +1198,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioRoutingMsg:
 		m.applyRouting(msg)
+		return m, nil
+
+	case radioTracerouteMsg:
+		m.applyTraceroute(msg)
+		return m, nil
+
+	case tracerouteTimeoutMsg:
+		// Timeout for an outbound /tr. If the matching request is
+		// still in flight (packetID matches), surface a "no reply"
+		// systemBlock and clear the slot so a fresh /tr can fire.
+		// Stale ticks (request already resolved or replaced) drop
+		// silently — the packetID guard handles both cases.
+		if m.pendingTraceroute != nil && m.pendingTraceroute.packetID == msg.packetID {
+			tgt := m.pendingTraceroute.targetCall
+			m.systemBlock(
+				fmt.Sprintf("traceroute %s", tgt),
+				fmt.Sprintf("result:  no reply within %ds", tracerouteTimeoutSeconds),
+				"note:    target may be offline, out of range, or behind a dead relay",
+			)
+			m.flash = fmt.Sprintf("tr: no reply from %s", tgt)
+			m.pendingTraceroute = nil
+		}
 		return m, nil
 
 	case radioMetadataMsg:

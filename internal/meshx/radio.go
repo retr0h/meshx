@@ -398,6 +398,70 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 	}
 }
 
+// applyTraceroute consumes a TRACEROUTE_APP reply that landed for
+// our outbound /tr request. Correlates against m.pendingTraceroute
+// via request_id; foreign traceroutes (replies to someone else's
+// request) silently drop because their request_id won't match.
+//
+// Surfaces the result as a systemBlock with the round-trip time, the
+// hop count (== len(route) — the firmware's RouteDiscovery puts only
+// intermediate node nums in the slice; source and dest are implicit
+// at MeshPacket.From / .To), and the resolved callsign of every hop
+// when we know one (placeholder hex when we don't).
+//
+// On match the pendingTraceroute slot clears so the user can fire a
+// fresh /tr without waiting for the timeout to elapse, and the
+// scheduled tracerouteTimeoutMsg becomes a no-op when its tick lands
+// (the packetID guard there falls through silently).
+func (m *model) applyTraceroute(msg radioTracerouteMsg) {
+	if m.pendingTraceroute == nil ||
+		m.pendingTraceroute.packetID != msg.requestID {
+		return
+	}
+	tgt := m.pendingTraceroute.targetCall
+	rtt := msg.at.Sub(m.pendingTraceroute.requestedAt)
+	if rtt < 0 {
+		// Clock skew between the radio's RxTime stamp and our local
+		// clock can yield a negative delta. Round to time.Since so
+		// the displayed RTT is still useful.
+		rtt = time.Since(m.pendingTraceroute.requestedAt)
+	}
+	hops := len(msg.route)
+	lines := []string{
+		fmt.Sprintf("hops:    %d", hops),
+		fmt.Sprintf("rtt:     %s", rtt.Round(100*time.Millisecond)),
+	}
+	if hops == 0 {
+		lines = append(lines, "path:    direct (RF-adjacent — no relays)")
+	} else {
+		// Build "us → r1 → r2 → ... → target" using callsigns where
+		// we have them, "0x<hex>" otherwise. The user-readable path
+		// is the whole point of the live traceroute, so spend the
+		// width on rendering it well.
+		hopLabels := make([]string, 0, hops+2)
+		hopLabels = append(hopLabels, m.myCallsign())
+		for _, num := range msg.route {
+			if idx, ok := m.nodesByNum[num]; ok && idx < len(m.nodes) {
+				hopLabels = append(hopLabels, m.nodes[idx].callsign)
+				continue
+			}
+			hopLabels = append(hopLabels, fmt.Sprintf("0x%x", num))
+		}
+		hopLabels = append(hopLabels, tgt)
+		lines = append(lines, "path:    "+strings.Join(hopLabels, " → "))
+	}
+	// Update cached telemetry so subsequent /tr in demo / offline
+	// fall-back mode shows the freshly-measured value instead of the
+	// stale zero. lastHops needs the live value even if it's 0
+	// (direct), so this assignment doesn't gate on > 0.
+	if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx < len(m.nodes) {
+		m.nodes[idx].lastHops = hops
+	}
+	m.systemBlock(fmt.Sprintf("traceroute %s", tgt), lines...)
+	m.flash = fmt.Sprintf("tr: %s — %d hop%s in %s", tgt, hops, plural(hops), rtt.Round(100*time.Millisecond))
+	m.pendingTraceroute = nil
+}
+
 // applyRouting flips the status of the local messageItem whose
 // packetID matches the Routing reply's request_id. NONE → "ack"
 // (delivery succeeded), anything else → "fail" (the errorName

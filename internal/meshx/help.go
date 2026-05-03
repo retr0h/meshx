@@ -134,8 +134,8 @@ var helpEntries = map[string]helpEntry{
 		summary: "open the channels overlay (j/k walks, Enter activates)",
 	},
 	"channel": {
-		usage:   "/channel list | /channel add <url>",
-		summary: "channel management; `list` opens the overlay, `add` imports a meshtastic:// URL",
+		usage:   "/channel list | add <url> | new <name> | share <name> | del <name>",
+		summary: "full channel lifecycle — `list` opens the overlay; `add` imports a meshtastic:// share URL; `new` mints a fresh AES256 channel with a random PSK; `share` renders the channel as an ASCII QR for in-person scanning (PSK never touches the network); `del` disables a slot. PRIMARY can't be deleted — use /config to rename. Aliases: del / delete / rm.",
 	},
 	"nodes": {
 		usage:   "/nodes",

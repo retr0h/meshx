@@ -232,10 +232,26 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	m.nodes = append(m.nodes, item)
 }
 
-// applyChannel sets or replaces a channel slot. Skips DISABLED
-// channels so they don't clutter the tab strip.
+// applyChannel sets or replaces a channel slot. DISABLED slots are
+// kept in m.channels (with role="DISABLED") so /channel new can find
+// the first free slot to allocate into; renderers (channelTabsRow,
+// channelsPane) skip DISABLED so empty slots don't clutter the UI.
 func (m *model) applyChannel(msg radioChannelMsg) {
+	// Grow the slice up to msg.index regardless of role so the slot is
+	// addressable for delete + re-apply later.
+	for len(m.channels) <= msg.index {
+		m.channels = append(m.channels, channelItem{role: "DISABLED"})
+	}
 	if msg.role == "DISABLED" {
+		// Preserve any unread accumulated before the slot was disabled
+		// (rare but possible if a /channel del raced an inbound packet)
+		// and mark the slot empty so /channel new can re-use it.
+		prevUnread := m.channels[msg.index].unread
+		m.channels[msg.index] = channelItem{
+			index:  msg.index,
+			role:   "DISABLED",
+			unread: prevUnread,
+		}
 		return
 	}
 	name := msg.name
@@ -248,10 +264,12 @@ func (m *model) applyChannel(msg radioChannelMsg) {
 	} else {
 		name = "#" + msg.name
 	}
-	c := channelItem{name: name, private: msg.hasPSK}
-	// Upsert by index; grow the slice if needed.
-	for len(m.channels) <= msg.index {
-		m.channels = append(m.channels, channelItem{})
+	c := channelItem{
+		name:    name,
+		private: msg.hasPSK,
+		index:   msg.index,
+		role:    msg.role,
+		psk:     msg.psk,
 	}
 	// Preserve unread count across re-apply.
 	c.unread = m.channels[msg.index].unread

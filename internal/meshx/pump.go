@@ -109,12 +109,17 @@ type (
 	}
 
 	// radioChannelMsg delivers one channel slot — index, name, role,
-	// and PSK presence. Empty name + PRIMARY role is "default LongFast."
+	// PSK presence, and the PSK bytes themselves. Empty name + PRIMARY
+	// role is "default LongFast." psk rides along so /channel share can
+	// round-trip the channel into a meshtastic:// URL without a second
+	// GetChannel roundtrip; bytes stay RAM-only (channelItem.psk has
+	// no SQLite column).
 	radioChannelMsg struct {
 		index  int
 		name   string
 		role   string
 		hasPSK bool
+		psk    []byte
 	}
 
 	// radioTextMsg arrives whenever a text packet lands on any
@@ -647,6 +652,7 @@ func (p *pump) translate(msg *pb.FromRadio) []tea.Msg {
 			name:   s.GetName(),
 			role:   v.Channel.GetRole().String(),
 			hasPSK: len(s.GetPsk()) > 0,
+			psk:    s.GetPsk(),
 		}}
 
 	case *pb.FromRadio_Packet:

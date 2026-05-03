@@ -179,32 +179,84 @@ mode with no argument.
 
 ## Overlay and util /commands
 
-| Command                  | Meaning                                                         |
-| ------------------------ | --------------------------------------------------------------- |
-| `/channels`              | open channels overlay                                           |
-| `/nodes`                 | open nodes overlay (BitchX-style bracketed grid)                |
-| `/nearby`                | distance-sorted roster of peers with a GPS fix (closest first)  |
-| `/radar`                 | polar scope — peers plotted by bearing + distance around you    |
-| `/join <channel>`        | switch to named channel                                         |
-| `/channel list`          | same as `/channels`                                             |
-| `/search <pattern>`      | run a search and jump to first hit (aliases: `/find`)           |
-| `/config`                | show radio + identity configuration                             |
-| `/info`                  | dump meshX state — own id, peer counts, unresolved placeholders |
-| `/sync`                  | ask the radio to re-dump its NodeDB (WantConfigId)              |
-| `/nick <longname>`       | set the radio's `User.long_name` (aliases: `/callsign`)         |
-| `/tag <emoji-or-text>`   | set the radio's `User.short_name` (aliases: `/emoji`)           |
-| `/clear`                 | clear local scrollback (does not unsend)                        |
-| `/help`                  | open the help overlay                                           |
-| `/exit` / `/quit` / `/q` | exit the app                                                    |
+| Command                  | Meaning                                                                 |
+| ------------------------ | ----------------------------------------------------------------------- |
+| `/channels`              | open channels overlay                                                   |
+| `/nodes`                 | open nodes overlay (BitchX-style bracketed grid)                        |
+| `/nearby`                | distance-sorted roster of peers with a GPS fix (closest first)          |
+| `/radar`                 | polar scope — peers plotted by bearing + distance around you            |
+| `/join <channel>`        | switch to named channel                                                 |
+| `/channel list`          | same as `/channels`                                                     |
+| `/channel new <name>`    | mint a fresh secondary with random AES256 PSK (RAM-only)                |
+| `/channel add <url>`     | import a meshtastic://e/#... or https://meshtastic.org/e/#... share URL |
+| `/channel share <name>`  | render an ASCII QR of the channel's share URL for in-person scanning    |
+| `/channel del <name>`    | disable a slot (PRIMARY refused — use /config to rename)                |
+| `/search <pattern>`      | run a search and jump to first hit (aliases: `/find`)                   |
+| `/config`                | show radio + identity configuration                                     |
+| `/info`                  | dump meshX state — own id, peer counts, unresolved placeholders         |
+| `/sync`                  | ask the radio to re-dump its NodeDB (WantConfigId)                      |
+| `/nick <longname>`       | set the radio's `User.long_name` (aliases: `/callsign`)                 |
+| `/tag <emoji-or-text>`   | set the radio's `User.short_name` (aliases: `/emoji`)                   |
+| `/clear`                 | clear local scrollback (does not unsend)                                |
+| `/help`                  | open the help overlay                                                   |
+| `/exit` / `/quit` / `/q` | exit the app                                                            |
 
 ## Notes on channels
 
-Channels are configured on the **radio** (name + PSK pair), not in meshX. Create
-channels via the official Meshtastic app / CLI; meshX imports them once the
-radio is configured. Planned:
+Channels are stored on the **radio's flash** (name + PSK pair). meshX is a
+controller — it can mint, import, share, and delete channels via the same
+`AdminMessage_SetChannel` path the official Meshtastic phone apps and Python CLI
+use, but the canonical store is always the radio. The PSK never lives on disk;
+it sits in RAM during a session and is re-fetched from the radio's NodeDB on
+every reconnect.
 
-- `/channel add <meshtastic://url>` — import a channel shared by URL
-- `/channel share <name>` — emit a QR for another client to import
+The full lifecycle:
+
+- `/channel new <name>` — generate 32 random bytes via `crypto/rand`, allocate
+  the first free secondary slot, push via `AdminMessage_SetChannel`. Surfaces a
+  SHA-256 fingerprint (first 8 hex of `sha256(psk)`) you can read aloud to
+  verify key parity with the recipient — same convention SSH uses for host key
+  fingerprints. Name capped at 11 bytes per the proto field.
+- `/channel share <name>` — round-trip the channel back into a `meshtastic://`
+  URL (base64-url protobuf — no network call; the URL fragment after `#` stays
+  client-side per HTTP spec) and render it as an ASCII QR for in-person
+  scanning. Uses the half-block trick (`▀` per cell carries two QR rows) so the
+  rendered code stays roughly square in a terminal where cells are taller than
+  wide. Phones scan it directly.
+- `/channel add <url>` — accept either a `meshtastic://e/#...` deep link or an
+  `https://meshtastic.org/e/#...` universal link, decode the embedded
+  `ChannelSet`, push each contained channel into the first free secondary slot.
+  Additive only — never overwrites an existing channel by name. Slot 0 (PRIMARY)
+  is off-limits so a malformed URL can't nuke your primary.
+- `/channel del <name>` — disable the slot via `SetChannel(role=DISABLED, nil)`;
+  the radio frees the slot and wipes the PSK. PRIMARY (slot 0) is refused
+  because the firmware requires one to operate. Aliases: `/channel delete`,
+  `/channel rm`.
+
+The radio supports 8 channel slots: 1 PRIMARY (slot 0) + 7 SECONDARY (slots
+1–7). `/channel new` and `/channel add` allocate into the first free SECONDARY;
+if all 7 are taken, you'll need to `/channel del` something first.
+
+### Sharing a secret channel safely
+
+The PSK _is_ the secret. Whoever has it can read everything past, present, and
+future on that channel — there's no forward secrecy and no per-recipient key.
+"Sharing securely" means getting the PSK to your friend without anyone else
+seeing it. Ranked by safety:
+
+1. **In-person QR scan (best).** `/channel share` renders the URL as a QR; your
+   friend points their phone camera at your terminal. The bytes go terminal →
+   photons → camera with no network in the loop.
+2. **E2E-encrypted messenger to one trusted recipient.** Send the QR image or
+   URL via Signal / iMessage to one specific person. The PSK now exists in their
+   messenger client's storage; if their phone is compromised later, the PSK
+   leaks.
+3. **Anything else (group chat, email, posted on Discord) — DON'T.** The PSK is
+   plain bytes inside the URL. Whoever sees the URL joins the channel.
+
+`meshX` itself never stores PSKs on disk. If you wipe `~/.meshx/`, you lose chat
+scrollback but not your channels — they're on the radio. If the radio dies, your
+channels are gone with it (no cloud backup; that's by design).
 
 ## Notes on reports
 

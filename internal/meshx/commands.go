@@ -34,6 +34,8 @@
 package meshx
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	mathrand "math/rand"
 	"strings"
@@ -318,6 +320,427 @@ func newAdminSetBuzzer(
 			}},
 		}},
 	}, nil
+}
+
+// meshtasticChannelSlots is the firmware's hard cap on simultaneous
+// channels. Slot 0 is always PRIMARY; 1..7 are SECONDARY. /channel
+// new + add allocate into the first DISABLED slot >= 1; PRIMARY is
+// off-limits because the radio refuses to operate without one.
+const meshtasticChannelSlots = 8
+
+// newAdminSetChannel builds an AdminMessage.SetChannel ToRadio
+// envelope for a single channel slot. Same wire path as setOwner /
+// newAdminSetBuzzer — admin packet addressed to our own node, the
+// radio applies it locally and rebroadcasts NodeInfo so peers see the
+// new channel name. role is one of pb.Channel_PRIMARY (slot 0 only),
+// pb.Channel_SECONDARY (1..7), or pb.Channel_DISABLED (delete).
+//
+// settings can be nil for the disable case — the radio frees the slot
+// and wipes the PSK either way. For add / new, settings carries the
+// PSK + name + uplink/downlink flags.
+func newAdminSetChannel(
+	myNodeNum uint32,
+	index int32,
+	role pb.Channel_Role,
+	settings *pb.ChannelSettings,
+) (*pb.ToRadio, error) {
+	admin := &pb.AdminMessage{
+		PayloadVariant: &pb.AdminMessage_SetChannel{
+			SetChannel: &pb.Channel{
+				Index:    index,
+				Settings: settings,
+				Role:     role,
+			},
+		},
+	}
+	payload, err := proto.Marshal(admin)
+	if err != nil {
+		return nil, fmt.Errorf("marshal AdminMessage: %w", err)
+	}
+	return &pb.ToRadio{
+		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
+			To:      myNodeNum,
+			WantAck: true,
+			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{
+				Portnum: pb.PortNum_ADMIN_APP,
+				Payload: payload,
+			}},
+		}},
+	}, nil
+}
+
+// findFreeChannelSlot returns the first slot index >= 1 that is
+// DISABLED (or beyond the radio's reported set), suitable for /channel
+// new + /channel add to allocate into. Returns -1 if all 7 secondary
+// slots are taken — caller should flash "no free slots, /channel del
+// something first."
+//
+// Slot 0 is intentionally skipped — that's PRIMARY's home and the
+// firmware refuses to operate without one. Adding via slot 0 would
+// silently nuke the user's primary channel; refuse and let them
+// /channel del + /channel new explicitly if they really want to
+// replace the primary.
+func (m *model) findFreeChannelSlot() int {
+	for i := 1; i < meshtasticChannelSlots; i++ {
+		if i >= len(m.channels) {
+			return i
+		}
+		if m.channels[i].role == "DISABLED" || m.channels[i].role == "" {
+			return i
+		}
+	}
+	return -1
+}
+
+// findChannelByName looks up a channel slot by user-typed name. The
+// renderer prefixes names with "#" / "*…*" for display; we accept the
+// bare name, the prefixed form, or a leading "#" — whatever the user
+// types should resolve. Case-sensitive because PSK lookup ultimately
+// matches on bytes. Returns -1 if not found or DISABLED.
+func (m *model) findChannelByName(typed string) int {
+	want := strings.TrimSpace(typed)
+	want = strings.TrimPrefix(want, "#")
+	want = strings.Trim(want, "*")
+	for i, c := range m.channels {
+		if c.role == "DISABLED" {
+			continue
+		}
+		bare := strings.TrimPrefix(c.name, "#")
+		bare = strings.Trim(bare, "*")
+		if bare == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// channelShare round-trips a local channel back into a meshtastic://
+// URL and renders it as an ASCII QR for in-person scanning. The PSK
+// in m.channels[idx].psk was sourced from the radio's NodeDB dump
+// (see applyChannel) — never read from disk, never reads from disk.
+//
+// The QR is the safest hand-off path: the bytes go terminal →
+// photons → recipient's camera with no network in the loop. Anything
+// else (DM, screenshot pasted in chat) means the PSK exists on
+// another system you don't control. We surface a "verify the person
+// scanning this can see the screen and only that person" reminder so
+// users don't routinely paste the URL into group chats.
+func (m *model) channelShare(typed string) tea.Cmd {
+	idx := m.findChannelByName(typed)
+	if idx < 0 {
+		m.flash = fmt.Sprintf("/channel share: no channel matching %q", typed)
+		return nil
+	}
+	c := m.channels[idx]
+	if c.role == "PRIMARY" && len(c.psk) == 0 {
+		// Sharing the default LongFast channel as a meshtastic:// URL
+		// is technically valid but useless — every Meshtastic radio is
+		// on it by default. Refuse rather than emit a QR no one needs
+		// to scan.
+		m.flash = "/channel share: the default channel is on every radio — nothing to share"
+		return nil
+	}
+	// Reconstruct ChannelSettings from what we have. Name comes off
+	// the displayed string with the renderer's #/* prefix peeled; PSK
+	// is the live RAM copy.
+	bare := strings.TrimPrefix(c.name, "#")
+	bare = strings.Trim(bare, "*")
+	settings := &pb.ChannelSettings{
+		Name: bare,
+		Psk:  c.psk,
+	}
+	url, err := buildChannelShareURL(settings, nil)
+	if err != nil {
+		m.flash = fmt.Sprintf("/channel share failed: %v", err)
+		return nil
+	}
+	qr, err := renderQRASCII(url)
+	if err != nil {
+		m.flash = fmt.Sprintf("/channel share: qr render failed: %v", err)
+		return nil
+	}
+	header := fmt.Sprintf("/channel share — %s", c.name)
+	qrLines := strings.Split(qr, "\n")
+	lines := make([]string, 0, len(qrLines)+4)
+	lines = append(lines,
+		"scan with the Meshtastic app to join (in-person only — the PSK is in this QR)",
+		"",
+	)
+	lines = append(lines, qrLines...)
+	lines = append(lines, "", "url: "+url)
+	m.systemBlock(header, lines...)
+	m.flash = fmt.Sprintf("share QR for %s — visible in log", c.name)
+	return nil
+}
+
+// channelNew creates a fresh secondary channel with a randomly
+// generated 32-byte AES256 PSK and pushes it to the first free slot.
+// The PSK never lands on disk — meshX has no channels table; the
+// bytes round-trip through pump → channelItem.psk where they wait in
+// RAM for /channel share to wrap them in a meshtastic:// URL.
+//
+// Name is enforced ≤ 11 bytes per the proto comment ("Less than 12
+// bytes") — Meshtastic packs the name into the URL and short names
+// keep the QR small and the channel selector readable.
+//
+// We print a SHA-256 fingerprint (first 8 hex of the PSK hash) so the
+// user can verbally confirm key parity with whoever they share it
+// with — "my fingerprint is a3f2c9b1, what's yours?" — without
+// reading the raw PSK bytes aloud. Same convention SSH uses for host
+// key fingerprints.
+func (m *model) channelNew(name string) tea.Cmd {
+	if m.isDemo() {
+		m.flash = "/channel new takes effect on a real radio (demo mode)"
+		return nil
+	}
+	if m.pump == nil {
+		m.flash = "/channel new needs a live radio connection"
+		return nil
+	}
+	name = strings.TrimSpace(name)
+	name = strings.TrimPrefix(name, "#")
+	if name == "" {
+		m.flash = "usage: /channel new <name>"
+		return nil
+	}
+	if len(name) > 11 {
+		m.flash = fmt.Sprintf(
+			"/channel new rejected: name %d bytes, max 11 (Meshtastic field cap)", len(name),
+		)
+		return nil
+	}
+	if m.findChannelByName(name) >= 0 {
+		m.flash = fmt.Sprintf("/channel new: %q already exists — /channel del first", name)
+		return nil
+	}
+	slot := m.findFreeChannelSlot()
+	if slot < 0 {
+		m.flash = fmt.Sprintf(
+			"/channel new: no free slots (max %d, /channel del to free one)",
+			meshtasticChannelSlots-1,
+		)
+		return nil
+	}
+	psk := make([]byte, 32)
+	if _, err := rand.Read(psk); err != nil {
+		m.flash = fmt.Sprintf("/channel new: rand.Read failed: %v", err)
+		return nil
+	}
+	settings := &pb.ChannelSettings{
+		Name: name,
+		Psk:  psk,
+		// Id randomized so the channel hash collides minimally with
+		// other meshes using the same name. Per the proto's note: any
+		// 64-bit-random uint32 is fine for collision avoidance among
+		// the small number of meshtastic users.
+		Id: randUint32(),
+	}
+	envelope, err := newAdminSetChannel(
+		m.myNodeNum, int32(slot), pb.Channel_SECONDARY, settings,
+	)
+	if err != nil {
+		m.flash = fmt.Sprintf("/channel new failed: %v", err)
+		return nil
+	}
+	if !m.pump.Enqueue(envelope) {
+		m.flash = "/channel new dropped — outbound buffer full"
+		return nil
+	}
+	// Optimistically populate so a second /channel new doesn't race
+	// the radio's ChannelInfo broadcast and pick the same slot.
+	display := "*" + name + "*"
+	m.channels[slot] = channelItem{
+		name:    display,
+		private: true,
+		index:   slot,
+		role:    "SECONDARY",
+		psk:     psk,
+	}
+	fp := pskFingerprint(psk)
+	m.systemBlock(
+		fmt.Sprintf("/channel new — %s created at slot %d", display, slot),
+		"psk:         32 random bytes (AES256), RAM-only — never written to disk",
+		fmt.Sprintf("fingerprint: %s   ← read aloud to verify parity with the recipient", fp),
+		fmt.Sprintf("share:       /channel share %s", name),
+	)
+	m.flash = fmt.Sprintf("created %s (fp %s)", display, fp)
+	return nil
+}
+
+// pskFingerprint returns the first 8 hex chars of SHA-256(psk) — a
+// short, human-readable identifier the user can read aloud to confirm
+// key parity with a recipient ("my fingerprint is a3f2c9b1, what's
+// yours?"). Same convention SSH uses for host key fingerprints. The
+// PSK itself is never displayed — only the hash.
+func pskFingerprint(psk []byte) string {
+	sum := sha256.Sum256(psk)
+	return fmt.Sprintf("%x", sum[:4])
+}
+
+// randUint32 returns a crypto/rand uint32 for ChannelSettings.Id.
+// Panics on rand failure because that's a fatal entropy-source
+// problem, not something to swallow with a flash.
+func randUint32() uint32 {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(fmt.Errorf("crypto/rand exhausted: %w", err))
+	}
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+// channelDel disables a channel slot via AdminMessage_SetChannel
+// with role=DISABLED and nil settings — the radio frees the slot and
+// wipes the PSK. Refuses to delete the PRIMARY (slot 0) because the
+// firmware requires one to operate; the user can /channel rename or
+// /config the primary instead.
+//
+// No confirmation prompt — the cost of an accidental /channel del is
+// just /channel add the URL again (if you have it), and forcing y/n
+// on every channel-management command would feel patronizing for what
+// is fundamentally a local-state edit. If we ever ship /channel
+// backup, we can add a "deleted N channels" undo window.
+func (m *model) channelDel(typed string) tea.Cmd {
+	if m.isDemo() {
+		m.flash = "/channel del takes effect on a real radio (demo mode)"
+		return nil
+	}
+	if m.pump == nil {
+		m.flash = "/channel del needs a live radio connection"
+		return nil
+	}
+	idx := m.findChannelByName(typed)
+	if idx < 0 {
+		m.flash = fmt.Sprintf("/channel del: no channel matching %q", typed)
+		return nil
+	}
+	if m.channels[idx].role == "PRIMARY" {
+		m.flash = "/channel del: cannot delete the primary channel — use /config to rename"
+		return nil
+	}
+	envelope, err := newAdminSetChannel(
+		m.myNodeNum, int32(idx), pb.Channel_DISABLED, nil,
+	)
+	if err != nil {
+		m.flash = fmt.Sprintf("/channel del failed: %v", err)
+		return nil
+	}
+	if !m.pump.Enqueue(envelope) {
+		m.flash = "/channel del dropped — outbound buffer full"
+		return nil
+	}
+	deletedName := m.channels[idx].name
+	// Optimistically clear the slot — the radio's ChannelInfo
+	// rebroadcast will reconfirm, but the UI shouldn't keep showing a
+	// channel the user just deleted while waiting for that round trip.
+	m.channels[idx] = channelItem{
+		index: idx,
+		role:  "DISABLED",
+	}
+	if m.currentChannel == deletedName {
+		// User deleted the channel they were on. Snap back to the
+		// primary so the input bar has a valid target.
+		for _, c := range m.channels {
+			if c.role == "PRIMARY" {
+				m.currentChannel = c.name
+				break
+			}
+		}
+	}
+	m.systemLine(fmt.Sprintf("channel %s deleted (slot %d freed)", deletedName, idx))
+	m.flash = fmt.Sprintf("deleted %s", deletedName)
+	return nil
+}
+
+// channelAdd accepts a meshtastic://e/#... or
+// https://meshtastic.org/e/#... URL, decodes the embedded ChannelSet,
+// and pushes each channel into the first free secondary slot via
+// AdminMessage_SetChannel. Skips channels whose name already exists
+// on the radio (additive only — never overwrites). Refuses to push
+// into slot 0 (PRIMARY) so a malformed share link can't nuke the
+// user's primary channel.
+func (m *model) channelAdd(rawURL string) tea.Cmd {
+	if m.isDemo() {
+		m.flash = "/channel add takes effect on a real radio (demo mode)"
+		return nil
+	}
+	if m.pump == nil {
+		m.flash = "/channel add needs a live radio connection"
+		return nil
+	}
+	cs, err := parseChannelShareURL(rawURL)
+	if err != nil {
+		m.flash = "/channel add: " + err.Error()
+		return nil
+	}
+	added, skipped := 0, 0
+	var summary []string
+	for _, s := range cs.GetSettings() {
+		name := s.GetName()
+		if name == "" {
+			// Empty-name in a share URL means "default channel" —
+			// almost certainly a mistake (sharing the well-known
+			// LongFast channel that everyone is already on). Skip
+			// rather than silently overwrite slot 0 / dupe LongFast.
+			summary = append(summary, "skip: <empty name> (would clobber default)")
+			skipped++
+			continue
+		}
+		if m.findChannelByName(name) >= 0 {
+			summary = append(summary, fmt.Sprintf("skip: %q already on radio", name))
+			skipped++
+			continue
+		}
+		slot := m.findFreeChannelSlot()
+		if slot < 0 {
+			summary = append(summary,
+				fmt.Sprintf("skip: %q — no free slots (max %d, /channel del to free one)",
+					name, meshtasticChannelSlots-1))
+			skipped++
+			continue
+		}
+		envelope, err := newAdminSetChannel(
+			m.myNodeNum, int32(slot), pb.Channel_SECONDARY, s,
+		)
+		if err != nil {
+			summary = append(summary, fmt.Sprintf("fail: %q — %v", name, err))
+			skipped++
+			continue
+		}
+		if !m.pump.Enqueue(envelope) {
+			summary = append(summary, fmt.Sprintf("fail: %q — outbound buffer full", name))
+			skipped++
+			continue
+		}
+		// Optimistically populate the slot so a follow-up /channel new
+		// finds the next free slot rather than re-using this one. The
+		// radio's ChannelInfo broadcast will overwrite this row with
+		// the canonical state shortly.
+		display := "#" + name
+		if len(s.GetPsk()) > 0 {
+			display = "*" + name + "*"
+		}
+		m.channels[slot] = channelItem{
+			name:    display,
+			private: len(s.GetPsk()) > 0,
+			index:   slot,
+			role:    "SECONDARY",
+			psk:     s.GetPsk(),
+		}
+		summary = append(summary, fmt.Sprintf("add:  %s → slot %d", display, slot))
+		added++
+	}
+	if added == 0 && skipped == 0 {
+		m.flash = "/channel add: nothing to do"
+		return nil
+	}
+	header := fmt.Sprintf("/channel add — %d added, %d skipped", added, skipped)
+	m.systemBlock(header, summary...)
+	if added > 0 {
+		m.flash = fmt.Sprintf("added %d channel%s", added, plural(added))
+	} else {
+		m.flash = "no channels added — see log"
+	}
+	return nil
 }
 
 // newAdminReboot builds an AdminMessage.RebootSeconds envelope. The
@@ -1418,7 +1841,46 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.openOverlay(overlayChannels)
 			return nil
 		}
-		m.flash = "usage: /channel list  |  /channel add <meshtastic://url>"
+		// /channel add <url>
+		// Accept either a meshtastic://e/#... deep link or an
+		// https://meshtastic.org/e/#... universal link. The fragment
+		// after `#` is a base64-url ChannelSet protobuf — see
+		// channel_url.go for the codec. PSK never touches the network;
+		// the URL is a portable PSK envelope, not a server call.
+		sub := rest
+		arg := ""
+		if i := strings.IndexByte(rest, ' '); i >= 0 {
+			sub = rest[:i]
+			arg = strings.TrimSpace(rest[i+1:])
+		}
+		switch sub {
+		case "add":
+			if arg == "" {
+				m.flash = "usage: /channel add <meshtastic://url>"
+				return nil
+			}
+			return m.channelAdd(arg)
+		case "del", "delete", "rm":
+			if arg == "" {
+				m.flash = "usage: /channel del <name>"
+				return nil
+			}
+			return m.channelDel(arg)
+		case "new":
+			if arg == "" {
+				m.flash = "usage: /channel new <name>"
+				return nil
+			}
+			return m.channelNew(arg)
+		case "share":
+			if arg == "" {
+				m.flash = "usage: /channel share <name>"
+				return nil
+			}
+			return m.channelShare(arg)
+		default:
+			m.flash = "usage: /channel list | add <url> | new <name> | share <name> | del <name>"
+		}
 	case "nick":
 		// /nick (no args) — read-only display of the current
 		// longname. /nick <name> — immediate write of User.long_name
@@ -1465,6 +1927,43 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		)
 		m.flash = "/dingtest: BEL queued"
 		return ringTerminalBellCmd()
+	case "qrtest":
+		// Hidden diagnostic — same renderer /channel share uses, so
+		// you can iterate on QR layout (quiet zone, half-block math,
+		// scanability under your terminal's font / cell aspect)
+		// without minting real channels. With no arg, encodes a plain
+		// text string that scans to inert text in any QR app — phones
+		// see the text and do NOT offer to add a channel. With an
+		// arg, encodes that string verbatim so you can smoke-test
+		// arbitrary payloads (real meshtastic:// URLs, longer text).
+		// Like /dingtest, intentionally NOT in /help — debug surface
+		// only.
+		payload := rest
+		if payload == "" {
+			// Plain text on purpose — NOT a meshtastic://e/#... URL.
+			// The phone scanner will display this text and do
+			// nothing else; we don't want a render-check command to
+			// trick the recipient's Meshtastic app into prompting
+			// "add channel qrtest?" with a fake PSK. To smoke-test
+			// the full share path, run /qrtest <a real URL> instead.
+			payload = "meshx /qrtest — render check, scans to plain text only"
+		}
+		qr, err := renderQRASCII(payload)
+		if err != nil {
+			m.flash = fmt.Sprintf("/qrtest: render failed: %v", err)
+			return nil
+		}
+		qrLines := strings.Split(qr, "\n")
+		lines := make([]string, 0, len(qrLines)+4)
+		lines = append(lines,
+			fmt.Sprintf("payload: %s", payload),
+			fmt.Sprintf("size:    %d bytes", len(payload)),
+			"note:    scans to plain text — does NOT add a channel",
+			"",
+		)
+		lines = append(lines, qrLines...)
+		m.systemBlock("/qrtest", lines...)
+		m.flash = "/qrtest: QR rendered — visible in log"
 	case "mute":
 		// Toggle the meshX terminal ding (BEL on inbound text).
 		// Persists to settings.ding_muted so the pref survives

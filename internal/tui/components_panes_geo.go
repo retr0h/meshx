@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package meshx
+package tui
 
 // components_panes_geo.go — the /nearby and /radar pane Components,
 // plus the peerPlot data prep both consume.

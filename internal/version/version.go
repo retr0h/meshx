@@ -18,14 +18,15 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package meshx
-
-// version.go — single source of build identity for both the `meshx
-// version` cobra command and the in-app /version slash command.
-// Lives in the internal/meshx package so the slash dispatcher can
-// read it without importing cmd (which would form a cycle: cmd
-// already imports internal/meshx). cmd/version.go is now a thin
-// cobra wrapper that just JSON-prints whatever BuildInfo() returns.
+// Package version is the single source of build identity for both
+// the `meshx version` cobra command and the in-app /version slash
+// command. Lives in its own package so both cmd/ (the cobra wrapper)
+// and internal/tui (the slash dispatcher) can import it without
+// forming a cycle through internal/meshx. goreleaser stamps the
+// ldflag targets at link time; `go run` / `go build` of a working
+// tree leaves them empty (caarlos0/go-version backfills devel
+// defaults from debug.ReadBuildInfo).
+package version
 
 import (
 	goversion "github.com/caarlos0/go-version"

@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package meshx
+package tui
 
 // helpEntry is one row in the per-command help table. usage is a
 // single-line invocation spec (same shape as the flash-bar hints

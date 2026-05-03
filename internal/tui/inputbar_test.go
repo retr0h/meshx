@@ -1,4 +1,4 @@
-package meshx
+package tui
 
 import (
 	"strings"

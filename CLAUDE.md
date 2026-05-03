@@ -50,11 +50,13 @@ meshx/
 │   ├── tcp.go                    # `meshx tcp connect`
 │   ├── ble.go                    # `meshx ble {scan,pair,list,forget,connect,disconnect,fav}`
 │   └── ble_probe.go              # `meshx ble probe` — diagnostic packet dump
-├── internal/meshx/               # all implementation
-│   ├── app.go                    # Bubble Tea model + View() + Update wiring
+├── internal/meshx/               # public-API shell — BLE CLI helpers + RunBLE / AutoConnectTarget
+│   └── ble.go                    # BLEScan / BLEPair / BLEListDevices / BLEForget / BLEMarkFavorite / BLESetFavorite / RunBLE / AutoConnectTarget (declares its own narrow bleStore consumer interface)
+├── internal/tui/                 # Bubble Tea rendering surface (and, today, the radio driver)
+│   ├── app.go                    # model + View() + Update wiring + RunDemo / RunRadio
 │   ├── ui.go                     # View dispatcher, model getters, generic utils
-│   ├── pump.go                   # consumer interface (Pump) — twin of store.go (osapi-io)
-│   ├── store.go                  # consumer interface (Store) for the storage package
+│   ├── pump.go                   # consumer interface (Pump) — moves to the Driver pkg in MR-3.5b
+│   ├── store.go                  # consumer interface (Store) — moves to the Driver pkg in MR-3.5b
 │   ├── commands.go               # /command dispatcher + ham bangs
 │   ├── input.go                  # key bindings, nav mode, tab completion entry
 │   ├── components_box.go         # Box, Component, Cell/Row, Text, Spacer, RawBlock, Viewport, Centered
@@ -71,12 +73,15 @@ meshx/
 │   ├── notices.go                # TTL + pin + fade for `-!-` rows
 │   ├── complete.go               # Tab completion — /cmd, #chan, nicks
 │   ├── palette.go                # maxheadroom color constants
-│   ├── ble_cli.go                # `meshx ble` CLI helpers (scan, list, fav, …)
 │   ├── node.go                   # nodeItem + state derivation
-│   ├── radio.go                  # apply* handlers (mdl.Text, mdl.NodeInfo, mdl.Routing, …)
+│   ├── radio.go                  # apply* handlers (mdl.Text, mdl.NodeInfo, mdl.Routing, …) — moves to Driver pkg in MR-3.5b
 │   ├── geo.go                    # haversineKm / bearingDeg / compassAbbr math
 │   ├── help.go                   # /help entry data
-│   ├── fixture.go                # Demo struct + DefaultDemo()
+│   ├── qr.go                     # ASCII QR rendering for /channel share
+│   └── fixture.go                # Demo struct + DefaultDemo()
+├── internal/version/             # build identity (Version / Commit / Date / BuiltBy + BuildInfo)
+│   └── version.go                # consumed by cmd/version.go and tui /version slash command
+├── internal/meshx/               # (sub-packages — see model/, pump/, session/, storage/, transport/)
 │   ├── model/                    # canonical wire/persisted shapes — the lingua franca
 │   │   ├── message.go            # Message + MessageStatus enum
 │   │   ├── node.go               # CachedNode (NodeDB cache row)

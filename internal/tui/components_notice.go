@@ -13,7 +13,7 @@
 // without pin corners line up vertically; non-pinned rows just emit
 // a bg-styled space there.
 
-package meshx
+package tui
 
 import (
 	"strings"

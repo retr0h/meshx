@@ -21,7 +21,7 @@
 package cmd
 
 import (
-	"github.com/retr0h/meshx/internal/meshx"
+	"github.com/retr0h/meshx/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -46,7 +46,7 @@ var tcpConnectCmd = &cobra.Command{
   meshx tcp connect 192.168.1.42:4403         # explicit port`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
-		return meshx.RunRadio(args[0])
+		return tui.RunRadio(args[0])
 	},
 }
 

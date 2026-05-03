@@ -18,6 +18,14 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+// Package meshx is the public-API shell of the meshx CLI — the BLE
+// CLI helpers (BLEScan / BLEPair / BLEListDevices / BLEForget /
+// BLEMarkFavorite / BLESetFavorite / RunBLE / AutoConnectTarget) the
+// cobra cmd/ tree depends on. The Bubble Tea TUI lives in
+// internal/tui; the canonical persisted shapes in internal/meshx/model;
+// the transport/pump/storage/session sub-packages own their own
+// concerns. Keep this package narrow: only entry points and CLI-side
+// glue, no rendering, no apply* logic.
 package meshx
 
 import (
@@ -33,6 +41,7 @@ import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/storage"
 	"github.com/retr0h/meshx/internal/meshx/transport"
+	"github.com/retr0h/meshx/internal/tui"
 	"tinygo.org/x/bluetooth"
 )
 
@@ -54,11 +63,27 @@ type BLEDeviceView struct {
 	Favorite  bool
 }
 
+// bleStore is the narrow storage surface the BLE CLI helpers use —
+// just the BLE-pairing CRUD plus Close. Declared at the consumer
+// seam (osapi-io pattern); the concrete *storage.Sqlite returned by
+// storage.New satisfies it structurally. Twins of tui.Store and
+// tui.Pump: each consumer narrows the producer's surface to only
+// the methods it actually calls.
+type bleStore interface {
+	LoadBLEDevices() ([]mdl.BLEDevice, error)
+	LookupBLEDevice(needle string) (*mdl.BLEDevice, error)
+	SaveBLEDevice(d mdl.BLEDevice) error
+	SetBLEFavorite(uuid string) error
+	ForgetBLEDevice(uuid string) error
+	Close() error
+}
+
 // openSharedStorage opens the same sqlite the live-radio TUI uses,
 // running migrations if needed. Returns the result cast to the
-// consumer-facing Store interface so CLI helpers see only the methods
-// they need. Callers are responsible for closing the store when done.
-func openSharedStorage() (Store, error) {
+// consumer-facing bleStore interface so CLI helpers see only the
+// methods they need. Callers are responsible for closing the store
+// when done.
+func openSharedStorage() (bleStore, error) {
 	path, err := storage.DefaultPath()
 	if err != nil {
 		return nil, fmt.Errorf("storage path: %w", err)
@@ -67,7 +92,7 @@ func openSharedStorage() (Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open storage: %w", err)
 	}
-	var store Store = sqliteStore
+	var store bleStore = sqliteStore
 	return store, nil
 }
 
@@ -349,7 +374,7 @@ func RunBLE(target string) error {
 			target,
 		)
 	}
-	return RunRadio("ble:" + d.UUID)
+	return tui.RunRadio("ble:" + d.UUID)
 }
 
 // AutoConnectTarget resolves the bare-`meshx` fallback chain:

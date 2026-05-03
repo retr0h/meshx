@@ -21,7 +21,7 @@
 package cmd
 
 import (
-	"github.com/retr0h/meshx/internal/meshx"
+	"github.com/retr0h/meshx/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -38,7 +38,7 @@ fixture. Every feature renders exactly as it does in live mode; use
 this to kick the tires on the UI without a radio, or to capture
 screenshots for docs.`,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		return meshx.RunDemo()
+		return tui.RunDemo()
 	},
 }
 

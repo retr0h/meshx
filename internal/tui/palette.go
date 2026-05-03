@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package meshx
+package tui
 
 // maxheadroom palette (80s neon) — matches ~/git/dotfiles nvim theme
 // and the sibling retr0h projects (grind, tlock). Reused across every

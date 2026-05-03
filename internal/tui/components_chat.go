@@ -19,7 +19,7 @@
 // into their own Row{Cells:...} decomposition is straightforward
 // follow-up work; this file lays the pattern.
 
-package meshx
+package tui
 
 import (
 	"fmt"

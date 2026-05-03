@@ -18,17 +18,20 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// Package meshx rendering surface.
+// Package tui is the meshx Bubble Tea rendering surface — the model,
+// Update, View, every pane Component, key bindings, /command
+// dispatcher, and the input bar. Today's TUI also drives the radio
+// (consumes pump events, writes to storage) — that responsibility
+// will move out into a session.Driver layer in a follow-up MR so the
+// TUI shrinks to "render Session + emit commands" and shares the
+// driver with the meshx serve daemon.
 //
-// ui.go holds everything View-side: the top-level View() dispatcher,
-// every pane renderer (messages / channels / nodes), the status-bar
-// family (top status, channel status, input row, top divider), the
-// help overlay, plus the small styling primitives (paneStyle,
-// paneHeader, nickColor, zebraBg, wrapSelection, padOrTruncate) that
-// the renderers share. No state mutation lives here — all mutation
-// happens in app.go (model + Update + message handlers), input.go
-// (nav / mode transitions), or commands.go (slash dispatch).
-package meshx
+// ui.go itself holds the top-level View() dispatcher, the small
+// styling primitives the pane renderers share (paneStyle, paneHeader,
+// nickColor, zebraBg, wrapSelection, padOrTruncate), and assorted
+// model getters. No state mutation lives here — that's app.go +
+// input.go + commands.go + radio.go.
+package tui
 
 import (
 	"fmt"

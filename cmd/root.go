@@ -22,21 +22,14 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/retr0h/meshx/internal/meshx/transport"
-	"github.com/retr0h/meshx/internal/server"
-	"github.com/retr0h/meshx/internal/tui"
 )
 
-// banner is the ASCII-art header printed above the long help text.
-// Block style matches the BitchX-style splash variants in
+// banner is the ASCII-art header printed before cobra's auto-generated
+// help text. Block style matches the BitchX-style splash variants in
 // internal/tui/components_splash.go so the CLI visual identity is
 // consistent with the TUI launch banner.
 const banner = `
@@ -48,61 +41,28 @@ const banner = `
 var rootCmd = &cobra.Command{
 	Use:   "meshx",
 	Short: "Glitched-out terminal Meshtastic messenger",
-	Long: banner + `
-meshx is an irssi-style terminal Meshtastic messenger — an
+	Long: `meshx is an irssi-style terminal Meshtastic messenger — an
 irssi/BitchX/mutt-inspired chat client for your LoRa radio with a
 vintage BBS aesthetic.
 
-Usage patterns:
+Pick a transport explicitly:
 
-  meshx                          # auto-connect: USB if plugged in,
-                                 # else saved Bluetooth favorite
-  meshx usb connect [dev]        # open TUI over USB serial
-  meshx ble connect <uuid|name>  # open TUI over Bluetooth (paired device)
-  meshx serve start              # run the headless HTTP+SSE daemon
-
-Transport-specific commands:
-
-  meshx usb probe                # list USB candidates
-  meshx ble scan                 # scan for nearby Bluetooth radios
-  meshx ble pair <uuid>          # save a device for future connects
-  meshx ble list                 # show saved Bluetooth devices
-  meshx ble fav  <uuid|name>     # auto-connect target for bare meshx
-  meshx ble forget <uuid|name>
-  meshx ble disconnect           # clear the auto-connect favorite`,
+  meshx usb connect [dev]        # open the TUI over USB serial
+  meshx ble connect <uuid|name>  # open the TUI over Bluetooth (paired)
+  meshx serve start              # run the headless HTTP+SSE daemon`,
 	RunE: func(c *cobra.Command, _ []string) error {
-		// USB auto-detect first so a plugged-in radio always wins —
-		// short timeout keeps bare `meshx` snappy when nothing's
-		// connected.
-		if dev, err := transport.AutoDetectMeshtastic(1500 * time.Millisecond); err == nil {
-			return tui.RunRadio(dev)
-		}
-
-		// BLE fallback through the in-process server — same code path
-		// the daemon's /transports endpoints would follow.
-		srv := localServer(c)
-		target, _, err := srv.ResolveBLEAutoConnect()
-		if err != nil {
-			if errors.Is(err, server.ErrNoTransport) {
-				return fmt.Errorf(
-					"%s\n  → `meshx usb probe` to list USB candidates\n  → `meshx ble scan` to discover nearby radios",
-					err,
-				)
-			}
-			return err
-		}
-		uuid, ok := strings.CutPrefix(target, "ble:")
-		if !ok {
-			return fmt.Errorf("unexpected target shape: %q", target)
-		}
-		return tui.RunRadio("ble:" + uuid)
+		_, _ = fmt.Fprint(c.OutOrStdout(), banner)
+		return c.Help()
 	},
 }
 
-// Execute runs the root command; invoked by main.
+// Execute runs the root command; invoked by main. SilenceUsage
+// drops the help-text dump on runtime failures (auto-connect with
+// no radios, bind:port in use, …) where it's just noise. Cobra
+// already prints "Error: <err>" on its own.
 func Execute() {
+	rootCmd.SilenceUsage = true
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

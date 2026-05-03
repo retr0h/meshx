@@ -190,14 +190,14 @@ func (m model) nickUniverse(word string) []matchItem {
 	// owners triggers the shortname / hex-id disambiguator below so
 	// the tab cycle renders "💀 retr0h / ☠ retr0h" instead of three
 	// indistinguishable "retr0h" entries.
-	callsignCount := make(map[string]int, len(m.nodes))
-	for _, n := range m.nodes {
-		callsignCount[n.callsign]++
+	callsignCount := make(map[string]int, len(m.Nodes))
+	for _, n := range m.Nodes {
+		callsignCount[n.Callsign]++
 	}
 
 	toMatch := func(n nodeItem) matchItem {
-		if callsignCount[n.callsign] <= 1 {
-			return matchItem{display: n.callsign, insert: n.callsign}
+		if callsignCount[n.Callsign] <= 1 {
+			return matchItem{display: n.Callsign, insert: n.Callsign}
 		}
 		// Collision: build a display string the user can actually
 		// read off — three retr0h radios usually sit on different
@@ -207,29 +207,29 @@ func (m model) nickUniverse(word string) []matchItem {
 		// guarantee for the "two HELTECs with the same shortname"
 		// edge case. Insert always uses "!<hex>" so /whois lands
 		// on the exact radio regardless of how the label reads.
-		hex := fmt.Sprintf("!%08x", n.nodeNum)
+		hex := fmt.Sprintf("!%08x", n.NodeNum)
 		var parts []string
-		if n.shortName != "" {
-			parts = append(parts, n.shortName)
+		if n.ShortName != "" {
+			parts = append(parts, n.ShortName)
 		}
-		parts = append(parts, n.callsign)
-		if n.hwModel != "" {
-			parts = append(parts, "· "+n.hwModel)
+		parts = append(parts, n.Callsign)
+		if n.HwModel != "" {
+			parts = append(parts, "· "+n.HwModel)
 		}
-		if n.nodeNum != 0 {
+		if n.NodeNum != 0 {
 			// Always include a short hex suffix — tiny visual
 			// noise, but guarantees the three rows never render
 			// identically even when shortname + hwModel collide.
-			parts = append(parts, fmt.Sprintf("#%04x", n.nodeNum&0xFFFF))
+			parts = append(parts, fmt.Sprintf("#%04x", n.NodeNum&0xFFFF))
 		}
 		display := strings.Join(parts, " ")
 		insert := hex
-		if n.nodeNum == 0 {
+		if n.NodeNum == 0 {
 			// No node num known yet — can't produce an unambiguous
 			// insert, so fall back to the bare callsign. /whois
 			// will still be fuzzy for this one, but at least the
 			// flash shows the user which physical radio is which.
-			insert = n.callsign
+			insert = n.Callsign
 		}
 		return matchItem{display: display, insert: insert}
 	}
@@ -241,25 +241,25 @@ func (m model) nickUniverse(word string) []matchItem {
 	// right disambiguated form regardless of which field the user
 	// typed a prefix of.
 	var prefixHits, substrHits []matchItem
-	seen := make(map[uint32]bool, len(m.nodes))
+	seen := make(map[uint32]bool, len(m.Nodes))
 	add := func(n nodeItem, bucket *[]matchItem) {
-		if n.nodeNum != 0 && seen[n.nodeNum] {
+		if n.NodeNum != 0 && seen[n.NodeNum] {
 			return
 		}
-		if n.nodeNum != 0 {
-			seen[n.nodeNum] = true
+		if n.NodeNum != 0 {
+			seen[n.NodeNum] = true
 		}
 		*bucket = append(*bucket, toMatch(n))
 	}
-	for _, n := range m.nodes {
+	for _, n := range m.Nodes {
 		switch {
-		case strings.HasPrefix(n.callsign, stem):
+		case strings.HasPrefix(n.Callsign, stem):
 			add(n, &prefixHits)
-		case n.shortName != "" && strings.HasPrefix(n.shortName, stem):
+		case n.ShortName != "" && strings.HasPrefix(n.ShortName, stem):
 			add(n, &prefixHits)
-		case strings.Contains(n.callsign, stem):
+		case strings.Contains(n.Callsign, stem):
 			add(n, &substrHits)
-		case n.shortName != "" && strings.Contains(n.shortName, stem):
+		case n.ShortName != "" && strings.Contains(n.ShortName, stem):
 			add(n, &substrHits)
 		}
 	}
@@ -271,12 +271,12 @@ func (m model) nickUniverse(word string) []matchItem {
 	if looksLikeHexStem(stem) {
 		needle := strings.TrimPrefix(strings.ToLower(stem), "0x")
 		for num, idx := range m.NodesByNum {
-			if idx >= len(m.nodes) {
+			if idx >= len(m.Nodes) {
 				continue
 			}
 			hex := fmt.Sprintf("%x", num)
 			if strings.Contains(hex, needle) {
-				substrHits = append(substrHits, toMatch(m.nodes[idx]))
+				substrHits = append(substrHits, toMatch(m.Nodes[idx]))
 			}
 		}
 	}

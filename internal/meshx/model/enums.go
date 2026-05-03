@@ -142,6 +142,36 @@ func (s NodeState) String() string {
 	}
 }
 
+// MarshalJSON emits the string form so HTTP API responses carry
+// "online" / "offline" rather than opaque integer values. Generated
+// clients pattern-match on the string. The returned bytes always
+// stay valid JSON: empty-string for StateUnknown becomes "" not null.
+func (s NodeState) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + s.String() + `"`), nil
+}
+
+// UnmarshalJSON is the inverse — needed for clients of this type
+// that round-trip JSON back into a NodeState.
+func (s *NodeState) UnmarshalJSON(data []byte) error {
+	v := string(data)
+	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+		v = v[1 : len(v)-1]
+	}
+	switch v {
+	case "online":
+		*s = StateOnline
+	case "offline":
+		*s = StateOffline
+	case "failed":
+		*s = StateFailed
+	case "muted":
+		*s = StateMuted
+	default:
+		*s = StateUnknown
+	}
+	return nil
+}
+
 // RoutingError is Routing.error_reason — the firmware's verdict on
 // an outbound packet. RoutingNone means delivered.
 type RoutingError string

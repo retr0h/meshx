@@ -66,6 +66,22 @@ const (
 	StatusNotice
 )
 
+// MarshalJSON emits the string form so HTTP API responses carry
+// "ack" / "pending" / etc. rather than opaque integer values.
+func (s MessageStatus) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + s.String() + `"`), nil
+}
+
+// UnmarshalJSON is the inverse for client-side round-tripping.
+func (s *MessageStatus) UnmarshalJSON(data []byte) error {
+	v := string(data)
+	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+		v = v[1 : len(v)-1]
+	}
+	*s = ParseMessageStatus(v)
+	return nil
+}
+
 // String returns the wire/disk form. Kept stable so historic SQLite
 // rows replay correctly across refactors (column stays TEXT, no
 // migration needed).
@@ -118,83 +134,18 @@ func ParseMessageStatus(s string) MessageStatus {
 // `doc:"…"` tags to seed the OpenAPI spec; not adding them now to
 // keep this package zero-dependency.
 type Message struct {
-	// Time is the rendered timestamp ("09:47") shown in the chat
-	// row. Captured at receive (live) or restored from
-	// messages.time (replay).
-	Time string
-
-	// From is the sender callsign as resolved at receive time. For
-	// peers we hadn't seen NodeInfo for yet this is the placeholder
-	// "node 0x<hex>"; the renderer backfills the live callsign at
-	// display time using FromNum + the in-memory NodeDB so a
-	// mid-session NodeInfo arrival doesn't leave history stuck on
-	// the placeholder.
-	From string
-
-	// Text is the message body, post-sanitization (CRLF trim,
-	// non-printable rune drop). Multi-line bodies preserve internal
-	// `\n`; edge whitespace is trimmed.
-	Text string
-
-	// Mine flags rows the local user composed (true) vs incoming
-	// peer chat (false). Drives the right-aligned styling + ack
-	// glyph rendering.
-	Mine bool
-
-	// Bang carries the leading verb for ham-bang messages — "!cq",
-	// "!qth", "!cqr", etc. Empty for plain chat.
-	Bang string
-
-	// Status is the delivery-state enum — see MessageStatus.
-	Status MessageStatus
-
-	// Hops is the mesh hop count; 0 means direct (no relay) or
-	// self.
-	Hops int
-
-	// SNR is the signal-to-noise ratio at receive ("-8.5"), empty
-	// to hide.
-	SNR string
-
-	// PacketID is MeshPacket.id as seen on the wire. Zero for
-	// in-memory-only entries (system lines, demo seeds, pre-feature
-	// rows). Used as the unique key for ack matching + replay
-	// dedup.
-	PacketID uint32
-
-	// ReplyID is Data.reply_id pointing at the message this one is
-	// answering. Zero when the message isn't a reply.
-	ReplyID uint32
-
-	// FromNum is the Meshtastic node num of the sender, captured at
-	// ingest. Persisted so the renderer can backfill the displayed
-	// callsign from the in-memory NodeDB live (the From field is
-	// only a snapshot at receive time — if NodeInfo arrives later
-	// we'd otherwise be stuck showing "node 0xabc" forever). Zero
-	// for "me" / system lines / demo seeds.
-	FromNum uint32
-
-	// ToNum is the Meshtastic node num of the addressee, captured
-	// from MeshPacket.to at ingest. 0xFFFFFFFF (4294967295) means
-	// broadcast, anything else is a directed message (DM) — the row
-	// was sent specifically to ToNum and not to the channel at large.
-	// Zero on outbound rows we built before ToNum was introduced and
-	// on system / demo rows that have no addressee. Future MR-7b
-	// uses this to split DMs into per-peer @threads in the tab strip.
-	ToNum uint32
-
-	// SentAt is the absolute timestamp the message was received
-	// (live) or originally persisted (replay). Populated from
-	// messages.created_at on replay; set to time.Now() on live
-	// inbound/outbound.
-	SentAt time.Time
-
-	// Corrupted is true when sanitization replaced bad bytes or
-	// dropped non-printable runes from the body. Drives the ⚠
-	// marker + dim italic styling on the row so the user knows
-	// the content isn't trustworthy without throwing away the
-	// salvageable printable bits. Recomputed on every replay so
-	// a future sanitizer change automatically re-evaluates
-	// historic rows.
-	Corrupted bool
+	Time      string        `json:"time"                doc:"display timestamp like '09:47'"`
+	From      string        `json:"from"                doc:"sender callsign at receive time"`
+	Text      string        `json:"text"                doc:"message body, post-sanitization"`
+	Mine      bool          `json:"mine"                doc:"true when local user composed this row"`
+	Bang      string        `json:"bang,omitempty"      doc:"leading verb for ham-bang messages"`
+	Status    MessageStatus `json:"status"              doc:"ok | ack | pending | fail | system | notice"`
+	Hops      int           `json:"hops"                doc:"mesh hop count; 0 = direct"`
+	SNR       string        `json:"snr,omitempty"       doc:"signal-to-noise ratio at receive"`
+	PacketID  uint32        `json:"packet_id"           doc:"MeshPacket.id; 0 for system / demo rows"`
+	ReplyID   uint32        `json:"reply_id,omitempty"  doc:"PacketID this message answers"`
+	FromNum   uint32        `json:"from_num"            doc:"sender node num"`
+	ToNum     uint32        `json:"to_num"              doc:"addressee node num; 0xFFFFFFFF = broadcast"`
+	SentAt    time.Time     `json:"sent_at"             doc:"absolute time of receive / persist"`
+	Corrupted bool          `json:"corrupted,omitempty" doc:"sanitization replaced/dropped bytes"`
 }

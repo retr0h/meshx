@@ -32,8 +32,15 @@ import (
 	"github.com/retr0h/meshx/internal/driver"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
-	"github.com/retr0h/meshx/internal/meshx/session"
 	"github.com/retr0h/meshx/internal/meshx/storage"
+)
+
+// model uses the canonical item types from model/. Local aliases
+// keep TUI call sites readable.
+type (
+	channelItem = mdl.ChannelItem
+	messageItem = mdl.MessageItem
+	nodeItem    = mdl.NodeItem
 )
 
 // clientTag is the meshx self-identifier we splice into `/cq` beacons
@@ -232,87 +239,15 @@ const (
 	overlayConfig
 )
 
-type channelItem struct {
-	name    string
-	private bool
-	unread  int
-	// index is the radio's slot number (0..7). Stable across re-applies
-	// — applyChannel upserts by index so /channel del / /channel new
-	// can address the right slot directly.
-	index int
-	// role is the Meshtastic Channel_Role string ("PRIMARY", "SECONDARY",
-	// "DISABLED"). Renderers skip DISABLED so empty slots don't clutter
-	// the tab strip; /channel del refuses PRIMARY because the radio
-	// requires one.
-	role string
-	// psk is the channel's pre-shared AES key, RAM-only — NEVER
-	// persisted (no column in the messages / nodes / settings tables).
-	// Sourced from the radio's NodeDB dump on connect; consumed by
-	// /channel share to round-trip the channel into a meshtastic://
-	// URL. If the radio dies the PSK is gone with it; that's the
-	// security posture (see README — "we don't store secrets").
-	psk []byte
-}
-
-// messageItem is the renderer's row envelope. Embeds mdl.Message
-// (the persisted/wire shape — Time, From, Text, Mine, Bang, Status,
-// Hops, SNR, PacketID, ReplyID, FromNum, SentAt, Corrupted) and
-// adds render-only fields the storage layer doesn't care about
-// (group binding, fade timer, pin state, notice styling, child ack
-// line). The mdl.Message embedding means storage round-trips just
-// pull `.Message` directly — no mapper boilerplate.
-type messageItem struct {
-	mdl.Message
-
-	// acks — optional child line ("↳ 3 acks — ...") rendered under
-	// outgoing messages once we've collected receipts.
-	acks string
-
-	// group — non-zero value binds a sequence of rows as a single
-	// logical entry. Used for /whois / /config / /env multi-line
-	// "server reply" blocks so every line in the block shares the
-	// same zebra stripe and visually reads as one card. Timestamp
-	// is rendered only on the first row of a group; continuation
-	// rows hide it.
-	group uint64
-
-	// style — notice-row styling knob set by the m.notice() writer.
-	// nil for chat rows; non-nil for every `-!-` entry (storage,
-	// whois, splash banner, future error/success pulses). Lets the
-	// renderer pick body fg / bold / center off one struct instead
-	// of branching on ad-hoc fields. See notices.go for the shape
-	// and defaults.
-	style *noticeStyle
-
-	// expireAt — non-nil for command-triggered notices (/whois,
-	// /ping, /config, …) stamped by m.notice / m.noticeCard.
-	// The reap tick drops rows whose expireAt has passed (whole
-	// groups atomically); during the last noticeFadeWindow the
-	// renderer lerps fg toward rowBg so the row visibly dims
-	// before it vanishes. Nil = permanent — chat rows, splash
-	// banner, storage/error alerts. See notices.go.
-	expireAt *time.Time
-
-	// pinned — user has paused this row's TTL via `p` in modeNav
-	// or `/pin`. While true, the reap tick skips the row and the
-	// renderer suppresses the fade. `⌜ … ⌟` diagonal corners mark
-	// the group in the pane. pinnedRemaining captures time.Until
-	// (expireAt) at the moment pin was toggled on so a subsequent
-	// unpin can re-stamp expireAt = now + pinnedRemaining and the
-	// row resumes with the same time budget it had.
-	pinned          bool
-	pinnedRemaining time.Duration
-}
-
 // model is the Bubble Tea state. Session-state fields (nodes,
 // messages, NodeDB indices, radio telemetry, in-flight ping/tr
-// bookkeeping, …) live on the embedded *session.Session — which is
+// bookkeeping, …) live on the embedded *driver.State — which is
 // also what a future headless `meshx serve` daemon will construct
 // directly without dragging Bubble Tea in. TUI-only state (focus
 // cursors, search query, splash, key bindings, flash banner, config
 // draft, etc.) stays on model proper.
 type model struct {
-	*session.Session
+	*driver.State
 
 	w, h int
 
@@ -328,16 +263,6 @@ type model struct {
 	selectedCh  int
 	selectedNd  int
 	nodeSort    sortMode
-
-	// channels / messages / nodes still live on model because their
-	// element types (channelItem / messageItem / nodeItem) carry
-	// renderer-only fields (notice styling, pin state, fade timer) the
-	// session package can't model without dragging UI-leaning types
-	// in. A follow-up MR-3.5b will untangle the render decoration so
-	// these can move down to *Session alongside the rest.
-	channels []channelItem
-	messages []messageItem
-	nodes    []nodeItem
 
 	input       textinput.Model // always-on bottom input (messages OR /commands)
 	searchInput textinput.Model
@@ -365,15 +290,8 @@ type model struct {
 	historyCursor int
 	historyDraft  string // the line the user was typing before Up-arrowing — restored on Down past end
 
-	// Demo fixture — non-nil means "running off canned data, no radio
-	// transport". When set, its values pre-populate the same session
-	// fields the live radio would fill (MyNodeNum, RadioFirmware,
-	// BatteryLevel, etc.), so every renderer has one code path: read
-	// session state. isDemo() is `m.demo != nil`.
-	demo *Demo
-
 	// driver is the headless radio session layer — owns Pump (outbound
-	// + reconnect) and Store (persistence) along with the *session.Session
+	// + reconnect) and Store (persistence) along with the *driver.State
 	// the model embeds. Constructed by RunRadio and handed to the TUI.
 	// Nil-safe: demo mode leaves driver.Pump and driver.Store nil and
 	// the session runs in-memory. After MR-3.5c lands, apply* handlers
@@ -442,15 +360,6 @@ type model struct {
 	flashSeenAt time.Time
 }
 
-// RunDemo launches the tea program with the canonical Demo fixture
-// and no radio transport — used for screenshots, UI iteration, and
-// try-before-you-buy without a LoRa device on hand.
-func RunDemo() error {
-	p := tea.NewProgram(newModel(DefaultDemo(), ""), tea.WithAltScreen())
-	_, err := p.Run()
-	return err
-}
-
 // RunRadio launches the Bubble Tea model connected to a live
 // Meshtastic radio at `dest`. Starts empty — no canned channels,
 // nodes, or messages — and populates as the handshake's FromRadio
@@ -464,7 +373,7 @@ func RunDemo() error {
 // returns a startPumpMsg, which is when we actually open the
 // transport — by then the main loop is pumping messages.
 func RunRadio(dest string) error {
-	m := newModel(nil, dest)
+	m := newModel(dest)
 	// Close the persistence handle when the tea loop exits. Nil-safe:
 	// if storage.New failed inside newModel, m.driver.Store is nil and the
 	// close is a no-op.
@@ -551,18 +460,10 @@ func mod(x, y float64) float64 {
 	return r
 }
 
-// newModel builds the bubble-tea model for either demo mode
-// (demo != nil) or live-radio mode (demo == nil, dest != "").
-//
-// Demo mode plugs the Demo fixture's values into the SAME model
-// fields a live radio would populate (myNodeNum, nodes, channels,
-// radioFirmware, batteryLevel, …) so every renderer runs one code
-// path that reads model state — no parallel demo-vs-live branches.
-//
-// Live-radio mode leaves everything at zero/empty; the transport
-// pump fills state as FromRadio packets arrive and the UI shows
-// "—" placeholders until they do.
-func newModel(demo *Demo, dest string) model {
+// newModel builds the bubble-tea model for live-radio mode.
+// Leaves everything at zero/empty; the transport pump fills state as
+// FromRadio packets arrive and the UI shows "—" placeholders until they do.
+func newModel(dest string) model {
 	// Always-on input bar at the bottom — composes messages, or runs
 	// /commands when the line begins with "/". irssi-style.
 	in := textinput.New()
@@ -590,19 +491,18 @@ func newModel(demo *Demo, dest string) model {
 	focusCmd := in.Focus()
 
 	chosenSplash := pickSplash()
-	sess := session.New()
+	sess := driver.NewState()
 	sess.ConnectDest = dest
 	// Defaults match a stock Meshtastic radio + a fresh meshX install
 	// (radio buzzer beeps on text, terminal also dings). Overridden
 	// below from the settings table when storage opens.
 	sess.RadioBuzzerEnabled = true
 	m := model{
-		Session:     sess,
+		State:       sess,
 		driver:      driver.New(sess, nil, nil),
 		mode:        modeInput,
 		focused:     paneMessages,
 		splash:      chosenSplash,
-		demo:        demo,
 		input:       in,
 		searchInput: func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
 		// cfgEditInput is the inline textinput that pops over the
@@ -619,312 +519,195 @@ func newModel(demo *Demo, dest string) model {
 		initialFocusCmd: focusCmd,
 	}
 
-	if demo == nil {
-		// Live-radio mode — open the persistence store and replay the
-		// last chunk of history so the log survives restarts. We fail
-		// open: any storage error (missing $HOME, bad perms, corrupt
-		// db) just leaves m.driver.Store nil, and the session runs in-memory
-		// for that boot. Losing history is preferable to crashing.
-		if path, err := storage.DefaultPath(); err == nil {
-			// Cast the concrete *storage.Sqlite to the Store interface
-			// at the assignment site (osapi-io pattern) so the rest of
-			// the model only ever sees the consumer-facing surface.
-			if sqliteStore, err := storage.New(path); err == nil {
-				var store driver.Store = sqliteStore
-				m.driver.Store = store
-				// Bind this session to a radio identity before any
-				// storage call references radioID. ResolveRadioByConnection
-				// returns the canonical "0xNNNNNNNN" form for radios
-				// we've handshaken with before (cache hit on
-				// radios.my_node_num); for never-seen-before connections
-				// it returns a "pending:<transport>:<addr>" placeholder
-				// the mdl.MyInfo handler swaps out via
-				// ClaimRadioIdentity once the handshake reveals the
-				// real my_node_num.
-				transport, addr := storage.ParseRadioDest(dest)
-				if rid, err := store.ResolveRadioByConnection(transport, addr); err == nil {
-					m.RadioID = rid
-				}
-				// Hydrate persisted prefs early — /mute (terminal ding,
-				// global) and /config's radio buzzer state (per-radio).
-				// Both default "on" to match stock-radio + fresh-install
-				// behaviour, so missing rows just leave the model
-				// defaults from above untouched. ding_muted is a meshx-
-				// CLIENT preference (terminal beep); pass "" for radioID
-				// so it's stored once globally rather than once per radio.
-				if v, ok := store.GetSetting("", "ding_muted"); ok {
-					m.DingMuted = v == "on"
-				}
-				if v, ok := store.GetSetting(m.RadioID, "radio_buzzer"); ok {
-					m.RadioBuzzerEnabled = v != "off"
-				}
-				// Load the cached NodeDB FIRST — every peer we've
-				// ever resolved a real User for gets inserted into
-				// m.nodes / m.NodesByNum before anything else runs.
-				// That way ghost-peer replay below skips any node we
-				// already know by name, and message rows for
-				// "node 0xd64b01be" instantly render as "WiobooJones"
-				// if we've seen them in a previous session.
-				if cached, err := store.LoadNodes(m.RadioID); err == nil {
-					for _, n := range cached {
-						name := n.LongName
-						if name == "" {
-							name = n.ShortName
-						}
-						// Carry prefs even for peers we still only
-						// know by node num (user may have starred a
-						// ghost before NodeInfo arrived); use the
-						// placeholder longname so they still land
-						// in m.nodes.
-						if name == "" {
-							name = fmt.Sprintf("node 0x%x", n.NodeNum)
-						}
-						state := stateOffline
-						if n.Muted {
-							state = stateMuted
-						}
-						m.nodes = append(m.nodes, nodeItem{
-							callsign:  name,
-							shortName: n.ShortName,
-							nodeNum:   n.NodeNum,
-							state:     state,
-							fav:       n.Favorite,
-							lastHeard: "cached",
-							hwModel:   n.HwModel,
-						})
-						m.NodesByNum[n.NodeNum] = len(m.nodes) - 1
+	// Live-radio mode — open the persistence store and replay the
+	// last chunk of history so the log survives restarts. We fail
+	// open: any storage error (missing $HOME, bad perms, corrupt
+	// db) just leaves m.driver.Store nil, and the session runs in-memory
+	// for that boot. Losing history is preferable to crashing.
+	if path, err := storage.DefaultPath(); err == nil {
+		// Cast the concrete *storage.Sqlite to the Store interface
+		// at the assignment site (osapi-io pattern) so the rest of
+		// the model only ever sees the consumer-facing surface.
+		if sqliteStore, err := storage.New(path); err == nil {
+			var store driver.Store = sqliteStore
+			m.driver.Store = store
+			// Bind this session to a radio identity before any
+			// storage call references radioID. ResolveRadioByConnection
+			// returns the canonical "0xNNNNNNNN" form for radios
+			// we've handshaken with before (cache hit on
+			// radios.my_node_num); for never-seen-before connections
+			// it returns a "pending:<transport>:<addr>" placeholder
+			// the mdl.MyInfo handler swaps out via
+			// ClaimRadioIdentity once the handshake reveals the
+			// real my_node_num.
+			transport, addr := storage.ParseRadioDest(dest)
+			if rid, err := store.ResolveRadioByConnection(transport, addr); err == nil {
+				m.RadioID = rid
+			}
+			// Hydrate persisted prefs early — /mute (terminal ding,
+			// global) and /config's radio buzzer state (per-radio).
+			// Both default "on" to match stock-radio + fresh-install
+			// behaviour, so missing rows just leave the model
+			// defaults from above untouched. ding_muted is a meshx-
+			// CLIENT preference (terminal beep); pass "" for radioID
+			// so it's stored once globally rather than once per radio.
+			if v, ok := store.GetSetting("", "ding_muted"); ok {
+				m.DingMuted = v == "on"
+			}
+			if v, ok := store.GetSetting(m.RadioID, "radio_buzzer"); ok {
+				m.RadioBuzzerEnabled = v != "off"
+			}
+			// Load the cached NodeDB FIRST — every peer we've
+			// ever resolved a real User for gets inserted into
+			// m.Nodes / m.NodesByNum before anything else runs.
+			// That way ghost-peer replay below skips any node we
+			// already know by name, and message rows for
+			// "node 0xd64b01be" instantly render as "WiobooJones"
+			// if we've seen them in a previous session.
+			if cached, err := store.LoadNodes(m.RadioID); err == nil {
+				for _, n := range cached {
+					name := n.LongName
+					if name == "" {
+						name = n.ShortName
 					}
+					// Carry prefs even for peers we still only
+					// know by node num (user may have starred a
+					// ghost before NodeInfo arrived); use the
+					// placeholder longname so they still land
+					// in m.Nodes.
+					if name == "" {
+						name = fmt.Sprintf("node 0x%x", n.NodeNum)
+					}
+					state := stateOffline
+					if n.Muted {
+						state = stateMuted
+					}
+					m.Nodes = append(m.Nodes, nodeItem{
+						Callsign:  name,
+						ShortName: n.ShortName,
+						NodeNum:   n.NodeNum,
+						State:     state,
+						Fav:       n.Favorite,
+						LastHeard: "cached",
+						HwModel:   n.HwModel,
+					})
+					m.NodesByNum[n.NodeNum] = len(m.Nodes) - 1
 				}
-				// Stale-pending sweep BEFORE replay — flip any
-				// outbound row stuck "pending" past the cutoff to
-				// "fail" so it renders as `✗` and the user can hit
-				// `R` to resend.
-				expired, _ := store.ExpireStalePendingMessages(m.RadioID, 5*time.Minute)
-				// Primary channel is what the radio tells us, but at
-				// boot we don't have it yet — replay under the name
-				// we'll default to (empty string key until a channel
-				// arrives). Load is by `currentChannel` so messages
-				// migrate as the handshake resolves the channel name.
-				if pastModels, err := store.LoadMessages(m.RadioID, "", 500); err == nil {
-					past := make([]messageItem, 0, len(pastModels))
-					for _, mm := range pastModels {
-						// sanitizeMessageText runs on read so historic
-						// rows written before sanitizeMessageText
-						// landed pick up the ⚠ marker + dim styling
-						// on next launch without a migration. The
-						// Corrupted flag is recomputed from the text
-						// every time, so a future sanitizer change
-						// automatically re-evaluates the row.
-						mm.Text, mm.Corrupted = sanitizeMessageText(mm.Text)
-						past = append(past, messageItem{Message: mm})
-					}
-					baseIdx := len(m.messages)
-					m.messages = append(m.messages, past...)
-					m.selectedMsg = len(m.messages) - 1
-					if m.selectedMsg < 0 {
-						m.selectedMsg = 0
-					}
-					// Seed messagesByPacketID so applyTextMessage can
-					// dedupe when the radio's RAM queue replays a
-					// packet we already persisted last session.
-					// Entries with packetID==0 (system rows, demo
-					// seeds) are skipped — the zero key would
-					// collide and they never arrive from the wire
-					// anyway.
-					for i, msg := range past {
-						if msg.PacketID == 0 {
-							continue
-						}
-						m.MessagesByPacketID[msg.PacketID] = baseIdx + i
-					}
-					// Ghost-peer replay — every historical message
-					// with a fromNum we haven't seen in m.nodes gets
-					// a synthesized firmware-default entry so /whois
-					// / /cqr / /rs / /ping can target it by shortname
-					// or hex without waiting for a fresh live packet.
-					// Using defaultCallsign rather than msg.From keeps
-					// the row consistent with how live applyTextMessage
-					// ingest now ghost-creates peers — single source
-					// of truth, and historical rows that were saved
-					// with the legacy "node 0x<hex>" string resolve
-					// to the same "[c7f7] Meshtastic c7f7" form every
-					// other Meshtastic client renders. Marked
-					// unresolved so the UI dims them and the
-					// "identified" notification fires when real
-					// NodeInfo finally lands.
-					for _, msg := range past {
-						if msg.FromNum == 0 {
-							continue
-						}
-						if _, ok := m.NodesByNum[msg.FromNum]; ok {
-							continue
-						}
-						long, short := defaultCallsign(msg.FromNum)
-						m.nodes = append(m.nodes, nodeItem{
-							callsign:   long,
-							shortName:  short,
-							nodeNum:    msg.FromNum,
-							unresolved: true,
-							state:      stateOffline,
-							lastHeard:  msg.Time,
-							lastSNR:    msg.SNR,
-							lastHops:   msg.Hops,
-						})
-						m.NodesByNum[msg.FromNum] = len(m.nodes) - 1
-					}
+			}
+			// Stale-pending sweep BEFORE replay — flip any
+			// outbound row stuck "pending" past the cutoff to
+			// "fail" so it renders as `✗` and the user can hit
+			// `R` to resend.
+			expired, _ := store.ExpireStalePendingMessages(m.RadioID, 5*time.Minute)
+			// Primary channel is what the radio tells us, but at
+			// boot we don't have it yet — replay under the name
+			// we'll default to (empty string key until a channel
+			// arrives). Load is by `currentChannel` so messages
+			// migrate as the handshake resolves the channel name.
+			if pastModels, err := store.LoadMessages(m.RadioID, "", 500); err == nil {
+				past := make([]messageItem, 0, len(pastModels))
+				for _, mm := range pastModels {
+					// sanitizeMessageText runs on read so historic
+					// rows written before sanitizeMessageText
+					// landed pick up the ⚠ marker + dim styling
+					// on next launch without a migration. The
+					// Corrupted flag is recomputed from the text
+					// every time, so a future sanitizer change
+					// automatically re-evaluates the row.
+					mm.Text, mm.Corrupted = sanitizeMessageText(mm.Text)
+					past = append(past, messageItem{Message: mm})
 				}
-				// Startup backfill — walk the replayed messages once
-				// and push each sender's most recent sentAt onto the
-				// corresponding node's lastHeardAt. Without this,
-				// /whois and the nodes overlay open a fresh session
-				// showing peers as "offline, heard 30m ago" even
-				// when we've got a recent chat from them sitting
-				// right there in the log. After this sweep, the
-				// currentState / currentLastHeard derivations give
-				// the expected "online / Xm ago" on the first render.
-				touched := map[uint32]struct{}{}
-				for _, past := range m.messages {
-					if past.FromNum == 0 || past.SentAt.IsZero() {
+				baseIdx := len(m.Messages)
+				m.Messages = append(m.Messages, past...)
+				m.selectedMsg = len(m.Messages) - 1
+				if m.selectedMsg < 0 {
+					m.selectedMsg = 0
+				}
+				// Seed MessagesByPacketID so applyTextMessage can
+				// dedupe when the radio's RAM queue replays a
+				// packet we already persisted last session.
+				// Entries with PacketID==0 (system rows) are
+				// skipped — the zero key would collide and they
+				// never arrive from the wire anyway.
+				for i, msg := range past {
+					if msg.PacketID == 0 {
 						continue
 					}
-					idx, ok := m.NodesByNum[past.FromNum]
-					if !ok {
+					m.MessagesByPacketID[msg.PacketID] = baseIdx + i
+				}
+				// Ghost-peer replay — every historical message
+				// with a FromNum we haven't seen in m.Nodes gets
+				// a synthesized firmware-default entry so /whois
+				// / /cqr / /rs / /ping can target it by shortname
+				// or hex without waiting for a fresh live packet.
+				for _, msg := range past {
+					if msg.FromNum == 0 {
 						continue
 					}
-					if past.SentAt.After(m.nodes[idx].lastHeardAt) {
-						m.nodes[idx].lastHeardAt = past.SentAt
-						// Stamp lastHops + lastSNR off the most-
-						// recent message in history. Without this,
-						// /tr's offline fall-back path (no live
-						// pump) reads zero hops + empty snr even
-						// when the row right above shows the real
-						// values — applyTextMessage updates these
-						// for live packets, but historical messages
-						// replay directly into m.messages and never
-						// touch the node telemetry slots.
-						m.nodes[idx].lastHops = past.Hops
-						if past.SNR != "" {
-							m.nodes[idx].lastSNR = past.SNR
-						}
-						touched[past.FromNum] = struct{}{}
+					if _, ok := m.NodesByNum[msg.FromNum]; ok {
+						continue
 					}
-				}
-				backfilled := len(touched)
-				// Drain the migration trace from the process-level
-				// boot buffer. Goose's apply lines + "successfully
-				// migrated" / "no migrations to run" summary all flow
-				// through this single sink regardless of who triggered
-				// the upgrade — RunBLE's pre-handoff openSharedStorage,
-				// the TUI's own openStorage, or (future) the daemon.
-				// Emit AFTER NodeDB + message replay so they land at
-				// the tail of the log (bottom-pinned in the pane)
-				// where the user looks for latest activity, not buried
-				// above a wall of replayed chat.
-				for _, n := range store.ConsumeBootNotes() {
-					m.systemLine("storage: " + n)
-				}
-				if backfilled > 0 {
-					m.systemLine(fmt.Sprintf(
-						"nodes: backfilled %d peer recency from message history", backfilled,
-					))
-				}
-				if expired > 0 {
-					m.systemLine(fmt.Sprintf(
-						"messages: %d stale pending row(s) marked as failed — press R to resend",
-						expired,
-					))
+					long, short := defaultCallsign(msg.FromNum)
+					m.Nodes = append(m.Nodes, nodeItem{
+						Callsign:   long,
+						ShortName:  short,
+						NodeNum:    msg.FromNum,
+						Unresolved: true,
+						State:      stateOffline,
+						LastHeard:  msg.Time,
+						LastSNR:    msg.SNR,
+						LastHops:   msg.Hops,
+					})
+					m.NodesByNum[msg.FromNum] = len(m.Nodes) - 1
 				}
 			}
-		}
-		// Splash notices come last so the BitchX greeter is the
-		// newest entry in the log — sits right at the bottom above
-		// the input bar on launch just like every other recent
-		// message, and scrolls UP naturally as fresh chat arrives.
-		// Pass the cached self callsign so the splash tagline reads
-		// "as <callsign>" instead of a hardcoded credit.
-		m.noticeCard(splashAsNotices(chosenSplash, m.myCallsign())...)
-		return m
-	}
-
-	// Demo mode — pour the fixture into the same model slots that the
-	// radio would populate. Anything derived from these (status bar,
-	// /config, /grid, /qth, node list) then renders from model state
-	// without any isDemo() branch in the render code.
-	m.channels = append([]channelItem(nil), demo.Channels...)
-	m.nodes = append([]nodeItem(nil), demo.Nodes...)
-	m.messages = append([]messageItem(nil), demo.Messages...)
-	// Splash notices land at the tail so the BitchX greeter is the
-	// newest entry in the log — same behaviour as live mode. In
-	// demo mode the "me" callsign is set up below from demo.NodeNum;
-	// pass the demo's first-row callsign so the splash tagline
-	// renders against the demo identity.
-	demoCallsign := ""
-	if len(demo.Nodes) > 0 {
-		demoCallsign = demo.Nodes[0].callsign
-	}
-	m.noticeCard(splashAsNotices(chosenSplash, demoCallsign)...)
-	if len(demo.Channels) > 0 {
-		m.CurrentChannel = demo.Channels[0].name
-	}
-	m.selectedMsg = len(m.messages) - 1
-	if m.selectedMsg < 0 {
-		m.selectedMsg = 0
-	}
-
-	// "Me" node is the first entry in demo.Nodes by convention — bind
-	// myNodeNum + nodesByNum so myNode() and myCallsign() resolve the
-	// same way they do on a live radio.
-	m.MyNodeNum = demo.NodeNum
-	if len(demo.Nodes) > 0 {
-		m.NodesByNum[demo.NodeNum] = 0
-		m.nodes[0].nodeNum = demo.NodeNum
-	}
-	// Demo peers don't individually carry node-nums in the fixture,
-	// but the Messages slice does via fromNum. Backfill each
-	// not-yet-mapped peer's node num from the first message that
-	// mentions them so tab-completion disambiguation + nav-w have a
-	// hex to address, same as live mode.
-	for _, msg := range demo.Messages {
-		if msg.FromNum == 0 || msg.Mine {
-			continue
-		}
-		if _, ok := m.NodesByNum[msg.FromNum]; ok {
-			continue
-		}
-		for i := range m.nodes {
-			if i == 0 {
-				continue
+			// Startup backfill — walk the replayed messages once
+			// and push each sender's most recent sentAt onto the
+			// corresponding node's LastHeardAt.
+			touched := map[uint32]struct{}{}
+			for _, past := range m.Messages {
+				if past.FromNum == 0 || past.SentAt.IsZero() {
+					continue
+				}
+				idx, ok := m.NodesByNum[past.FromNum]
+				if !ok {
+					continue
+				}
+				if past.SentAt.After(m.Nodes[idx].LastHeardAt) {
+					m.Nodes[idx].LastHeardAt = past.SentAt
+					m.Nodes[idx].LastHops = past.Hops
+					if past.SNR != "" {
+						m.Nodes[idx].LastSNR = past.SNR
+					}
+					touched[past.FromNum] = struct{}{}
+				}
 			}
-			if m.nodes[i].nodeNum != 0 {
-				continue
+			backfilled := len(touched)
+			// Drain the migration trace from the process-level
+			// boot buffer.
+			for _, n := range store.ConsumeBootNotes() {
+				m.systemLine("storage: " + n)
 			}
-			if m.nodes[i].callsign == msg.From {
-				m.nodes[i].nodeNum = msg.FromNum
-				m.NodesByNum[msg.FromNum] = i
-				break
+			if backfilled > 0 {
+				m.systemLine(fmt.Sprintf(
+					"nodes: backfilled %d peer recency from message history", backfilled,
+				))
+			}
+			if expired > 0 {
+				m.systemLine(fmt.Sprintf(
+					"messages: %d stale pending row(s) marked as failed — press R to resend",
+					expired,
+				))
 			}
 		}
 	}
-
-	// Telemetry + config snapshot — same fields live mode sets from
-	// DeviceMetrics / LoraConfig / DeviceConfig / Position packets.
-	m.RadioFirmware = demo.Firmware
-	m.RadioHasWifi = demo.HasWifi
-	m.RadioHasBT = demo.HasBT
-	m.RadioRegion = demo.Region
-	m.RadioModemPreset = demo.ModemPreset
-	m.RadioTxPower = demo.TxPowerDBm
-	m.RadioRole = demo.Role
-	m.BatteryLevel = demo.BatteryLevel
-	m.BatteryVoltage = demo.Voltage
-	m.ChannelUtil = demo.ChannelUtil
-	m.AirUtilTx = demo.AirUtilTx
-	m.HasTelemetry = true
-	m.MyLatitude = demo.Latitude
-	m.MyLongitude = demo.Longitude
-	m.MyGrid = demo.Grid
-	m.Connected = true
-
+	// Splash notices come last so the BitchX greeter is the
+	// newest entry in the log — sits right at the bottom above
+	// the input bar on launch just like every other recent
+	// message, and scrolls UP naturally as fresh chat arrives.
+	// Pass the cached self callsign so the splash tagline reads
+	// "as <callsign>" instead of a hardcoded credit.
+	m.noticeCard(splashAsNotices(chosenSplash, m.myCallsign())...)
 	return m
 }
 
@@ -941,7 +724,7 @@ func (m model) Init() tea.Cmd {
 		m.initialFocusCmd,
 		// Start the notice TTL reaper loop — fires every second for
 		// the life of the program. Cheap enough to always be on; the
-		// handler is a one-pass scan of m.messages guarded so it no-
+		// handler is a one-pass scan of m.Messages guarded so it no-
 		// ops when there's nothing expiring.
 		noticeTickCmd(),
 	}
@@ -1039,7 +822,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// will overwrite this with the full "reconnecting · attempt
 		// N · …" banner if the first dial fails; the first radio
 		// frame clears it.
-		m.Reconnect = &session.ReconnectState{
+		m.Reconnect = &driver.ReconnectState{
 			Initial: true,
 			ReadyAt: time.Now(),
 		}
@@ -1215,9 +998,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mdl.Position:
 		if m.PeerPositions == nil {
-			m.PeerPositions = make(map[uint32]session.PeerPosition)
+			m.PeerPositions = make(map[uint32]driver.PeerPosition)
 		}
-		m.PeerPositions[msg.FromNodeNum] = session.PeerPosition{
+		m.PeerPositions[msg.FromNodeNum] = driver.PeerPosition{
 			Latitude:  msg.Latitude,
 			Longitude: msg.Longitude,
 			Altitude:  msg.Altitude,
@@ -1235,9 +1018,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mdl.EnvMetrics:
 		if m.PeerEnv == nil {
-			m.PeerEnv = make(map[uint32]session.PeerEnvMetrics)
+			m.PeerEnv = make(map[uint32]driver.PeerEnvMetrics)
 		}
-		m.PeerEnv[msg.FromNodeNum] = session.PeerEnvMetrics{
+		m.PeerEnv[msg.FromNodeNum] = driver.PeerEnvMetrics{
 			Temperature: msg.Temperature,
 			Humidity:    msg.Humidity,
 			Pressure:    msg.Pressure,
@@ -1261,7 +1044,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// this one closes the loop.
 		if wasDisconnected && m.SyncPendingGhosts == 0 {
 			m.systemLine(fmt.Sprintf(
-				"sync: complete — %d peers identified", len(m.nodes),
+				"sync: complete — %d peers identified", len(m.Nodes),
 			))
 		}
 		// Clear the handshake-progress counter so a future /sync
@@ -1275,8 +1058,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// this is the startup handshake and we stay quiet.
 		if m.SyncPendingGhosts != 0 {
 			current := 0
-			for _, n := range m.nodes {
-				if strings.HasPrefix(n.callsign, "node 0x") {
+			for _, n := range m.Nodes {
+				if strings.HasPrefix(n.Callsign, "node 0x") {
 					current++
 				}
 			}
@@ -1285,7 +1068,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				baseline = 0
 			}
 			resolved := baseline - current
-			total := len(m.nodes)
+			total := len(m.Nodes)
 			m.systemBlock("sync complete",
 				fmt.Sprintf("NodeDB re-dump done — %d peers in NodeDB", total),
 				fmt.Sprintf("placeholders: %d → %d  (%d resolved this sync)", baseline, current, resolved),
@@ -1327,7 +1110,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// counter climb instead of seeing a 5s flash and then nothing
 		// for the rest of a 30s backoff.
 		m.Connected = false
-		m.Reconnect = &session.ReconnectState{
+		m.Reconnect = &driver.ReconnectState{
 			Attempt: msg.Attempt,
 			Err:     msg.Err,
 			ReadyAt: time.Now().Add(msg.After),
@@ -1381,12 +1164,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // it. ESC from the overlay returns to input mode.
 func timeNowHHMM() string {
 	return time.Now().Format("15:04")
-}
-
-// isDemo reports whether we're running off the canned Demo fixture
-// rather than a real radio transport.
-func (m model) isDemo() bool {
-	return m.demo != nil
 }
 
 // executeCommand handles a slash command with the `/` prefix already

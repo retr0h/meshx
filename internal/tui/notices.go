@@ -112,21 +112,21 @@ func buildNotice(text string, style noticeStyle) messageItem {
 			Text:   "-!- " + text,
 			Status: mdl.StatusNotice,
 		},
-		style: &s,
+		Style: &s,
 	}
 }
 
 // notice appends one `-!-` row to the messages pane. Single
-// entrypoint every caller uses — a rogue `m.messages = append(...)`
+// entrypoint every caller uses — a rogue `m.Messages = append(...)`
 // with status="notice" elsewhere in the tree is a smell. Stamps a
 // noticeTTL expiry; use m.noticePermanent for rows the user must
 // keep seeing (storage alerts, error states).
 func (m *model) notice(text string, style noticeStyle) {
 	row := buildNotice(text, style)
 	exp := time.Now().Add(noticeTTL)
-	row.expireAt = &exp
-	m.messages = append(m.messages, row)
-	m.selectedMsg = len(m.messages) - 1
+	row.ExpireAt = &exp
+	m.Messages = append(m.Messages, row)
+	m.selectedMsg = len(m.Messages) - 1
 }
 
 // noticePermanent is the opt-out sibling of m.notice — no TTL, the
@@ -134,8 +134,8 @@ func (m *model) notice(text string, style noticeStyle) {
 // must not miss: storage-persistence degraded, future hard-fault
 // banners, anything where silent auto-expiry would hide a problem.
 func (m *model) noticePermanent(text string, style noticeStyle) {
-	m.messages = append(m.messages, buildNotice(text, style))
-	m.selectedMsg = len(m.messages) - 1
+	m.Messages = append(m.Messages, buildNotice(text, style))
+	m.selectedMsg = len(m.Messages) - 1
 }
 
 // noticeRow is the (text, style) pair noticeCard consumes — one row
@@ -170,16 +170,16 @@ func (m *model) noticeCard(rows ...noticeRow) {
 	e := time.Now().Add(noticeTTL)
 	for i, r := range rows {
 		n := buildNotice(r.text, r.style)
-		n.group = gid
+		n.Group = gid
 		if i == 0 {
 			n.Time = t
 		} else {
 			n.Time = ""
 		}
-		n.expireAt = &e
-		m.messages = append(m.messages, n)
+		n.ExpireAt = &e
+		m.Messages = append(m.Messages, n)
 	}
-	m.selectedMsg = len(m.messages) - 1
+	m.selectedMsg = len(m.Messages) - 1
 }
 
 // noticeBlock emits a multi-line card — /whois, /config, /env, /ping
@@ -252,10 +252,10 @@ func nextGroupID() uint64 {
 // consume it; keeping the math in one place means a future change
 // to the fade curve touches only here.
 func noticeFadeAlpha(msg messageItem, now time.Time) float64 {
-	if msg.expireAt == nil || msg.pinned {
+	if msg.ExpireAt == nil || msg.Pinned {
 		return 0
 	}
-	remain := msg.expireAt.Sub(now)
+	remain := msg.ExpireAt.Sub(now)
 	if remain <= 0 {
 		return 1
 	}
@@ -300,15 +300,15 @@ func (m *model) reapExpiredNotices() {
 	now := time.Now()
 	expiredGroups := map[uint64]struct{}{}
 	anyExpiredSingle := false
-	for _, msg := range m.messages {
-		if msg.expireAt == nil || msg.pinned {
+	for _, msg := range m.Messages {
+		if msg.ExpireAt == nil || msg.Pinned {
 			continue
 		}
-		if now.Before(*msg.expireAt) {
+		if now.Before(*msg.ExpireAt) {
 			continue
 		}
-		if msg.group != 0 {
-			expiredGroups[msg.group] = struct{}{}
+		if msg.Group != 0 {
+			expiredGroups[msg.Group] = struct{}{}
 		} else {
 			anyExpiredSingle = true
 		}
@@ -316,20 +316,20 @@ func (m *model) reapExpiredNotices() {
 	if len(expiredGroups) == 0 && !anyExpiredSingle {
 		return
 	}
-	out := make([]messageItem, 0, len(m.messages))
-	for _, msg := range m.messages {
-		if msg.group != 0 {
-			if _, drop := expiredGroups[msg.group]; drop {
+	out := make([]messageItem, 0, len(m.Messages))
+	for _, msg := range m.Messages {
+		if msg.Group != 0 {
+			if _, drop := expiredGroups[msg.Group]; drop {
 				continue
 			}
-		} else if msg.expireAt != nil && !msg.pinned && !now.Before(*msg.expireAt) {
+		} else if msg.ExpireAt != nil && !msg.Pinned && !now.Before(*msg.ExpireAt) {
 			continue
 		}
 		out = append(out, msg)
 	}
-	m.messages = out
-	if m.selectedMsg >= len(m.messages) {
-		m.selectedMsg = len(m.messages) - 1
+	m.Messages = out
+	if m.selectedMsg >= len(m.Messages) {
+		m.selectedMsg = len(m.Messages) - 1
 	}
 	if m.selectedMsg < 0 {
 		m.selectedMsg = 0
@@ -343,50 +343,50 @@ func (m *model) reapExpiredNotices() {
 // or for rows without an expireAt stamp (permanent rows are already
 // pinned-by-nature — toggling would be a lie).
 func (m *model) toggleNoticePin(idx int) {
-	if idx < 0 || idx >= len(m.messages) {
+	if idx < 0 || idx >= len(m.Messages) {
 		return
 	}
-	target := m.messages[idx]
-	if target.expireAt == nil {
+	target := m.Messages[idx]
+	if target.ExpireAt == nil {
 		return
 	}
-	nowPin := !target.pinned
+	nowPin := !target.Pinned
 	now := time.Now()
 	apply := func(mi *messageItem) {
 		if nowPin {
-			remain := mi.expireAt.Sub(now)
+			remain := mi.ExpireAt.Sub(now)
 			if remain < 0 {
 				remain = 0
 			}
-			mi.pinnedRemaining = remain
-			mi.pinned = true
+			mi.PinnedRemaining = remain
+			mi.Pinned = true
 		} else {
-			resume := now.Add(mi.pinnedRemaining)
-			mi.expireAt = &resume
-			mi.pinnedRemaining = 0
-			mi.pinned = false
+			resume := now.Add(mi.PinnedRemaining)
+			mi.ExpireAt = &resume
+			mi.PinnedRemaining = 0
+			mi.Pinned = false
 		}
 	}
-	if target.group == 0 {
-		apply(&m.messages[idx])
+	if target.Group == 0 {
+		apply(&m.Messages[idx])
 		return
 	}
-	for i := range m.messages {
-		if m.messages[i].group == target.group {
-			apply(&m.messages[i])
+	for i := range m.Messages {
+		if m.Messages[i].Group == target.Group {
+			apply(&m.Messages[i])
 		}
 	}
 }
 
-// lastEphemeralNoticeIdx walks m.messages backwards and returns the
+// lastEphemeralNoticeIdx walks m.Messages backwards and returns the
 // index of the last row eligible for pinning — a notice that still
 // carries an expireAt stamp. Skips permanent notices (splash,
 // storage) and non-notice chat rows. Returns -1 if nothing is
 // pinnable. `/pin` with no explicit selection uses this to pick
 // "the thing the user most recently ran."
 func (m *model) lastEphemeralNoticeIdx() int {
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		if m.messages[i].expireAt != nil {
+	for i := len(m.Messages) - 1; i >= 0; i-- {
+		if m.Messages[i].ExpireAt != nil {
 			return i
 		}
 	}

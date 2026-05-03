@@ -20,7 +20,7 @@
 
 // Package driver is the headless radio session layer. It wraps the
 // concrete pump (transport ↔ proto bridge) and storage (SQLite
-// persistence) along with a *session.Session value, exposing them
+// persistence) along with a *driver.State value, exposing them
 // through narrow consumer interfaces (Pump, Store) declared in this
 // package per the osapi-io pattern.
 //
@@ -37,41 +37,34 @@ package driver
 
 import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/meshx/session"
 )
 
 // Driver is the per-radio session wrapper — owns Pump (outbound +
-// reconnect), Store (persistence), and a *session.Session
-// (in-memory canonical state). Constructors live in cmd/ where the
-// concrete *pump.Pump and *storage.Sqlite are built; consumers
-// (today's TUI, tomorrow's meshx serve) bind the result to a narrow
-// interface they declare at their own seam.
+// reconnect), Store (persistence), and the canonical *State. The
+// TUI today and the future meshx serve daemon both read State while
+// Driver mutates it through the apply* path.
 type Driver struct {
-	// Sess is the canonical in-memory state — channels, nodes,
+	// State is the canonical in-memory state — channels, nodes,
 	// messages, telemetry, in-flight ping/tr bookkeeping. Shared by
-	// pointer with whatever wires Driver up so the TUI can read state
-	// directly while Driver mutates it.
-	Sess *session.Session
+	// pointer with consumers; Driver is the sole writer.
+	State *State
 
 	// Pump is the outbound + reconnect bridge — Driver.Send forwards
-	// here. Nil in demo mode (no transport).
+	// here. Nil when no transport is attached.
 	Pump Pump
 
-	// Store is the persistence handle — Driver writes received +
-	// outbound messages here. Nil in demo mode (in-memory only).
+	// Store is the persistence handle. Nil = in-memory only.
 	Store Store
 }
 
-// New returns a Driver wired with the given Pump, Store, and
-// pre-built Session. Callers (cmd/'s tui.RunRadio path today, future
-// cmd/serve) construct the concrete *pump.Pump / *storage.Sqlite,
-// build a Session, and hand them all in. Nil Pump or Store is
-// allowed (demo mode runs entirely in-memory).
-func New(s *session.Session, p Pump, st Store) *Driver {
+// New returns a Driver wired with the given Pump, Store, and State.
+// A nil State gets a fresh empty one. A nil Pump or Store is allowed
+// (the daemon serves an empty session until a radio attaches).
+func New(s *State, p Pump, st Store) *Driver {
 	if s == nil {
-		s = session.New()
+		s = NewState()
 	}
-	return &Driver{Sess: s, Pump: p, Store: st}
+	return &Driver{State: s, Pump: p, Store: st}
 }
 
 // Send dispatches an outbound mdl.Command via the Pump. Returns the
@@ -96,14 +89,13 @@ func (d *Driver) Stop() {
 	d.Pump.Stop()
 }
 
-// Session returns the canonical session state. Method (rather than
-// just touching d.Sess) lets consumers depend on a narrow interface
-// at their own seam — see internal/server/driver.go for the server's
-// Driver interface, which uses Session() so a test or future variant
-// can satisfy the seam without the concrete struct.
-func (d *Driver) Session() *session.Session {
+// Session returns the canonical state. Method (rather than direct
+// field access) lets consumers depend on a narrow interface at their
+// own seam — see internal/server/driver.go for the server's Driver
+// interface.
+func (d *Driver) Session() *State {
 	if d == nil {
 		return nil
 	}
-	return d.Sess
+	return d.State
 }

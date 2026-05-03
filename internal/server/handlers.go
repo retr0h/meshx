@@ -22,77 +22,28 @@ package server
 
 import (
 	"context"
-	"time"
+	"sort"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
-// handlers.go — concrete request → driver-state → response logic.
-// One handler per registered route. Each handler is a thin
-// translator: read the relevant slice off Driver.Sess, project
-// it through a wire-safe DTO, return.
-//
-// PSK bytes never appear in any DTO emitted from this file — the
-// model layer carries them for round-tripping share URLs, but the
-// HTTP API redacts them. Future "/channels/{idx}/psk" endpoint
-// (gated by auth) is the supervised exception.
-//
-// NOTE: Channel / Node / Message data lives on the TUI's *model*
-// today — moving those collections onto the Driver's *Session* is
-// the next-MR refactor (the "data wiring" follow-up). Until then,
-// the list-* handlers return empty arrays so the API surface +
-// OpenAPI spec are real and usable; clients see a contract that
-// matches the eventual schema, not a placeholder shape.
+// Handlers translate HTTP requests into driver-state reads. Every
+// per-radio handler resolves {radio_id} → Driver via the Registry,
+// then projects through model types directly — no DTO duplication.
+// JSON tags on model types shape the OpenAPI spec; generated client
+// SDKs deserialize into structurally identical structs.
 
-// Channel is the wire-shape the API emits for a channel slot. Mirrors
-// the future driver state with PSK redacted to a HasPSK bool —
-// clients never see raw key bytes over the network.
-type Channel struct {
-	Index   int    `json:"index" doc:"radio slot 0..7 — stable across reconnects"`
-	Name    string `json:"name" doc:"channel display name; empty for the unnamed primary"`
-	Role    string `json:"role" doc:"PRIMARY | SECONDARY | DISABLED"`
-	HasPSK  bool   `json:"has_psk" doc:"true when this slot is encrypted"`
-	Private bool   `json:"private" doc:"true when the channel uses a non-default PSK"`
+// RadioSummary is one entry in GET /radios.
+type RadioSummary struct {
+	RadioID     string `json:"radio_id"     doc:"canonical radio identifier — 0x<hex node_num> post-handshake, pending:<transport>:<addr> beforehand"`
+	MyNodeNum   uint32 `json:"my_node_num"  doc:"radio's own node num; zero before MyInfo arrives"`
+	Connected   bool   `json:"connected"    doc:"true once ConfigComplete has fired"`
+	ConnectDest string `json:"connect_dest" doc:"transport target string (/dev/cu.*, host:port, ble:<uuid>)"`
 }
 
-// Node is the wire-shape the API emits for a mesh peer. Combines
-// the persisted NodeDB cache fields with the most recent telemetry
-// the driver has seen.
-type Node struct {
-	NodeNum     uint32    `json:"node_num" doc:"radio identity, derived from MAC"`
-	LongName    string    `json:"long_name" doc:"user callsign as set on the radio"`
-	ShortName   string    `json:"short_name" doc:"4-char badge"`
-	HwModel     string    `json:"hw_model" doc:"e.g. T-Beam v1.1, HELTEC_V3"`
-	Firmware    string    `json:"firmware" doc:"firmware version string"`
-	Favorite    bool      `json:"favorite" doc:"user marked this peer with *"`
-	Muted       bool      `json:"muted" doc:"user muted this peer with m"`
-	Unresolved  bool      `json:"unresolved" doc:"identity is a synthesized placeholder; no NodeInfo yet"`
-	State       string    `json:"state" doc:"online | offline | failed | muted | (empty for unknown)"`
-	LastSNR     string    `json:"last_snr" doc:"most recent SNR (dB), e.g. -8.5"`
-	LastRSSI    string    `json:"last_rssi" doc:"most recent RSSI (dBm), e.g. -92"`
-	LastHops    int       `json:"last_hops" doc:"hop count of last received packet (0 = direct)"`
-	LastHeardAt time.Time `json:"last_heard_at" doc:"absolute time of last decoded packet from this peer"`
-}
-
-// Message is the wire-shape for a chat row.
-type Message struct {
-	PacketID  uint32    `json:"packet_id" doc:"MeshPacket.id; 0 for system / demo rows"`
-	From      string    `json:"from" doc:"sender callsign at receive time"`
-	FromNum   uint32    `json:"from_num" doc:"sender node num"`
-	ToNum     uint32    `json:"to_num" doc:"addressee node num; 0xFFFFFFFF = broadcast"`
-	Text      string    `json:"text" doc:"message body, post-sanitization"`
-	Time      string    `json:"time" doc:"display timestamp like '09:47'"`
-	SentAt    time.Time `json:"sent_at" doc:"absolute time of receive / persist"`
-	Status    string    `json:"status" doc:"ok | ack | pending | fail | system | notice"`
-	Mine      bool      `json:"mine" doc:"true when local user composed this row"`
-	Bang      string    `json:"bang,omitempty" doc:"leading verb for ham-bang messages"`
-	Hops      int       `json:"hops" doc:"mesh hop count; 0 = direct"`
-	SNR       string    `json:"snr,omitempty" doc:"signal-to-noise ratio at receive"`
-	ReplyID   uint32    `json:"reply_id,omitempty" doc:"PacketID this message answers"`
-	Corrupted bool      `json:"corrupted,omitempty" doc:"sanitization replaced/dropped bytes"`
-}
-
-// SessionSnapshot is the wire-shape for the GET /session response —
-// identity, connection status, telemetry highlights pulled directly
-// from driver.Sess.
+// SessionSnapshot is the GET /radios/{radio_id} response.
 type SessionSnapshot struct {
 	RadioID        string  `json:"radio_id"`
 	MyNodeNum      uint32  `json:"my_node_num"`
@@ -113,9 +64,38 @@ type SessionSnapshot struct {
 	MyGrid         string  `json:"my_grid,omitempty"`
 }
 
-// ----------------------------------------------------------------------
-// Handlers
-// ----------------------------------------------------------------------
+// SendMessageRequest is the inbound POST body for sending text.
+type SendMessageRequest struct {
+	Channel int    `json:"channel"            doc:"target channel slot index (0..7); the current channel's slot is the default"`
+	Text    string `json:"text"               doc:"message body"                                                                minLength:"1"`
+	ReplyID uint32 `json:"reply_id,omitempty" doc:"PacketID this message replies to"`
+}
+
+// SendMessageResponse echoes the allocated PacketID so clients can
+// correlate with ack / fail events on the SSE stream.
+type SendMessageResponse struct {
+	PacketID uint32 `json:"packet_id" doc:"MeshPacket.id allocated by the radio (zero if pump rejected the send)"`
+	OK       bool   `json:"ok"        doc:"false when the pump's outbound buffer was full or no radio is attached"`
+}
+
+// radioIDPath is embedded in every per-radio handler input so the
+// {radio_id} path param is parsed by Huma once.
+type radioIDPath struct {
+	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios for the list"`
+}
+
+// resolveRadio looks up the Driver for an inbound {radio_id} and
+// returns 404 when the radio isn't registered.
+func (s *Server) resolveRadio(radioID string) (Driver, error) {
+	if s == nil || s.radios == nil {
+		return nil, huma.Error503ServiceUnavailable("registry uninitialized")
+	}
+	d, ok := s.radios.Get(radioID)
+	if !ok {
+		return nil, huma.Error404NotFound("radio not registered: " + radioID)
+	}
+	return d, nil
+}
 
 type healthInput struct{}
 
@@ -131,87 +111,225 @@ func (s *Server) handleHealth(_ context.Context, _ *healthInput) (*healthOutput,
 	return out, nil
 }
 
-type sessionInput struct{}
+type listRadiosInput struct{}
 
-type sessionOutput struct {
+type listRadiosOutput struct {
+	Body struct {
+		Radios []RadioSummary `json:"radios"`
+	}
+}
+
+func (s *Server) handleListRadios(
+	_ context.Context,
+	_ *listRadiosInput,
+) (*listRadiosOutput, error) {
+	out := &listRadiosOutput{}
+	out.Body.Radios = []RadioSummary{}
+	if s.radios == nil {
+		return out, nil
+	}
+	ids := s.radios.IDs()
+	sort.Strings(ids)
+	for _, id := range ids {
+		d, ok := s.radios.Get(id)
+		if !ok {
+			continue
+		}
+		st := d.Session()
+		if st == nil {
+			out.Body.Radios = append(out.Body.Radios, RadioSummary{RadioID: id})
+			continue
+		}
+		out.Body.Radios = append(out.Body.Radios, RadioSummary{
+			RadioID:     id,
+			MyNodeNum:   st.MyNodeNum,
+			Connected:   st.Connected,
+			ConnectDest: st.ConnectDest,
+		})
+	}
+	return out, nil
+}
+
+type getRadioInput struct {
+	radioIDPath
+}
+
+type getRadioOutput struct {
 	Body SessionSnapshot
 }
 
-func (s *Server) handleSession(_ context.Context, _ *sessionInput) (*sessionOutput, error) {
-	out := &sessionOutput{}
-	if s.drv == nil || s.drv.Session() == nil {
+func (s *Server) handleGetRadio(_ context.Context, in *getRadioInput) (*getRadioOutput, error) {
+	d, err := s.resolveRadio(in.RadioID)
+	if err != nil {
+		return nil, err
+	}
+	out := &getRadioOutput{}
+	st := d.Session()
+	if st == nil {
 		return out, nil
 	}
-	sess := s.drv.Session()
 	out.Body = SessionSnapshot{
-		RadioID:        sess.RadioID,
-		MyNodeNum:      sess.MyNodeNum,
-		Connected:      sess.Connected,
-		CurrentChannel: sess.CurrentChannel,
-		ConnectDest:    sess.ConnectDest,
-		RadioFirmware:  sess.RadioFirmware,
-		RadioRegion:    sess.RadioRegion,
-		RadioModem:     sess.RadioModemPreset,
-		RadioRole:      sess.RadioRole,
-		BatteryLevel:   sess.BatteryLevel,
-		BatteryVoltage: sess.BatteryVoltage,
-		ChannelUtil:    sess.ChannelUtil,
-		AirUtilTx:      sess.AirUtilTx,
-		MyLatitude:     sess.MyLatitude,
-		MyLongitude:    sess.MyLongitude,
-		MyAltitude:     sess.MyAltitude,
-		MyGrid:         sess.MyGrid,
+		RadioID:        st.RadioID,
+		MyNodeNum:      st.MyNodeNum,
+		Connected:      st.Connected,
+		CurrentChannel: st.CurrentChannel,
+		ConnectDest:    st.ConnectDest,
+		RadioFirmware:  st.RadioFirmware,
+		RadioRegion:    st.RadioRegion,
+		RadioModem:     st.RadioModemPreset,
+		RadioRole:      st.RadioRole,
+		BatteryLevel:   st.BatteryLevel,
+		BatteryVoltage: st.BatteryVoltage,
+		ChannelUtil:    st.ChannelUtil,
+		AirUtilTx:      st.AirUtilTx,
+		MyLatitude:     st.MyLatitude,
+		MyLongitude:    st.MyLongitude,
+		MyAltitude:     st.MyAltitude,
+		MyGrid:         st.MyGrid,
 	}
 	return out, nil
 }
 
-type listChannelsInput struct{}
+type listChannelsInput struct {
+	radioIDPath
+}
 
 type listChannelsOutput struct {
 	Body struct {
-		Channels []Channel `json:"channels"`
+		Channels []mdl.ChannelItem `json:"channels"`
 	}
 }
 
-func (s *Server) handleListChannels(_ context.Context, _ *listChannelsInput) (*listChannelsOutput, error) {
+func (s *Server) handleListChannels(
+	_ context.Context,
+	in *listChannelsInput,
+) (*listChannelsOutput, error) {
+	d, err := s.resolveRadio(in.RadioID)
+	if err != nil {
+		return nil, err
+	}
 	out := &listChannelsOutput{}
-	// TODO(MR-data-wiring): channels currently live on the TUI's
-	// model.channels slice — moving them onto driver.Sess (or a new
-	// driver.State) is the next refactor. Until then, return [].
-	out.Body.Channels = []Channel{}
+	out.Body.Channels = []mdl.ChannelItem{}
+	st := d.Session()
+	if st == nil {
+		return out, nil
+	}
+	for _, c := range st.Channels {
+		c.HasPSK = len(c.PSK) > 0
+		c.PSK = nil
+		out.Body.Channels = append(out.Body.Channels, c)
+	}
 	return out, nil
 }
 
-type listNodesInput struct{}
+type listNodesInput struct {
+	radioIDPath
+}
 
 type listNodesOutput struct {
 	Body struct {
-		Nodes []Node `json:"nodes"`
+		Nodes []mdl.NodeItem `json:"nodes"`
 	}
 }
 
-func (s *Server) handleListNodes(_ context.Context, _ *listNodesInput) (*listNodesOutput, error) {
+func (s *Server) handleListNodes(_ context.Context, in *listNodesInput) (*listNodesOutput, error) {
+	d, err := s.resolveRadio(in.RadioID)
+	if err != nil {
+		return nil, err
+	}
 	out := &listNodesOutput{}
-	// TODO(MR-data-wiring): nodes currently live on the TUI's
-	// model.nodes slice; same migration as channels.
-	out.Body.Nodes = []Node{}
+	out.Body.Nodes = []mdl.NodeItem{}
+	st := d.Session()
+	if st == nil {
+		return out, nil
+	}
+	for i := range st.Nodes {
+		n := st.Nodes[i]
+		n.State = n.CurrentState()
+		out.Body.Nodes = append(out.Body.Nodes, n)
+	}
 	return out, nil
 }
 
 type listMessagesInput struct {
+	radioIDPath
 	Limit int `query:"limit" doc:"max rows to return; 0 = no limit" default:"0"`
 }
 
 type listMessagesOutput struct {
 	Body struct {
-		Messages []Message `json:"messages"`
+		Messages []mdl.MessageItem `json:"messages"`
 	}
 }
 
-func (s *Server) handleListMessages(_ context.Context, _ *listMessagesInput) (*listMessagesOutput, error) {
+func (s *Server) handleListMessages(
+	_ context.Context,
+	in *listMessagesInput,
+) (*listMessagesOutput, error) {
+	d, err := s.resolveRadio(in.RadioID)
+	if err != nil {
+		return nil, err
+	}
 	out := &listMessagesOutput{}
-	// TODO(MR-data-wiring): messages currently live on the TUI's
-	// model.messages slice; same migration as channels.
-	out.Body.Messages = []Message{}
+	out.Body.Messages = []mdl.MessageItem{}
+	st := d.Session()
+	if st == nil {
+		return out, nil
+	}
+	msgs := st.Messages
+	if in.Limit > 0 && len(msgs) > in.Limit {
+		msgs = msgs[len(msgs)-in.Limit:]
+	}
+	out.Body.Messages = append(out.Body.Messages, msgs...)
 	return out, nil
+}
+
+type sendMessageInput struct {
+	radioIDPath
+	Body SendMessageRequest
+}
+
+type sendMessageOutput struct {
+	Body SendMessageResponse
+}
+
+func (s *Server) handleSendMessage(
+	_ context.Context,
+	in *sendMessageInput,
+) (*sendMessageOutput, error) {
+	d, err := s.resolveRadio(in.RadioID)
+	if err != nil {
+		return nil, err
+	}
+	pid, ok := d.Send(mdl.SendText{
+		Channel: in.Body.Channel,
+		Text:    in.Body.Text,
+		ReplyID: in.Body.ReplyID,
+	})
+	out := &sendMessageOutput{}
+	out.Body = SendMessageResponse{PacketID: pid, OK: ok}
+	return out, nil
+}
+
+type eventsInput struct {
+	radioIDPath
+}
+
+// eventsOutput is a placeholder for SSE — Huma's streaming SSE
+// support uses huma.SSE for the registration shape, which the
+// driver-side broadcast hookup will adopt once apply* handlers emit
+// the canonical event union onto a per-driver channel.
+type eventsOutput struct {
+	Body struct {
+		Status string `json:"status"`
+	}
+}
+
+func (s *Server) handleEvents(_ context.Context, in *eventsInput) (*eventsOutput, error) {
+	if _, err := s.resolveRadio(in.RadioID); err != nil {
+		return nil, err
+	}
+	return nil, huma.Error501NotImplemented(
+		"SSE event stream not yet wired — driver-side broadcast lands with apply* relocation",
+	)
 }

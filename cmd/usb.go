@@ -74,6 +74,6 @@ var usbConnectCmd = &cobra.Command{
 
 func init() {
 	usbCmd.AddCommand(usbConnectCmd)
-	usbCmd.AddCommand(probeCmd) // moved from the top level — see probe.go
+	usbCmd.AddCommand(probeCmd)
 	rootCmd.AddCommand(usbCmd)
 }

@@ -44,31 +44,33 @@ meshx/
 ├── main.go                       # 7-line entry → cmd.Execute()
 ├── cmd/
 │   ├── root.go                   # cobra root + auto-connect fallback chain
-│   ├── demo.go                   # `meshx demo` — canned-fixture UI
 │   ├── usb.go                    # `meshx usb {probe,connect}`
-│   ├── probe.go                  # body of `meshx usb probe`
+│   ├── usb_probe.go              # `meshx usb probe` — USB diagnostic packet dump
 │   ├── tcp.go                    # `meshx tcp connect`
 │   ├── ble.go                    # `meshx ble {scan,pair,list,forget,connect,disconnect,fav}`
 │   ├── ble_probe.go              # `meshx ble probe` — diagnostic packet dump
-│   └── serve.go                  # `meshx serve` — headless HTTP+SSE daemon (declares daemonRunner consumer interface)
+│   ├── serve.go                  # `meshx serve` parent command
+│   └── serve_start.go            # `meshx serve start` — headless HTTP+SSE daemon (declares daemonRunner consumer interface)
 ├── internal/meshx/               # public-API shell — BLE CLI helpers + RunBLE / AutoConnectTarget
 │   └── ble.go                    # BLEScan / BLEPair / BLEListDevices / BLEForget / BLEMarkFavorite / BLESetFavorite / RunBLE / AutoConnectTarget (declares its own narrow bleStore consumer interface)
-├── internal/driver/              # headless radio session layer — wraps Pump + Store + *session.Session
-│   ├── driver.go                 # *driver.Driver type + New(s, pump, store) + Send / Stop / Session
+├── internal/driver/              # headless radio session layer — owns canonical State, wraps Pump + Store
+│   ├── driver.go                 # *driver.Driver type + New(state, pump, store) + Send / Stop / Session
+│   ├── state.go                  # *driver.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests, reconnect banner
 │   ├── pump.go                   # consumer interface (Pump) for internal/meshx/pump
 │   └── store.go                  # consumer interface (Store) for internal/meshx/storage
-├── internal/server/              # HTTP+SSE daemon (Huma framework) — middleman between driver + clients
-│   ├── server.go                 # *server.Server type + New(Driver) + Run(ctx, addr); declares Driver consumer interface (driver.go)
-│   ├── driver.go                 # consumer interface (Driver) declared at the consumer seam — concrete *driver.Driver satisfies it via Session() + Send()
-│   ├── routes.go                 # huma.Register calls — operationIDs become OpenAPI / generated-client method names
-│   └── handlers.go               # request/response DTOs + per-route handlers; Channel / Node / Message DTOs redact PSK
+├── internal/server/              # HTTP+SSE daemon (Huma framework) — middleman between driver + clients; multi-radio aware via Registry
+│   ├── server.go                 # *server.Server type + New(Registry) + Run(ctx, addr) + Drivers()
+│   ├── registry.go               # *server.Registry — radio_id → Driver multiplex, mutex-guarded for concurrent HTTP handlers
+│   ├── driver.go                 # consumer interface (Driver) at the seam — concrete *driver.Driver satisfies via Session() + Send()
+│   ├── routes.go                 # huma.Register calls — every radio-scoped resource lives under /radios/{radio_id}/...
+│   └── handlers.go               # per-route handlers; channels/nodes/messages emit model types directly (single source of truth, no DTO duplication)
 ├── internal/tui/                 # Bubble Tea rendering surface (model dispatches apply* directly today)
 │   #                             # GAP: TUI consumes *driver.Driver concretely (m.driver.Pump.Send, m.driver.Store.SaveMessage,
 │   #                             # m.driver.Pump = p). Should declare a narrow consumer interface per osapi-io once apply*
 │   #                             # handlers + outbound dispatch land as methods on driver.Driver — then TUI calls go through
 │   #                             # the interface (Send / SaveMessage / Subscribe) and a remote-driver-over-HTTP variant can
 │   #                             # satisfy the same seam for the (α) "TUI-as-HTTP-client" mode.
-│   ├── app.go                    # model + View() + Update wiring + RunDemo / RunRadio (model holds *driver.Driver)
+│   ├── app.go                    # model + View() + Update wiring + RunRadio (model holds *driver.Driver)
 │   ├── ui.go                     # View dispatcher, model getters, generic utils
 │   ├── commands.go               # /command dispatcher + ham bangs
 │   ├── input.go                  # key bindings, nav mode, tab completion entry
@@ -90,21 +92,19 @@ meshx/
 │   ├── radio.go                  # apply* handlers (mdl.Text, mdl.NodeInfo, mdl.Routing, …) — moves to Driver pkg in MR-3.5b
 │   ├── geo.go                    # haversineKm / bearingDeg / compassAbbr math
 │   ├── help.go                   # /help entry data
-│   ├── qr.go                     # ASCII QR rendering for /channel share
-│   └── fixture.go                # Demo struct + DefaultDemo()
+│   └── qr.go                     # ASCII QR rendering for /channel share
 ├── internal/version/             # build identity (Version / Commit / Date / BuiltBy + BuildInfo)
 │   └── version.go                # consumed by cmd/version.go and tui /version slash command
-├── internal/meshx/               # (sub-packages — see model/, pump/, session/, storage/, transport/)
+├── internal/meshx/               # sub-packages — see model/, pump/, storage/, transport/
 │   ├── model/                    # canonical wire/persisted shapes — the lingua franca
-│   │   ├── message.go            # Message + MessageStatus enum
+│   │   ├── message.go            # Message + MessageStatus enum (JSON-tagged for HTTP API)
+│   │   ├── items.go              # ChannelItem + NodeItem + MessageItem — the API + storage canonical row types
 │   │   ├── node.go               # CachedNode (NodeDB cache row)
 │   │   ├── ble.go                # BLEDevice (BLE pairing row)
 │   │   ├── events.go             # pump-emitted events: Text, NodeInfo, Position, Ping, Routing, …
 │   │   ├── commands.go           # consumer-issued outbound: SendText, SetOwner, SetBuzzer, RequestSync, …
 │   │   ├── config.go             # modeled radio configs (ExternalNotification today; Owner / LoRa / Device next)
-│   │   └── enums.go              # Region, ModemPreset, DeviceRole, ChannelRole, RoutingError typed strings
-│   ├── session/                  # canonical per-radio session state — no Bubble Tea import
-│   │   └── session.go            # Session struct + PendingPing/Traceroute, PeerPosition/EnvMetrics, ReconnectState
+│   │   └── enums.go              # Region, ModemPreset, DeviceRole, ChannelRole, RoutingError, NodeState
 │   ├── pump/                     # transport ↔ tea bridge (concrete *pump.Pump)
 │   │   ├── pump.go               # New / Stop + run loop with reconnect policy
 │   │   ├── transport.go          # consumer interface (Transport) for the transport package — twin of meshx/pump.go and meshx/store.go
@@ -131,7 +131,6 @@ meshx/
 
 ### Public API
 
-- `meshx.RunDemo()` — launch the TUI with the canned Demo fixture.
 - `meshx.RunRadio(dest)` — launch the TUI against a serial device path
   (`/dev/cu.usbserial-…`), a TCP endpoint (`host:port`), or a Bluetooth
   peripheral via the `ble:<uuid>` prefix. `transport.Dial` routes on

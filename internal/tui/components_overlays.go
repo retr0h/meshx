@@ -306,7 +306,7 @@ type nodePresentation struct {
 // renders a peer cell stays in lockstep — same sigil for "online"
 // everywhere, no drift across overlays.
 func nodePresentationFor(n nodeItem, isSelf, isSelected bool) nodePresentation {
-	state := n.currentState()
+	state := n.CurrentState()
 	p := nodePresentation{
 		Sigil:        " ",
 		SigilColor:   mhDrained,
@@ -330,7 +330,7 @@ func nodePresentationFor(n nodeItem, isSelf, isSelected bool) nodePresentation {
 		p.SigilColor = mhDrained
 		p.NameColor = mhDrained
 	}
-	if n.fav {
+	if n.Fav {
 		p.Sigil = "+"
 		p.SigilColor = mhYellow
 		p.NameColor = mhYellow
@@ -367,16 +367,16 @@ func peerRowLine(
 ) string {
 	pres := nodePresentationFor(n, isSelf, isSelected)
 	bg := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
-	state := n.currentState()
+	state := n.CurrentState()
 	sigil := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(pres.SigilColor)).
 		Background(lipgloss.Color(rowBg)).
-		Bold(state == stateOnline || n.fav || isSelf).
+		Bold(state == stateOnline || n.Fav || isSelf).
 		Render(pres.Sigil)
 	name := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(pres.NameColor)).
 		Background(lipgloss.Color(rowBg)).
-		Render(padOrTruncate(n.callsign, 22))
+		Render(padOrTruncate(n.Callsign, 22))
 	dim := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
 		Background(lipgloss.Color(rowBg))
@@ -527,9 +527,9 @@ func userCellLine(n nodeItem, isSelf, isSelected bool, cellW int) string {
 	if pres.Bold {
 		nameStyle = nameStyle.Bold(true)
 	}
-	display := n.callsign
-	if n.shortName != "" {
-		display = n.shortName + " " + n.callsign
+	display := n.Callsign
+	if n.ShortName != "" {
+		display = n.ShortName + " " + n.Callsign
 	}
 	cells := []Cell{
 		{Content: bracket.Render("["), Width: 1},

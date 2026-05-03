@@ -59,18 +59,13 @@ With --port <path>, runs the full config handshake against that
 device and dumps every FromRadio packet for the --timeout duration
 — a deep diagnostic for framing / protocol debugging.`,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		// --port provided → full-dump mode against that one device.
 		if probePort != "" {
 			return probeDeepDump(probePort)
 		}
-		// Default: scan + identify.
 		return probeScanAndIdentify()
 	},
 }
 
-// probeScanAndIdentify runs a short identification probe against
-// every candidate serial port and prints a labelled table. No deep
-// dump, no UI.
 func probeScanAndIdentify() error {
 	fmt.Fprintln(os.Stderr, "scanning USB-serial ports for Meshtastic radios…")
 	infos, err := transport.IdentifyAllSerial(probeIDTO)
@@ -137,8 +132,6 @@ func probeScanAndIdentify() error {
 	return nil
 }
 
-// probeDeepDump connects to a specific port and prints every
-// FromRadio packet for --timeout. Debug only.
 func probeDeepDump(dest string) error {
 	fmt.Fprintf(os.Stderr, "probe: connecting to %s\n", dest)
 
@@ -245,8 +238,4 @@ func init() {
 		&probeDump, "dump", false,
 		"With --port, dump each FromRadio packet (default: show summary on completion).",
 	)
-	// probe is registered as a child of `usb` (see usb.go) — this
-	// file only defines the command itself. Keeping the flag wiring
-	// here matches every other cobra command's split between
-	// declaration and registration.
 }

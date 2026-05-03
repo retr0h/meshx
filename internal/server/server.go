@@ -54,32 +54,35 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 )
 
-// Server bundles the HTTP listener with the Driver it wraps. One
-// Server per Driver — the Driver's *session.Session is the single
-// canonical state both reads and SSE pushes derive from. Concrete
-// listener / mux / api types are unexported so callers go through
-// New + Run, never poke the http.Server directly. The drv field
-// holds the narrow Driver interface declared in driver.go (osapi-io
-// consumer seam), not the concrete *internal/driver.Driver.
+// Server bundles the HTTP listener with the Registry of radios it
+// multiplexes across. Routes live under /radios/{radio_id}/… so one
+// daemon process can host multiple radios (HT + mobile + base, etc.)
+// and clients address each by its canonical RadioID. Concrete
+// listener / mux / api / registry types are unexported so callers
+// go through New + Run + Drivers, never poke them directly.
 type Server struct {
-	drv  Driver
-	http *http.Server
-	api  huma.API
+	radios *Registry
+	http   *http.Server
+	api    huma.API
 }
 
-// New wires a Server around the given Driver. The Driver must be
-// constructed by the caller (cmd/serve, future cmd/standalone) —
-// this constructor only registers Huma routes against an http.Mux.
-// Run starts the listener.
-func New(drv Driver) *Server {
+// New wires a Server around the given Registry. The Registry must
+// be constructed and (optionally) pre-populated by the caller;
+// drivers can also attach later via Drivers().Add(...) — the
+// /radios endpoints reflect the live registry state, no restart
+// required when a radio joins or leaves.
+func New(radios *Registry) *Server {
+	if radios == nil {
+		radios = NewRegistry()
+	}
 	mux := http.NewServeMux()
 	cfg := huma.DefaultConfig("meshx", "0.1.0")
-	cfg.Info.Description = "meshx mesh-radio HTTP API — channels, nodes, messages, and live events from a Meshtastic-compatible LoRa radio."
+	cfg.Info.Description = "meshx mesh-radio HTTP API — channels, nodes, messages, and live events from one or more Meshtastic-compatible LoRa radios. Every radio-scoped resource is addressed under /radios/{radio_id}/…"
 	api := humago.New(mux, cfg)
 
 	s := &Server{
-		drv: drv,
-		api: api,
+		radios: radios,
+		api:    api,
 		http: &http.Server{
 			Handler: mux,
 			// ReadHeaderTimeout protects against slowloris-style attacks;
@@ -90,6 +93,17 @@ func New(drv Driver) *Server {
 	}
 	s.registerRoutes()
 	return s
+}
+
+// Drivers exposes the underlying Registry so callers can attach /
+// detach radios after construction. The cmd/serve startup path uses
+// this to register one Driver per --radio flag; a future hot-attach
+// HTTP endpoint will use the same surface.
+func (s *Server) Drivers() *Registry {
+	if s == nil {
+		return nil
+	}
+	return s.radios
 }
 
 // Run starts the HTTP listener on addr and blocks until ctx is

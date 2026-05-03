@@ -21,8 +21,8 @@
 package server
 
 import (
+	"github.com/retr0h/meshx/internal/driver"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/meshx/session"
 )
 
 // driver.go — the narrow Driver interface this package consumes,
@@ -47,7 +47,7 @@ type Driver interface {
 	// Nil-safe — handlers must check before dereferencing (an
 	// uninitialized daemon, or a /healthz hit before the radio
 	// attaches, gives nil here).
-	Session() *session.Session
+	Session() *driver.State
 
 	// Send dispatches an outbound mdl.Command via the underlying
 	// pump. Returns the allocated MeshPacket.id (zero for

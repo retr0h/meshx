@@ -76,16 +76,16 @@ func (m model) View() string {
 	return out
 }
 
-// findMessageByPacketID returns a pointer to the m.messages entry
+// findMessageByPacketID returns a pointer to the m.Messages entry
 // whose packetID matches, or nil. Used by the renderer to resolve
 // reply_id → parent message for threaded quote rendering.
 func (m model) findMessageByPacketID(id uint32) *messageItem {
 	if id == 0 {
 		return nil
 	}
-	for i := range m.messages {
-		if m.messages[i].PacketID == id {
-			return &m.messages[i]
+	for i := range m.Messages {
+		if m.Messages[i].PacketID == id {
+			return &m.Messages[i]
 		}
 	}
 	return nil
@@ -114,10 +114,10 @@ func (m model) senderUnresolved(msg messageItem) bool {
 		return false
 	}
 	idx, ok := m.NodesByNum[msg.FromNum]
-	if !ok || idx < 0 || idx >= len(m.nodes) {
+	if !ok || idx < 0 || idx >= len(m.Nodes) {
 		return false
 	}
-	return m.nodes[idx].unresolved
+	return m.Nodes[idx].Unresolved
 }
 
 func (m model) displayFrom(msg messageItem) string {
@@ -130,8 +130,8 @@ func (m model) displayFrom(msg messageItem) string {
 	if msg.FromNum == 0 {
 		return msg.From
 	}
-	if idx, ok := m.NodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
-		if cs := m.nodes[idx].callsign; cs != "" {
+	if idx, ok := m.NodesByNum[msg.FromNum]; ok && idx < len(m.Nodes) {
+		if cs := m.Nodes[idx].Callsign; cs != "" {
 			return cs
 		}
 	}

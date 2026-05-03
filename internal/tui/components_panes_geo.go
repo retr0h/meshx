@@ -69,7 +69,7 @@ func sortPlotsByDistance(plots []peerPlot) {
 		if plots[i].distKm != plots[j].distKm {
 			return plots[i].distKm < plots[j].distKm
 		}
-		return plots[i].node.nodeNum < plots[j].node.nodeNum
+		return plots[i].node.NodeNum < plots[j].node.NodeNum
 	})
 }
 
@@ -102,18 +102,18 @@ func (m model) selfPlot() *peerPlot {
 		return nil
 	}
 	idx, ok := m.NodesByNum[m.MyNodeNum]
-	if !ok || idx >= len(m.nodes) {
+	if !ok || idx >= len(m.Nodes) {
 		return nil
 	}
 	return &peerPlot{
-		node:     &m.nodes[idx],
+		node:     &m.Nodes[idx],
 		distKm:   0,
 		bearing:  0,
 		directRF: true,
 	}
 }
 
-// collectPeerPlots walks m.nodes + m.PeerPositions and returns a
+// collectPeerPlots walks m.Nodes + m.PeerPositions and returns a
 // plot entry for every peer we have BOTH a position fix AND a
 // nodeItem for. Skips self (m.MyNodeNum) since the two peer-surface
 // overlays each handle self explicitly — /nearby via
@@ -126,19 +126,19 @@ func (m model) collectPeerPlots() []peerPlot {
 			continue
 		}
 		idx, ok := m.NodesByNum[num]
-		if !ok || idx >= len(m.nodes) {
+		if !ok || idx >= len(m.Nodes) {
 			continue
 		}
 		km := haversineKm(m.MyLatitude, m.MyLongitude, pos.Latitude, pos.Longitude)
 		if km <= 0 {
 			continue
 		}
-		n := &m.nodes[idx]
+		n := &m.Nodes[idx]
 		plots = append(plots, peerPlot{
 			node:     n,
 			distKm:   km,
 			bearing:  bearingDeg(m.MyLatitude, m.MyLongitude, pos.Latitude, pos.Longitude),
-			directRF: n.lastHops <= 1,
+			directRF: n.LastHops <= 1,
 		})
 	}
 	return plots
@@ -268,7 +268,7 @@ func (p nearbyPane) Render(box Box) string {
 		if isSel {
 			rowBg = selectionRowBg
 		}
-		isSelf := m.MyNodeNum != 0 && p.node.nodeNum == m.MyNodeNum
+		isSelf := m.MyNodeNum != 0 && p.node.NodeNum == m.MyNodeNum
 
 		// Distance bar + dist + bearing columns are domain rendering
 		// (numbers + scale), not peer-state styling. distanceBarCell /
@@ -473,7 +473,7 @@ func (p radarPane) Render(box Box) string {
 		for i := 0; i < n; i++ {
 			p := plots[i]
 			legend = append(legend, radarPeerLine(
-				p.node.callsign, compassAbbr(p.bearing),
+				p.node.Callsign, compassAbbr(p.bearing),
 				p.bearing, p.distKm,
 			))
 		}

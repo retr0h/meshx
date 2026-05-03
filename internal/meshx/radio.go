@@ -418,7 +418,7 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 // that's terminal-side, not a meshx issue.
 func ringTerminalBellCmd() tea.Cmd {
 	return func() tea.Msg {
-		fmt.Fprint(os.Stdout, "\a")
+		_, _ = fmt.Fprint(os.Stdout, "\a")
 		return nil
 	}
 }

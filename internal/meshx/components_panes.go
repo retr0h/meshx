@@ -40,7 +40,7 @@ func (p channelsPane) Render(box Box) string {
 	for i, c := range m.channels {
 		// Skip DISABLED slots — applyChannel keeps them in the slice
 		// for slot allocation but they're not real channels to display.
-		if c.role == "DISABLED" {
+		if c.role == roleDisabled {
 			continue
 		}
 		selected := i == m.selectedCh && m.focused == paneChannels

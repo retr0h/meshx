@@ -330,7 +330,7 @@ func (c channelTabsRow) Render(box Box) string {
 		// applyChannel keeps DISABLED slots in the slice so /channel
 		// new can find a free index — skip them for display so empty
 		// slots don't clutter the tab strip.
-		if ch.role == "DISABLED" {
+		if ch.role == roleDisabled {
 			continue
 		}
 		tabs = append(tabs, channelTabCell(

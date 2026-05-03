@@ -647,12 +647,21 @@ func (p *pump) translate(msg *pb.FromRadio) []tea.Msg {
 
 	case *pb.FromRadio_Channel:
 		s := v.Channel.GetSettings()
+		// Defensive copy: GetPsk() returns the proto's underlying byte
+		// slice without a copy. Aliasing that across the goroutine
+		// boundary into a tea.Msg means a future caller of Reset() on
+		// the proto (or any pooling gomesh adds later) could mutate
+		// our channelItem.psk in place. Cheap to copy 16-32 bytes.
+		var pskCopy []byte
+		if psk := s.GetPsk(); len(psk) > 0 {
+			pskCopy = append([]byte(nil), psk...)
+		}
 		return []tea.Msg{radioChannelMsg{
 			index:  int(v.Channel.GetIndex()),
 			name:   s.GetName(),
 			role:   v.Channel.GetRole().String(),
-			hasPSK: len(s.GetPsk()) > 0,
-			psk:    s.GetPsk(),
+			hasPSK: len(pskCopy) > 0,
+			psk:    pskCopy,
 		}}
 
 	case *pb.FromRadio_Packet:

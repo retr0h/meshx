@@ -80,14 +80,6 @@ func parseChannelShareURL(raw string) (*pb.ChannelSet, error) {
 	}
 	frag := u.Fragment
 	if frag == "" {
-		// url.Parse moves anything after `#` into Fragment, but some
-		// terminals chop the fragment when the user paste-deletes the
-		// `?` query separator. Try the path tail too.
-		if i := strings.LastIndex(raw, "#"); i >= 0 {
-			frag = raw[i+1:]
-		}
-	}
-	if frag == "" {
 		return nil, errors.New("url has no payload after #")
 	}
 	// Strip optional `?add=true` (or any trailing query) — the channel
@@ -96,19 +88,17 @@ func parseChannelShareURL(raw string) (*pb.ChannelSet, error) {
 		frag = frag[:i]
 	}
 	// Meshtastic uses URL-safe base64 *without padding*, matching the
-	// canonical Python implementation's `urlsafe_b64encode().rstrip("=")`.
-	bytes, err := base64.RawURLEncoding.DecodeString(frag)
+	// canonical Python `urlsafe_b64encode().rstrip("=")`. Be lenient if
+	// a sender included padding by stripping `=` then running the
+	// unpadded decoder once — single error path, no codec confusion in
+	// the wrapped message.
+	frag = strings.TrimRight(frag, "=")
+	payload, err := base64.RawURLEncoding.DecodeString(frag)
 	if err != nil {
-		// Be lenient: some senders include padding; try the padded
-		// decoder before giving up.
-		bytes2, err2 := base64.URLEncoding.DecodeString(frag)
-		if err2 != nil {
-			return nil, fmt.Errorf("base64 decode: %w", err)
-		}
-		bytes = bytes2
+		return nil, fmt.Errorf("base64 decode: %w", err)
 	}
 	cs := &pb.ChannelSet{}
-	if err := proto.Unmarshal(bytes, cs); err != nil {
+	if err := proto.Unmarshal(payload, cs); err != nil {
 		return nil, fmt.Errorf("unmarshal ChannelSet: %w", err)
 	}
 	if len(cs.GetSettings()) == 0 {
@@ -130,9 +120,9 @@ func buildChannelShareURL(s *pb.ChannelSettings, loraConfig *pb.Config_LoRaConfi
 		Settings:   []*pb.ChannelSettings{s},
 		LoraConfig: loraConfig,
 	}
-	bytes, err := proto.Marshal(cs)
+	raw, err := proto.Marshal(cs)
 	if err != nil {
 		return "", fmt.Errorf("marshal ChannelSet: %w", err)
 	}
-	return channelShareURLPrefix + base64.RawURLEncoding.EncodeToString(bytes), nil
+	return channelShareURLPrefix + base64.RawURLEncoding.EncodeToString(raw), nil
 }

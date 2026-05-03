@@ -7,7 +7,7 @@
 // every other Component obeys, so the radar pane composes into the
 // View tree like any other surface — no special casing.
 
-package meshx
+package tui
 
 import (
 	"fmt"

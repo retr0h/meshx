@@ -10,7 +10,7 @@
 // /nearby and /radar Components live in panes_map.go alongside the
 // peerPlot geo data prep that powers them.
 
-package meshx
+package tui
 
 import (
 	"fmt"

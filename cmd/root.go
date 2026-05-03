@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/retr0h/meshx/internal/meshx"
+	"github.com/retr0h/meshx/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -71,7 +72,7 @@ Transport-specific commands:
 			// cobra dumping the help text.
 			return meshx.RunBLE(rest)
 		}
-		return meshx.RunRadio(target)
+		return tui.RunRadio(target)
 	},
 }
 

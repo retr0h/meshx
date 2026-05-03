@@ -31,7 +31,7 @@
 //
 // Model / Update / render surface stays in app.go and ui.go.
 
-package meshx
+package tui
 
 import (
 	"crypto/rand"
@@ -47,6 +47,7 @@ import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
 	"github.com/retr0h/meshx/internal/meshx/session"
+	"github.com/retr0h/meshx/internal/version"
 )
 
 // Channel role string constants. The pump stringifies pb.Channel_Role
@@ -693,7 +694,7 @@ func (m *model) commitConfigDraft() int {
 // Also includes the radio's firmware version when known, so the user
 // can see at a glance whether their firmware is current.
 func buildVersionLines(m *model) []string {
-	v := BuildInfo()
+	v := version.BuildInfo()
 	lines := []string{
 		fmt.Sprintf("meshx:    %s", v.GitVersion),
 	}

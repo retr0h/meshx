@@ -13,7 +13,7 @@
 // source of truth for message *content*, but this layer is the
 // source of truth for message *size*.
 
-package meshx
+package tui
 
 import (
 	"fmt"

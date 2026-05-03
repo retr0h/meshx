@@ -13,7 +13,7 @@
 // here, every region asks the layout for its budget and the Row
 // component truncates anything that would overflow.
 
-package meshx
+package tui
 
 import (
 	"fmt"

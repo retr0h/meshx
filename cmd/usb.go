@@ -24,8 +24,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/retr0h/meshx/internal/meshx"
 	"github.com/retr0h/meshx/internal/meshx/transport"
+	"github.com/retr0h/meshx/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -68,7 +68,7 @@ var usbConnectCmd = &cobra.Command{
 			}
 			dest = auto
 		}
-		return meshx.RunRadio(dest)
+		return tui.RunRadio(dest)
 	},
 }
 

@@ -36,7 +36,7 @@
 // in app.go. Slash-command handlers stay in commands.go. Pure
 // rendering stays in ui.go.
 
-package meshx
+package tui
 
 import (
 	"fmt"

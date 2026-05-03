@@ -24,10 +24,10 @@ builds:
     # the release tag, commit, and build date instead of the empty
     # defaults caarlos0/go-version falls back to under `go build`.
     ldflags:
-      - -s -w -X {{ .ModulePath }}/internal/meshx.Date={{ .CommitDate }}
-      - -X {{ .ModulePath }}/internal/meshx.Commit={{ .Commit }}
-      - -X {{ .ModulePath }}/internal/meshx.Version={{ .Version }}
-      - -X {{ .ModulePath }}/internal/meshx.BuiltBy=goreleaser
+      - -s -w -X {{ .ModulePath }}/internal/version.Date={{ .CommitDate }}
+      - -X {{ .ModulePath }}/internal/version.Commit={{ .Commit }}
+      - -X {{ .ModulePath }}/internal/version.Version={{ .Version }}
+      - -X {{ .ModulePath }}/internal/version.BuiltBy=goreleaser
 
 archives:
   - formats:

@@ -11,7 +11,7 @@
 // Any new component must add a fixture row here so its overflow
 // behavior is covered before a render-time bug ever ships.
 
-package meshx
+package tui
 
 import (
 	"strings"

@@ -35,7 +35,7 @@
 // last column. SafeWidth is enforced at the edge, not negotiated by
 // every leaf.
 
-package meshx
+package tui
 
 import (
 	"fmt"

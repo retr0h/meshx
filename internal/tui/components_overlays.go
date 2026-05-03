@@ -14,7 +14,7 @@
 // inline lipgloss.Render + manual padding; here the cell layer
 // owns the geometry and the styling stays in-line per-cell.
 
-package meshx
+package tui
 
 import (
 	"fmt"

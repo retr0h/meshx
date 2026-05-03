@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package meshx
+package tui
 
 // radio.go — handlers that react to a FromRadio packet and mutate
 // the model, plus resend (the other direction: rebuild a ToRadio

@@ -18,7 +18,7 @@
 // wasn't allocated; Bordered hands its child an inner Box that is
 // strictly smaller than its own outer Box.
 
-package meshx
+package tui
 
 import (
 	"strings"

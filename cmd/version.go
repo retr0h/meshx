@@ -25,7 +25,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/retr0h/meshx/internal/meshx"
+	"github.com/retr0h/meshx/internal/version"
 )
 
 // versionCmd renders the build identity collected in
@@ -37,7 +37,7 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Display the version of meshx",
 	Run: func(_ *cobra.Command, _ []string) {
-		info := meshx.BuildInfo()
+		info := version.BuildInfo()
 		jsonOut, _ := info.JSONString()
 		fmt.Println(jsonOut)
 	},

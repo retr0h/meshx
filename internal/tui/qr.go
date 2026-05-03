@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package meshx
+package tui
 
 // qr.go — ASCII renderer for QR codes. Used by /channel share to
 // emit a phone-scannable share URL into the message log without any

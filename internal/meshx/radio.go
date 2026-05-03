@@ -523,7 +523,13 @@ func (m *model) applyPing(msg radioPingReplyMsg) {
 		m.nodes[idx].lastHeardAt = time.Now()
 	}
 	m.systemBlock(fmt.Sprintf("ping %s", tgt), lines...)
-	m.flash = fmt.Sprintf("ping: %s — %d hop%s in %s", tgt, msg.hops, plural(msg.hops), rtt.Round(100*time.Millisecond))
+	m.flash = fmt.Sprintf(
+		"ping: %s — %d hop%s in %s",
+		tgt,
+		msg.hops,
+		plural(msg.hops),
+		rtt.Round(100*time.Millisecond),
+	)
 	m.pendingPing = nil
 }
 
@@ -542,6 +548,36 @@ func (m *model) applyPing(msg radioPingReplyMsg) {
 // went out.
 func (m *model) applyRouting(msg radioRoutingMsg) {
 	if msg.requestID == 0 {
+		return
+	}
+	// Outbound /ping correlation. REPLY_APP is technically a "built-in
+	// module" but firmware ships with it disabled often enough that
+	// relying on the echo alone fails on a lot of radios. The Routing
+	// receipt always lands (it's how the firmware confirms delivery
+	// for any WantAck packet), so when an in-flight ping resolves
+	// here BEFORE applyPing sees a REPLY_APP echo, treat the ack as
+	// the success signal and surface a softer result block:
+	// delivered, but no echo — useful for the "is this peer reachable
+	// at all?" question even when /ping's primary echo path can't
+	// answer it.
+	if m.pendingPing != nil && m.pendingPing.packetID == msg.requestID {
+		tgt := m.pendingPing.targetCall
+		rtt := time.Since(m.pendingPing.requestedAt).Round(100 * time.Millisecond)
+		if msg.ok {
+			m.systemBlock(fmt.Sprintf("ping %s", tgt),
+				fmt.Sprintf("rtt:     %s (ack only — no echo)", rtt),
+				"note:    radio acknowledged delivery, but REPLY_APP echo",
+				"         did not return. Common when the target's REPLY_APP",
+				"         module is disabled — /tr still works in that case.",
+			)
+			m.flash = fmt.Sprintf("ping: %s — ack in %s (no echo)", tgt, rtt)
+		} else {
+			m.systemBlock(fmt.Sprintf("ping %s", tgt),
+				fmt.Sprintf("result:  delivery failed (%s)", msg.errorName),
+			)
+			m.flash = fmt.Sprintf("ping: %s — %s", tgt, msg.errorName)
+		}
+		m.pendingPing = nil
 		return
 	}
 	for i := range m.messages {

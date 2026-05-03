@@ -64,7 +64,8 @@ meshx/
     │                             # newModel, autoConnect, myCallsign …
     ├── ui.go                     # View dispatcher, model getters, generic utils
     ├── fixture.go                # Demo struct + DefaultDemo() persona
-    ├── pump.go                   # transport → tea.Msg pump (+ MESHX_DEBUG)
+    ├── pump.go                   # consumer interface (Pump) — twin of store.go (osapi-io)
+    ├── store.go                  # consumer interface (Store) for the storage package
     ├── commands.go               # /command dispatcher + ham bangs
     ├── input.go                  # key bindings, nav mode, tab wiring
     ├── components_box.go         # Box/Component/Cell/Row + RawBlock, Viewport, Centered
@@ -79,17 +80,27 @@ meshx/
     ├── components_radar.go       # radarCanvas Component + radar legend cells
     ├── components_splash.go      # BitchX rotating splash data + builder
     ├── notices.go                # TTL + pin + fade for `-!-` rows
-    ├── storage.go                # SQLite: nodes, messages, ble_devices,
-    │                             # backfills, stale-pending sweep
     ├── ble_cli.go                # `meshx ble` CLI helpers
     ├── complete.go               # Tab completion — /cmd, #chan, nicks
     ├── palette.go                # maxheadroom color constants
     ├── node.go                   # nodeItem + state derivation
-    ├── radio.go                  # outbound packet construction
+    ├── radio.go                  # apply* handlers for mdl.Text / NodeInfo / Routing / …
     ├── geo.go                    # haversine / bearing / compass math
     ├── help.go                   # /help entry data
-    ├── logger.go                 # debug log file helper
-    ├── migrations/               # embedded goose SQL migrations
+    ├── model/                    # canonical wire/persisted shapes — the lingua franca
+    │   ├── message.go            # Message + MessageStatus enum
+    │   ├── node.go               # CachedNode (NodeDB cache row)
+    │   ├── ble.go                # BLEDevice (BLE pairing row)
+    │   ├── events.go             # pump-emitted events: Text, NodeInfo, Position, Ping, …
+    │   ├── config.go             # modeled radio configs (ExternalNotification today)
+    │   └── enums.go              # Region, ModemPreset, DeviceRole, ChannelRole, RoutingError typed strings
+    ├── pump/                     # transport ↔ tea bridge (concrete *pump.Pump)
+    │   ├── pump.go               # New / Stop / Enqueue + run loop with reconnect policy
+    │   ├── translate.go          # FromRadio → []model.X (the only proto<->model boundary inbound)
+    │   └── config.go             # ExternalNotificationFromProto / ToProto bridges (grows with config writes)
+    ├── storage/                  # SQLite persistence (concrete *storage.Sqlite)
+    │   ├── sqlite.go             # CRUD against model.Message / CachedNode / BLEDevice
+    │   └── migrations/           # embedded goose SQL migrations (001…010)
     └── transport/
         ├── client.go             # Client interface + Dial dispatcher
         ├── framing.go            # 0x94 0xc3 <hi> <lo> <proto> frame codec
@@ -116,6 +127,50 @@ meshx.DefaultDemo() *Demo                  // canonical persona
 `tea.NewProgram(newModel(demo, dest), tea.WithAltScreen()).Run()`. `RunBLE` is a
 thin wrapper that resolves a name-or-uuid against `ble_devices` and delegates to
 `RunRadio("ble:<uuid>")` — `transport.Dial` routes the prefix to `DialBLE`.
+
+### `model` is the lingua franca
+
+`internal/meshx/model/` holds the canonical wire/persisted shapes every boundary
+in the codebase speaks. Three consumers all traffic in `mdl.X`:
+
+```
+                  model package
+   (Message, NodeInfo, Position, Routing, Ping,
+    LoraConfig, ExternalNotification, …)
+                       ▲
+        ┌──────────────┼──────────────┐
+        │              │              │
+      pump          storage      server (future)
+   (translate     (CRUD via      (HTTP+SSE)
+    proto→model)   *Sqlite)
+        │              │              │
+        └──────────────┼──────────────┘
+                       ▼
+                meshx TUI Update
+        (case mdl.Text / NodeInfo / Position / …)
+```
+
+`pump/translate.go` is the **only** place in the codebase where `gomeshproto`
+types meet `model` types. Everywhere else — the meshx TUI, the storage layer,
+future daemon — sees only `mdl.X`. The proto<->model bridges for full-record
+configs that need round-trip preservation (today: `ExternalNotification`) live
+in `pump/config.go`; `commands.go` calls those bridges when crafting outbound
+`AdminMessage` envelopes so it never directly assembles a config proto.
+
+### Consumer interfaces (osapi-io pattern)
+
+Both `pump.Pump` and `storage.Sqlite` are concrete structs in their own
+packages. Where they're consumed (the meshx TUI), the consumer declares a narrow
+interface listing only the methods it uses:
+
+- `internal/meshx/pump.go` — `Pump` interface (`Enqueue`, `Stop`)
+- `internal/meshx/store.go` — `Store` interface (the 17 methods the TUI calls)
+
+Both interfaces sit next to each other so future consumers (e.g. a daemon
+package) can declare their own — likely larger — interfaces without bloating the
+TUI's view of the contract. The compile-time binding
+`var p Pump = pump.New(...)` at the construction site catches drift the moment a
+method gets renamed.
 
 ## Dependencies
 

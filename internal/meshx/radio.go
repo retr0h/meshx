@@ -163,17 +163,17 @@ func sanitizeMessageText(s string) (string, bool) {
 // the same node and flag it unresolved so the UI can dim it + the
 // "identified" notification can fire later when a real User packet
 // finally lands.
-func (m *model) upsertNode(msg radioNodeInfoMsg) {
+func (m *model) upsertNode(msg mdl.NodeInfo) {
 	unresolved := false
-	if msg.longName == "" && msg.shortName == "" {
-		long, short := defaultCallsign(msg.nodeNum)
-		msg.longName = long
-		msg.shortName = short
+	if msg.LongName == "" && msg.ShortName == "" {
+		long, short := defaultCallsign(msg.NodeNum)
+		msg.LongName = long
+		msg.ShortName = short
 		unresolved = true
 	}
-	callsign := msg.longName
+	callsign := msg.LongName
 	if callsign == "" {
-		callsign = msg.shortName
+		callsign = msg.ShortName
 	}
 
 	// Derive state from lastHeard age. Anything past the 15-minute
@@ -181,27 +181,27 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	// older, but both arms set the same value, so the live derivation
 	// here matches what currentState() does at render time anyway.
 	state := stateOffline
-	if !msg.lastHeardAt.IsZero() && time.Since(msg.lastHeardAt) < 15*time.Minute {
+	if !msg.LastHeardAt.IsZero() && time.Since(msg.LastHeardAt) < 15*time.Minute {
 		state = stateOnline
 	}
 	lastHeard := "never"
-	if !msg.lastHeardAt.IsZero() {
-		lastHeard = humanDuration(time.Since(msg.lastHeardAt))
+	if !msg.LastHeardAt.IsZero() {
+		lastHeard = humanDuration(time.Since(msg.LastHeardAt))
 	}
 
 	item := nodeItem{
 		callsign:    callsign,
-		shortName:   msg.shortName,
-		nodeNum:     msg.nodeNum,
+		shortName:   msg.ShortName,
+		nodeNum:     msg.NodeNum,
 		unresolved:  unresolved,
 		state:       state,
 		lastHeard:   lastHeard,
-		lastHeardAt: msg.lastHeardAt,
-		heardRank:   int(time.Since(msg.lastHeardAt).Seconds()),
-		lastSNR:     msg.snr,
-		lastRSSI:    msg.rssi,
-		lastHops:    msg.hops,
-		hwModel:     msg.hwModel,
+		lastHeardAt: msg.LastHeardAt,
+		heardRank:   int(time.Since(msg.LastHeardAt).Seconds()),
+		lastSNR:     msg.SNR,
+		lastRSSI:    msg.RSSI,
+		lastHops:    msg.Hops,
+		hwModel:     msg.HwModel,
 	}
 
 	// Persist to the cross-session NodeDB cache so once we've learned
@@ -211,14 +211,14 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	// skipped inside saveNode itself.
 	if m.store != nil {
 		m.storagePersist(m.store.SaveNode(m.radioID, mdl.CachedNode{
-			NodeNum:   msg.nodeNum,
-			LongName:  msg.longName,
-			ShortName: msg.shortName,
-			HwModel:   msg.hwModel,
+			NodeNum:   msg.NodeNum,
+			LongName:  msg.LongName,
+			ShortName: msg.ShortName,
+			HwModel:   msg.HwModel,
 		}))
 	}
 
-	if idx, ok := m.nodesByNum[msg.nodeNum]; ok {
+	if idx, ok := m.nodesByNum[msg.NodeNum]; ok {
 		// Preserve fav flag across updates.
 		item.fav = m.nodes[idx].fav
 		// Preserve the NEWER lastHeardAt — text packets between
@@ -246,7 +246,7 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 		}
 		return
 	}
-	m.nodesByNum[msg.nodeNum] = len(m.nodes)
+	m.nodesByNum[msg.NodeNum] = len(m.nodes)
 	m.nodes = append(m.nodes, item)
 }
 
@@ -254,44 +254,44 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 // kept in m.channels (with role="DISABLED") so /channel new can find
 // the first free slot to allocate into; renderers (channelTabsRow,
 // channelsPane) skip DISABLED so empty slots don't clutter the UI.
-func (m *model) applyChannel(msg radioChannelMsg) {
-	// Grow the slice up to msg.index regardless of role so the slot is
+func (m *model) applyChannel(msg mdl.ChannelInfo) {
+	// Grow the slice up to msg.Index regardless of role so the slot is
 	// addressable for delete + re-apply later.
-	for len(m.channels) <= msg.index {
+	for len(m.channels) <= msg.Index {
 		m.channels = append(m.channels, channelItem{role: roleDisabled})
 	}
-	if msg.role == roleDisabled {
+	if string(msg.Role) == roleDisabled {
 		// Preserve any unread accumulated before the slot was disabled
 		// (rare but possible if a /channel del raced an inbound packet)
 		// and mark the slot empty so /channel new can re-use it.
-		prevUnread := m.channels[msg.index].unread
-		m.channels[msg.index] = channelItem{
-			index:  msg.index,
+		prevUnread := m.channels[msg.Index].unread
+		m.channels[msg.Index] = channelItem{
+			index:  msg.Index,
 			role:   roleDisabled,
 			unread: prevUnread,
 		}
 		return
 	}
-	name := msg.name
+	name := msg.Name
 	if name == "" {
 		// Empty-name PRIMARY is the default "LongFast" channel — give
 		// it a readable label in the UI.
 		name = "#default"
-	} else if msg.hasPSK {
-		name = "*" + msg.name + "*"
+	} else if msg.HasPSK {
+		name = "*" + msg.Name + "*"
 	} else {
-		name = "#" + msg.name
+		name = "#" + msg.Name
 	}
 	c := channelItem{
 		name:    name,
-		private: msg.hasPSK,
-		index:   msg.index,
-		role:    msg.role,
-		psk:     msg.psk,
+		private: msg.HasPSK,
+		index:   msg.Index,
+		role:    string(msg.Role),
+		psk:     msg.PSK,
 	}
 	// Preserve unread count across re-apply.
-	c.unread = m.channels[msg.index].unread
-	m.channels[msg.index] = c
+	c.unread = m.channels[msg.Index].unread
+	m.channels[msg.Index] = c
 	if m.currentChannel == "" {
 		m.currentChannel = name
 	}
@@ -304,14 +304,18 @@ func (m *model) applyChannel(msg radioChannelMsg) {
 // user hasn't /muted it; nil otherwise. Update threads it back to the
 // runtime so the bell write happens in a controlled goroutine instead
 // of racing the renderer.
-func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
+func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
+	// body is the partial wire shape pump produced; the renderer-only
+	// fields (From, Mine, Status, …) get filled in below.
+	body := ev.Body
+
 	// Default ghost identity from the firmware's last-4-hex
 	// convention so the FROM column matches what other Meshtastic
 	// clients display for the same peer (iOS shows "c7f7", we
 	// shouldn't be the outlier showing "node 0x273cc7f7").
-	defaultLong, _ := defaultCallsign(msg.fromNum)
+	defaultLong, _ := defaultCallsign(body.FromNum)
 	from := defaultLong
-	if idx, ok := m.nodesByNum[msg.fromNum]; ok {
+	if idx, ok := m.nodesByNum[body.FromNum]; ok {
 		from = m.nodes[idx].callsign
 		// Live RF contact — stamp lastHeardAt + refresh signal
 		// telemetry. currentState / currentLastHeard derive
@@ -320,16 +324,16 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 		// the renderer always reads the live derivation.
 		m.nodes[idx].lastHeardAt = time.Now()
 		m.nodes[idx].heardRank = 0
-		if msg.snr != "" {
-			m.nodes[idx].lastSNR = msg.snr
+		if body.SNR != "" {
+			m.nodes[idx].lastSNR = body.SNR
 		}
-		if msg.rssi != "" {
-			m.nodes[idx].lastRSSI = msg.rssi
+		if ev.RSSI != "" {
+			m.nodes[idx].lastRSSI = ev.RSSI
 		}
-		if msg.hops > 0 {
-			m.nodes[idx].lastHops = msg.hops
+		if body.Hops > 0 {
+			m.nodes[idx].lastHops = body.Hops
 		}
-	} else if msg.fromNum != 0 {
+	} else if body.FromNum != 0 {
 		// We've heard a text packet from a peer whose NodeInfo we
 		// haven't received yet — ghost them into m.nodes so /cqr,
 		// /rs, /whois, /ping can find them by id, hex, or shortname
@@ -339,36 +343,36 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 		// firmware-default callsigns up front so the row already
 		// reads the same way every other Meshtastic client renders
 		// the peer.
-		long, short := defaultCallsign(msg.fromNum)
+		long, short := defaultCallsign(body.FromNum)
 		m.nodes = append(m.nodes, nodeItem{
 			callsign:    long,
 			shortName:   short,
-			nodeNum:     msg.fromNum,
+			nodeNum:     body.FromNum,
 			unresolved:  true,
 			lastHeardAt: time.Now(),
-			lastSNR:     msg.snr,
-			lastRSSI:    msg.rssi,
-			lastHops:    msg.hops,
+			lastSNR:     body.SNR,
+			lastRSSI:    ev.RSSI,
+			lastHops:    body.Hops,
 		})
-		m.nodesByNum[msg.fromNum] = len(m.nodes) - 1
+		m.nodesByNum[body.FromNum] = len(m.nodes) - 1
 		from = long
 	}
-	mine := msg.fromNum == m.myNodeNum
+	mine := body.FromNum == m.myNodeNum
 
-	cleanText, corrupted := sanitizeMessageText(msg.text)
+	cleanText, corrupted := sanitizeMessageText(body.Text)
 	item := messageItem{
-		time:      msg.at.Format("15:04"),
+		time:      body.Time,
 		from:      from,
 		mine:      mine,
 		text:      cleanText,
 		corrupted: corrupted,
 		status:    statusAck,
-		hops:      msg.hops,
-		snr:       msg.snr,
-		packetID:  msg.packetID,
-		replyID:   msg.replyID,
-		fromNum:   msg.fromNum,
-		sentAt:    msg.at,
+		hops:      body.Hops,
+		snr:       body.SNR,
+		packetID:  body.PacketID,
+		replyID:   body.ReplyID,
+		fromNum:   body.FromNum,
+		sentAt:    body.SentAt,
 	}
 
 	// Dedupe replays from the radio's RAM queue. When we reconnect
@@ -380,11 +384,11 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 	// The messagesByPacketID index lets us find the existing entry
 	// and upgrade it in place (telemetry refresh) instead.
 	channelName := m.currentChannel
-	if msg.channel < len(m.channels) {
-		channelName = m.channels[msg.channel].name
+	if ev.Channel < len(m.channels) {
+		channelName = m.channels[ev.Channel].name
 	}
-	if msg.packetID != 0 {
-		if existing, ok := m.messagesByPacketID[msg.packetID]; ok &&
+	if body.PacketID != 0 {
+		if existing, ok := m.messagesByPacketID[body.PacketID]; ok &&
 			existing >= 0 && existing < len(m.messages) {
 			// Refresh signal telemetry in case the replay carries
 			// fresher RSSI/SNR/hops than the stored row (can happen
@@ -392,8 +396,8 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 			// Leave status alone unless it was pending and we now
 			// have a real ack.
 			prev := &m.messages[existing]
-			prev.hops = msg.hops
-			prev.snr = msg.snr
+			prev.hops = body.Hops
+			prev.snr = body.SNR
 			if prev.status == statusPending {
 				prev.status = statusAck
 			}
@@ -417,8 +421,8 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 	// renderMessagesPane anchors its viewport on selectedMsg.
 	wasAtTail := len(m.messages) == 0 || m.selectedMsg == len(m.messages)-1
 	m.messages = append(m.messages, item)
-	if msg.packetID != 0 {
-		m.messagesByPacketID[msg.packetID] = len(m.messages) - 1
+	if body.PacketID != 0 {
+		m.messagesByPacketID[body.PacketID] = len(m.messages) - 1
 	}
 	if wasAtTail {
 		m.selectedMsg = len(m.messages) - 1
@@ -430,8 +434,8 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 	}
 
 	// Bump unread count on non-active channels.
-	if msg.channel < len(m.channels) && m.channels[msg.channel].name != m.currentChannel && !mine {
-		m.channels[msg.channel].unread++
+	if ev.Channel < len(m.channels) && m.channels[ev.Channel].name != m.currentChannel && !mine {
+		m.channels[ev.Channel].unread++
 	}
 
 	// Terminal ding — return the BEL Cmd when the message came from
@@ -480,7 +484,7 @@ func ringTerminalBellCmd() tea.Cmd {
 // fresh /tr without waiting for the timeout to elapse, and the
 // scheduled tracerouteTimeoutMsg becomes a no-op when its tick lands
 // (the packetID guard there falls through silently).
-func (m *model) applyTraceroute(msg radioTracerouteMsg) {
+func (m *model) applyTraceroute(msg mdl.Traceroute) {
 	if m.pendingTraceroute == nil {
 		return
 	}
@@ -496,20 +500,20 @@ func (m *model) applyTraceroute(msg radioTracerouteMsg) {
 	// peer we just asked about" — which IS effectively the right
 	// answer for this user anyway.
 	switch {
-	case msg.requestID != 0 && msg.requestID == m.pendingTraceroute.packetID:
-	case msg.requestID == 0 && msg.fromNum == m.pendingTraceroute.targetNum:
+	case msg.RequestID != 0 && msg.RequestID == m.pendingTraceroute.packetID:
+	case msg.RequestID == 0 && msg.FromNum == m.pendingTraceroute.targetNum:
 	default:
 		return
 	}
 	tgt := m.pendingTraceroute.targetCall
-	rtt := msg.at.Sub(m.pendingTraceroute.requestedAt)
+	rtt := msg.At.Sub(m.pendingTraceroute.requestedAt)
 	if rtt < 0 {
 		// Clock skew between the radio's RxTime stamp and our local
 		// clock can yield a negative delta. Round to time.Since so
 		// the displayed RTT is still useful.
 		rtt = time.Since(m.pendingTraceroute.requestedAt)
 	}
-	hops := len(msg.route)
+	hops := len(msg.Route)
 	lines := []string{
 		fmt.Sprintf("hops:    %d", hops),
 		fmt.Sprintf("rtt:     %s", rtt.Round(100*time.Millisecond)),
@@ -523,7 +527,7 @@ func (m *model) applyTraceroute(msg radioTracerouteMsg) {
 		// width on rendering it well.
 		hopLabels := make([]string, 0, hops+2)
 		hopLabels = append(hopLabels, m.myCallsign())
-		for _, num := range msg.route {
+		for _, num := range msg.Route {
 			if idx, ok := m.nodesByNum[num]; ok && idx < len(m.nodes) {
 				hopLabels = append(hopLabels, m.nodes[idx].callsign)
 				continue
@@ -537,7 +541,7 @@ func (m *model) applyTraceroute(msg radioTracerouteMsg) {
 	// fall-back mode shows the freshly-measured value instead of the
 	// stale zero. lastHops needs the live value even if it's 0
 	// (direct), so this assignment doesn't gate on > 0.
-	if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx < len(m.nodes) {
+	if idx, ok := m.nodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
 		m.nodes[idx].lastHops = hops
 	}
 	m.systemBlock(fmt.Sprintf("traceroute %s", tgt), lines...)
@@ -558,34 +562,34 @@ func (m *model) applyTraceroute(msg radioTracerouteMsg) {
 // the pending slot. Also refreshes the node's lastSNR / lastRSSI /
 // lastHops cache off the live measurement so /whois on the same
 // peer immediately renders fresh telemetry.
-func (m *model) applyPing(msg radioPingReplyMsg) {
+func (m *model) applyPing(msg mdl.Ping) {
 	if m.pendingPing == nil {
 		return
 	}
 	switch {
-	case msg.requestID != 0 && msg.requestID == m.pendingPing.packetID:
-	case msg.requestID == 0 && msg.fromNum == m.pendingPing.targetNum:
+	case msg.RequestID != 0 && msg.RequestID == m.pendingPing.packetID:
+	case msg.RequestID == 0 && msg.FromNum == m.pendingPing.targetNum:
 	default:
 		return
 	}
 	tgt := m.pendingPing.targetCall
-	rtt := msg.at.Sub(m.pendingPing.requestedAt)
+	rtt := msg.At.Sub(m.pendingPing.requestedAt)
 	if rtt < 0 {
 		rtt = time.Since(m.pendingPing.requestedAt)
 	}
 	lines := []string{
 		fmt.Sprintf("rtt:     %s", rtt.Round(100*time.Millisecond)),
-		fmt.Sprintf("hops:    %d", msg.hops),
-		fmt.Sprintf("snr:     %s dB", msg.snr),
-		fmt.Sprintf("rssi:    %s", msg.rssi),
+		fmt.Sprintf("hops:    %d", msg.Hops),
+		fmt.Sprintf("snr:     %s dB", msg.SNR),
+		fmt.Sprintf("rssi:    %s", msg.RSSI),
 	}
-	if idx, ok := m.nodesByNum[msg.fromNum]; ok && idx < len(m.nodes) {
-		m.nodes[idx].lastHops = msg.hops
-		if msg.snr != "" {
-			m.nodes[idx].lastSNR = msg.snr
+	if idx, ok := m.nodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
+		m.nodes[idx].lastHops = msg.Hops
+		if msg.SNR != "" {
+			m.nodes[idx].lastSNR = msg.SNR
 		}
-		if msg.rssi != "" {
-			m.nodes[idx].lastRSSI = msg.rssi
+		if msg.RSSI != "" {
+			m.nodes[idx].lastRSSI = msg.RSSI
 		}
 		m.nodes[idx].lastHeardAt = time.Now()
 	}
@@ -593,8 +597,8 @@ func (m *model) applyPing(msg radioPingReplyMsg) {
 	m.flash = fmt.Sprintf(
 		"ping: %s — %d hop%s in %s",
 		tgt,
-		msg.hops,
-		plural(msg.hops),
+		msg.Hops,
+		plural(msg.Hops),
 		rtt.Round(100*time.Millisecond),
 	)
 	m.pendingPing = nil
@@ -613,8 +617,8 @@ func (m *model) applyPing(msg radioPingReplyMsg) {
 // after 5 minutes on next launch, and old messages that actually
 // delivered would surface as ✗ — misleading the user about what
 // went out.
-func (m *model) applyRouting(msg radioRoutingMsg) {
-	if msg.requestID == 0 {
+func (m *model) applyRouting(msg mdl.Routing) {
+	if msg.RequestID == 0 {
 		return
 	}
 	// Outbound /ping correlation. REPLY_APP is technically a "built-in
@@ -627,10 +631,10 @@ func (m *model) applyRouting(msg radioRoutingMsg) {
 	// delivered, but no echo — useful for the "is this peer reachable
 	// at all?" question even when /ping's primary echo path can't
 	// answer it.
-	if m.pendingPing != nil && m.pendingPing.packetID == msg.requestID {
+	if m.pendingPing != nil && m.pendingPing.packetID == msg.RequestID {
 		tgt := m.pendingPing.targetCall
 		rtt := time.Since(m.pendingPing.requestedAt).Round(100 * time.Millisecond)
-		if msg.ok {
+		if msg.OK {
 			m.systemBlock(fmt.Sprintf("ping %s", tgt),
 				fmt.Sprintf("rtt:     %s (ack only — no echo)", rtt),
 				"note:    radio acknowledged delivery, but REPLY_APP echo",
@@ -640,23 +644,23 @@ func (m *model) applyRouting(msg radioRoutingMsg) {
 			m.flash = fmt.Sprintf("ping: %s — ack in %s (no echo)", tgt, rtt)
 		} else {
 			m.systemBlock(fmt.Sprintf("ping %s", tgt),
-				fmt.Sprintf("result:  delivery failed (%s)", msg.errorName),
+				fmt.Sprintf("result:  delivery failed (%s)", msg.ErrorName),
 			)
-			m.flash = fmt.Sprintf("ping: %s — %s", tgt, msg.errorName)
+			m.flash = fmt.Sprintf("ping: %s — %s", tgt, msg.ErrorName)
 		}
 		m.pendingPing = nil
 		return
 	}
 	for i := range m.messages {
-		if m.messages[i].packetID != msg.requestID || !m.messages[i].mine {
+		if m.messages[i].packetID != msg.RequestID || !m.messages[i].mine {
 			continue
 		}
-		if msg.ok {
+		if msg.OK {
 			m.messages[i].status = statusAck
 			m.flash = "ack received"
 		} else {
 			m.messages[i].status = statusFail
-			m.flash = "delivery failed: " + msg.errorName + "  (R to resend)"
+			m.flash = "delivery failed: " + msg.ErrorName + "  (R to resend)"
 		}
 		if m.store != nil {
 			m.storagePersist(

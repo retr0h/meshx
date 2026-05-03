@@ -53,7 +53,8 @@ meshx/
 ├── internal/meshx/               # all implementation
 │   ├── app.go                    # Bubble Tea model + View() + Update wiring
 │   ├── ui.go                     # View dispatcher, model getters, generic utils
-│   ├── pump.go                   # transport ↔ tea bridge (+ MESHX_DEBUG log)
+│   ├── pump.go                   # consumer interface (Pump) — twin of store.go (osapi-io)
+│   ├── store.go                  # consumer interface (Store) for the storage package
 │   ├── commands.go               # /command dispatcher + ham bangs
 │   ├── input.go                  # key bindings, nav mode, tab completion entry
 │   ├── components_box.go         # Box, Component, Cell/Row, Text, Spacer, RawBlock, Viewport, Centered
@@ -70,15 +71,26 @@ meshx/
 │   ├── notices.go                # TTL + pin + fade for `-!-` rows
 │   ├── complete.go               # Tab completion — /cmd, #chan, nicks
 │   ├── palette.go                # maxheadroom color constants
-│   ├── storage.go                # SQLite: nodes, messages, ble_devices, backfills
 │   ├── ble_cli.go                # `meshx ble` CLI helpers (scan, list, fav, …)
 │   ├── node.go                   # nodeItem + state derivation
-│   ├── radio.go                  # outbound packet construction + send helpers
+│   ├── radio.go                  # apply* handlers (mdl.Text, mdl.NodeInfo, mdl.Routing, …)
 │   ├── geo.go                    # haversineKm / bearingDeg / compassAbbr math
 │   ├── help.go                   # /help entry data
-│   ├── logger.go                 # debug log file helper
 │   ├── fixture.go                # Demo struct + DefaultDemo()
-│   ├── migrations/               # goose SQL migrations (001…005)
+│   ├── model/                    # canonical wire/persisted shapes — the lingua franca
+│   │   ├── message.go            # Message + MessageStatus enum
+│   │   ├── node.go               # CachedNode (NodeDB cache row)
+│   │   ├── ble.go                # BLEDevice (BLE pairing row)
+│   │   ├── events.go             # pump-emitted events: Text, NodeInfo, Position, Ping, Routing, …
+│   │   ├── config.go             # modeled radio configs (ExternalNotification today; Owner / LoRa / Device next)
+│   │   └── enums.go              # Region, ModemPreset, DeviceRole, ChannelRole, RoutingError typed strings
+│   ├── pump/                     # transport ↔ tea bridge (concrete *pump.Pump)
+│   │   ├── pump.go               # New / Stop / Enqueue + run loop with reconnect policy
+│   │   ├── translate.go          # FromRadio → []model.X (the only proto<->model boundary inbound)
+│   │   └── config.go             # ExternalNotificationFromProto/ToProto bridges (grows with config writes)
+│   ├── storage/                  # SQLite persistence (concrete *storage.Sqlite)
+│   │   ├── sqlite.go             # CRUD against model.Message / model.CachedNode / model.BLEDevice
+│   │   └── migrations/           # goose SQL migrations (001…010)
 │   └── transport/
 │       ├── client.go             # Client interface + Dial dispatcher
 │       ├── serial.go             # USB-serial transport

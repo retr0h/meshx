@@ -21,7 +21,6 @@
 package meshx
 
 import (
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -30,6 +29,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
+
+	"github.com/retr0h/meshx/internal/meshx/storage"
 )
 
 // clientTag is the meshx self-identifier we splice into `/cq` beacons
@@ -300,9 +301,11 @@ type channelItem struct {
 type messageStatus int
 
 const (
-	// statusOK is the zero value — used for inbound chat that doesn't
-	// carry a delivery indicator. Persisted as the empty string "".
-	statusOK messageStatus = iota
+	// _ is the zero value — inbound chat that doesn't carry a delivery
+	// indicator (StatusOK in model). Persisted as empty string "".
+	// Underscore-anchored so the iota chain below stays stable; the
+	// named StatusOK lives in the model package.
+	_ messageStatus = iota
 	// statusAck — outbound message the radio confirmed delivery for
 	// (Routing.NONE on a routing reply OR a real REPLY_APP echo).
 	// Renders the trailing ✓ glyph.
@@ -344,27 +347,6 @@ func (s messageStatus) String() string {
 		return "notice"
 	default:
 		return ""
-	}
-}
-
-// parseMessageStatus is the inverse — used by loadMessages when
-// reading the messages.status TEXT column off disk. Unknown values
-// fall back to statusOK rather than panicking; an invalid row is
-// surface-level wrong (no glyph) but doesn't crash the UI.
-func parseMessageStatus(s string) messageStatus {
-	switch s {
-	case "ack":
-		return statusAck
-	case "pending":
-		return statusPending
-	case "fail":
-		return statusFail
-	case "system":
-		return statusSystem
-	case "notice":
-		return statusNotice
-	default:
-		return statusOK
 	}
 }
 
@@ -502,19 +484,20 @@ type model struct {
 	// model state. isDemo() is `m.demo != nil`.
 	demo *Demo
 
-	// SQLite handle — non-nil ONLY in live-radio mode. Every incoming
-	// text packet and every outgoing /command message gets persisted
-	// so the log survives a restart. Demo mode never persists (canned
-	// data has no business in the real log). See storage.go for the
-	// schema and the open / save helpers.
-	db *sql.DB
+	// store is the persistence handle — non-nil ONLY in live-radio
+	// mode. Every incoming text packet and every outgoing /command
+	// message gets persisted so the log survives a restart. Demo mode
+	// leaves it nil and the session runs in-memory. The concrete
+	// implementation lives in internal/meshx/storage as *storage.Sqlite,
+	// cast to the Store interface (see store.go) at construction so
+	// the model never sees the concrete type.
+	store Store
 
-	// radioID is the UUID identifying which radio this session is
-	// bound to. Resolved at newModel time via resolveOrCreateRadio
-	// against (transport, addr) parsed from the dial dest. Every
-	// storage call passes this through so multi-radio data stays
-	// scoped per-radio. Demo mode and pre-storage-open paths use
-	// defaultRadioID so call sites never have to special-case.
+	// radioID is the canonical Meshtastic identity of the radio this
+	// session is bound to — "0x" + hex(my_node_num) once a handshake
+	// reveals it; a "pending:<transport>:<addr>" placeholder before.
+	// Every storage call passes this through so multi-radio data stays
+	// scoped per-radio.
 	radioID string
 
 	// initialFocusCmd captures the tea.Cmd returned by
@@ -743,11 +726,11 @@ func RunDemo() error {
 func RunRadio(dest string) error {
 	m := newModel(nil, dest)
 	// Close the persistence handle when the tea loop exits. Nil-safe:
-	// if openStorage failed inside newModel, m.db is nil and the
+	// if storage.New failed inside newModel, m.store is nil and the
 	// close is a no-op.
 	defer func() {
-		if m.db != nil {
-			_ = m.db.Close()
+		if m.store != nil {
+			_ = m.store.Close()
 		}
 	}()
 	// Allocate the program slot BEFORE handing the model to NewProgram —
@@ -901,27 +884,26 @@ func newModel(demo *Demo, dest string) model {
 		// Live-radio mode — open the persistence store and replay the
 		// last chunk of history so the log survives restarts. We fail
 		// open: any storage error (missing $HOME, bad perms, corrupt
-		// db) just leaves m.db nil, and the session runs in-memory
+		// db) just leaves m.store nil, and the session runs in-memory
 		// for that boot. Losing history is preferable to crashing.
-		if path, err := defaultStoragePath(); err == nil {
-			// openStorage's returned notes are also stashed in the
-			// process-level bootNotes buffer; consumeBootNotes below
-			// is the single source of truth for what we surface, so
-			// ignoring the return here avoids the same migration
-			// trace getting displayed twice.
-			if db, _, err := openStorage(path); err == nil {
-				m.db = db
+		if path, err := storage.DefaultPath(); err == nil {
+			// Cast the concrete *storage.Sqlite to the Store interface
+			// at the assignment site (osapi-io pattern) so the rest of
+			// the model only ever sees the consumer-facing surface.
+			if sqliteStore, err := storage.New(path); err == nil {
+				var store Store = sqliteStore
+				m.store = store
 				// Bind this session to a radio identity before any
-				// storage call references radioID. resolveRadioByConnection
+				// storage call references radioID. ResolveRadioByConnection
 				// returns the canonical "0xNNNNNNNN" form for radios
 				// we've handshaken with before (cache hit on
 				// radios.my_node_num); for never-seen-before connections
 				// it returns a "pending:<transport>:<addr>" placeholder
 				// the radioMyInfoMsg handler swaps out via
-				// claimRadioIdentity once the handshake reveals the
+				// ClaimRadioIdentity once the handshake reveals the
 				// real my_node_num.
-				transport, addr := parseRadioDest(dest)
-				if rid, err := resolveRadioByConnection(db, transport, addr); err == nil {
+				transport, addr := storage.ParseRadioDest(dest)
+				if rid, err := store.ResolveRadioByConnection(transport, addr); err == nil {
 					m.radioID = rid
 				}
 				// Hydrate persisted prefs early — /mute (terminal ding,
@@ -931,10 +913,10 @@ func newModel(demo *Demo, dest string) model {
 				// defaults from above untouched. ding_muted is a meshx-
 				// CLIENT preference (terminal beep); pass "" for radioID
 				// so it's stored once globally rather than once per radio.
-				if v, ok := getSetting(db, "", "ding_muted"); ok {
+				if v, ok := store.GetSetting("", "ding_muted"); ok {
 					m.dingMuted = v == "on"
 				}
-				if v, ok := getSetting(db, m.radioID, "radio_buzzer"); ok {
+				if v, ok := store.GetSetting(m.radioID, "radio_buzzer"); ok {
 					m.radioBuzzerEnabled = v != "off"
 				}
 				// Load the cached NodeDB FIRST — every peer we've
@@ -943,16 +925,12 @@ func newModel(demo *Demo, dest string) model {
 				// That way ghost-peer replay below skips any node we
 				// already know by name, and message rows for
 				// "node 0xd64b01be" instantly render as "WiobooJones"
-				// if we've seen them in a previous session. This is
-				// the equivalent of the phone app's persistent
-				// NodeDB — the radio itself forgets NodeInfo after
-				// a while, so a client that trusts only the radio's
-				// live dump has amnesia on every reconnect.
-				if cached, err := loadNodes(db, m.radioID); err == nil {
+				// if we've seen them in a previous session.
+				if cached, err := store.LoadNodes(m.radioID); err == nil {
 					for _, n := range cached {
-						name := n.longName
+						name := n.LongName
 						if name == "" {
-							name = n.shortName
+							name = n.ShortName
 						}
 						// Carry prefs even for peers we still only
 						// know by node num (user may have starred a
@@ -960,39 +938,39 @@ func newModel(demo *Demo, dest string) model {
 						// placeholder longname so they still land
 						// in m.nodes.
 						if name == "" {
-							name = fmt.Sprintf("node 0x%x", n.nodeNum)
+							name = fmt.Sprintf("node 0x%x", n.NodeNum)
 						}
 						state := stateOffline
-						if n.muted {
+						if n.Muted {
 							state = stateMuted
 						}
 						m.nodes = append(m.nodes, nodeItem{
 							callsign:  name,
-							shortName: n.shortName,
-							nodeNum:   n.nodeNum,
+							shortName: n.ShortName,
+							nodeNum:   n.NodeNum,
 							state:     state,
-							fav:       n.favorite,
+							fav:       n.Favorite,
 							lastHeard: "cached",
-							hwModel:   n.hwModel,
+							hwModel:   n.HwModel,
 						})
-						m.nodesByNum[n.nodeNum] = len(m.nodes) - 1
+						m.nodesByNum[n.NodeNum] = len(m.nodes) - 1
 					}
 				}
-				// Stale-pending sweep BEFORE replay — any outbound
-				// row still marked "pending" from a prior session
-				// crashed mid-flight; its ACK window is long closed
-				// and nothing will ever land. Flip those to "fail"
-				// so they render as `✗` and the user can hit `R` to
-				// resend from history. 5 minutes is plenty for any
-				// in-flight ACK the radio might deliver on this
-				// launch; anything older is dead.
-				expired, _ := expireStalePendingMessages(db, m.radioID, 5*time.Minute)
+				// Stale-pending sweep BEFORE replay — flip any
+				// outbound row stuck "pending" past the cutoff to
+				// "fail" so it renders as `✗` and the user can hit
+				// `R` to resend.
+				expired, _ := store.ExpireStalePendingMessages(m.radioID, 5*time.Minute)
 				// Primary channel is what the radio tells us, but at
 				// boot we don't have it yet — replay under the name
 				// we'll default to (empty string key until a channel
 				// arrives). Load is by `currentChannel` so messages
 				// migrate as the handshake resolves the channel name.
-				if past, err := loadMessages(db, m.radioID, "", 500); err == nil {
+				if pastModels, err := store.LoadMessages(m.radioID, "", 500); err == nil {
+					past := make([]messageItem, 0, len(pastModels))
+					for _, mm := range pastModels {
+						past = append(past, messageItemFromModel(mm))
+					}
 					baseIdx := len(m.messages)
 					m.messages = append(m.messages, past...)
 					m.selectedMsg = len(m.messages) - 1
@@ -1095,7 +1073,7 @@ func newModel(demo *Demo, dest string) model {
 				// the tail of the log (bottom-pinned in the pane)
 				// where the user looks for latest activity, not buried
 				// above a wall of replayed chat.
-				for _, n := range consumeBootNotes() {
+				for _, n := range store.ConsumeBootNotes() {
 					m.systemLine("storage: " + n)
 				}
 				if backfilled > 0 {
@@ -1340,10 +1318,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// (messages, nodes, settings) in one transaction. Already-
 		// canonical IDs (we've handshaken with this radio before)
 		// just refresh my_node_num + last_seen.
-		if newID, err := claimRadioIdentity(m.db, m.radioID, msg.nodeNum); err == nil {
-			m.radioID = newID
-		} else {
-			m.storagePersist(err)
+		if m.store != nil {
+			if newID, err := m.store.ClaimRadioIdentity(m.radioID, msg.nodeNum); err == nil {
+				m.radioID = newID
+			} else {
+				m.storagePersist(err)
+			}
 		}
 		// MyInfo = first frame of the handshake. Reset the received
 		// counter to 0 and emit the start-of-sync notice so the
@@ -1428,7 +1408,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.radioBuzzerEnabled {
 			v = "on"
 		}
-		m.storagePersist(putSetting(m.db, m.radioID, "radio_buzzer", v))
+		if m.store != nil {
+			m.storagePersist(m.store.PutSetting(m.radioID, "radio_buzzer", v))
+		}
 		return m, nil
 
 	case tracerouteTimeoutMsg:

@@ -85,7 +85,9 @@ func (m *model) sendPlainReply(text string, replyToID uint32) {
 	m.selectedMsg = len(m.messages) - 1
 	m.flash = fmt.Sprintf("sent in %s", m.currentChannel)
 
-	m.storagePersist(saveMessage(m.db, m.radioID, m.currentChannel, item))
+	if m.store != nil {
+		m.storagePersist(m.store.SaveMessage(m.radioID, m.currentChannel, messageItemToModel(item)))
+	}
 
 	if envelope != nil {
 		m.pump.Enqueue(envelope)
@@ -1006,7 +1008,9 @@ func (m *model) commitConfigDraft() int {
 		if !m.cfgDraft.buzzer {
 			v = "off"
 		}
-		m.storagePersist(putSetting(m.db, m.radioID, "radio_buzzer", v))
+		if m.store != nil {
+			m.storagePersist(m.store.PutSetting(m.radioID, "radio_buzzer", v))
+		}
 		changes++
 	}
 	if changes == 0 {
@@ -2006,7 +2010,9 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// ding_muted is a meshx-CLIENT preference (terminal beep), not
 		// a per-radio knob — pass "" for radioID so it lives once
 		// globally rather than once per radio in the settings table.
-		m.storagePersist(putSetting(m.db, "", "ding_muted", v))
+		if m.store != nil {
+			m.storagePersist(m.store.PutSetting("", "ding_muted", v))
+		}
 		if m.dingMuted {
 			m.flash = "/mute on — terminal ding silenced"
 			m.systemLine("ding muted — terminal won't beep on incoming text")
@@ -2388,7 +2394,9 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 
 	// Persist the outgoing so the log survives restart. Skipped in
 	// demo mode (m.db is always nil there).
-	m.storagePersist(saveMessage(m.db, m.radioID, m.currentChannel, item))
+	if m.store != nil {
+		m.storagePersist(m.store.SaveMessage(m.radioID, m.currentChannel, messageItemToModel(item)))
+	}
 
 	if envelope != nil {
 		m.pump.Enqueue(envelope)

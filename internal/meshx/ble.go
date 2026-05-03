@@ -21,7 +21,6 @@
 package meshx
 
 import (
-	"database/sql"
 	"fmt"
 	"io"
 	"slices"
@@ -31,6 +30,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/meshx/storage"
 	"github.com/retr0h/meshx/internal/meshx/transport"
 	"tinygo.org/x/bluetooth"
 )
@@ -54,31 +55,31 @@ type BLEDeviceView struct {
 }
 
 // openSharedStorage opens the same sqlite the live-radio TUI uses,
-// running migrations if needed. Returns nil db (no error) when
-// $HOME resolution fails so the CLI degrades to "nothing saved"
-// rather than dying before it can print a helpful error. Callers
-// are responsible for closing the db when done.
-func openSharedStorage() (*sql.DB, error) {
-	path, err := defaultStoragePath()
+// running migrations if needed. Returns the result cast to the
+// consumer-facing Store interface so CLI helpers see only the methods
+// they need. Callers are responsible for closing the store when done.
+func openSharedStorage() (Store, error) {
+	path, err := storage.DefaultPath()
 	if err != nil {
 		return nil, fmt.Errorf("storage path: %w", err)
 	}
-	db, _, err := openStorage(path)
+	sqliteStore, err := storage.New(path)
 	if err != nil {
 		return nil, fmt.Errorf("open storage: %w", err)
 	}
-	return db, nil
+	var store Store = sqliteStore
+	return store, nil
 }
 
 // BLEListDevices reads saved Bluetooth devices from sqlite and
 // returns the public view slice. Empty when nothing is paired yet.
 func BLEListDevices() ([]BLEDeviceView, error) {
-	db, err := openSharedStorage()
+	store, err := openSharedStorage()
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = db.Close() }()
-	raw, err := loadBLEDevices(db)
+	defer func() { _ = store.Close() }()
+	raw, err := store.LoadBLEDevices()
 	if err != nil {
 		return nil, err
 	}
@@ -90,22 +91,22 @@ func BLEListDevices() ([]BLEDeviceView, error) {
 }
 
 // BLEForget removes a saved device and prints a confirmation line.
-// Accepts uuid or friendly name — resolves via lookupBLEDevice.
+// Accepts uuid or friendly name — resolves via LookupBLEDevice.
 // Unknown names print a hint rather than erroring silently.
 func BLEForget(out io.Writer, target string) error {
-	db, err := openSharedStorage()
+	store, err := openSharedStorage()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }()
-	d, err := lookupBLEDevice(db, target)
+	defer func() { _ = store.Close() }()
+	d, err := store.LookupBLEDevice(target)
 	if err != nil {
 		return err
 	}
 	if d == nil {
 		return fmt.Errorf("no saved device matches %q (run `meshx ble list`)", target)
 	}
-	if err := forgetBLEDevice(db, d.UUID); err != nil {
+	if err := store.ForgetBLEDevice(d.UUID); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "forgot %s (%s)\n", d.DisplayName(), d.UUID)
@@ -116,12 +117,12 @@ func BLEForget(out io.Writer, target string) error {
 // on a specific device. Intended for the `ble disconnect` flow
 // where the user is clearing auto-connect without naming a device.
 func BLESetFavorite(uuid string) error {
-	db, err := openSharedStorage()
+	store, err := openSharedStorage()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }()
-	return setBLEFavorite(db, uuid)
+	defer func() { _ = store.Close() }()
+	return store.SetBLEFavorite(uuid)
 }
 
 // BLEMarkFavorite resolves a name-or-uuid target to a saved device
@@ -129,19 +130,19 @@ func BLESetFavorite(uuid string) error {
 // is the pair the CLI `ble fav` command uses — `BLESetFavorite` on
 // its own only takes a uuid.
 func BLEMarkFavorite(out io.Writer, target string) error {
-	db, err := openSharedStorage()
+	store, err := openSharedStorage()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }()
-	d, err := lookupBLEDevice(db, target)
+	defer func() { _ = store.Close() }()
+	d, err := store.LookupBLEDevice(target)
 	if err != nil {
 		return err
 	}
 	if d == nil {
 		return fmt.Errorf("no saved device matches %q (run `meshx ble list`)", target)
 	}
-	if err := setBLEFavorite(db, d.UUID); err != nil {
+	if err := store.SetBLEFavorite(d.UUID); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "★ %s (%s) is now the auto-connect favorite\n", d.DisplayName(), d.UUID)
@@ -305,12 +306,12 @@ func BLEPair(out io.Writer, _ io.Reader, uuid string) error {
 		_, _ = fmt.Fprintf(out, "warning: close after pair returned %v (bond likely fine)\n", cerr)
 	}
 
-	db, err := openSharedStorage()
+	store, err := openSharedStorage()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = db.Close() }()
-	if err := saveBLEDevice(db, bleDevice{UUID: uuid}); err != nil {
+	defer func() { _ = store.Close() }()
+	if err := store.SaveBLEDevice(mdl.BLEDevice{UUID: uuid}); err != nil {
 		return err
 	}
 
@@ -329,19 +330,19 @@ func BLEPair(out io.Writer, _ io.Reader, uuid string) error {
 // doesn't need to know it's a radio over Bluetooth versus USB —
 // the transport/Client abstraction keeps it oblivious.
 func RunBLE(target string) error {
-	db, err := openSharedStorage()
+	store, err := openSharedStorage()
 	if err != nil {
 		return err
 	}
-	d, err := lookupBLEDevice(db, target)
+	d, err := store.LookupBLEDevice(target)
 	if err != nil {
-		_ = db.Close()
+		_ = store.Close()
 		return err
 	}
 	// Close the setup-path handle before handing off to the TUI —
 	// RunRadio opens its own storage handle for the live session,
 	// and holding two fights the SQLite WAL lock on some systems.
-	_ = db.Close()
+	_ = store.Close()
 	if d == nil {
 		return fmt.Errorf(
 			"no saved device matches %q — run `meshx ble list` to see what's paired",
@@ -372,12 +373,12 @@ func AutoConnectTarget() (string, error) {
 
 	// 2+3. BLE fallback — read saved devices and apply the
 	//    resolution chain.
-	db, err := openSharedStorage()
+	store, err := openSharedStorage()
 	if err != nil {
 		return "", errNoTransport("storage: " + err.Error())
 	}
-	defer func() { _ = db.Close() }()
-	devs, err := loadBLEDevices(db)
+	defer func() { _ = store.Close() }()
+	devs, err := store.LoadBLEDevices()
 	if err != nil {
 		return "", errNoTransport("ble list: " + err.Error())
 	}

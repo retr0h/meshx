@@ -656,7 +656,11 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			)
 		})
 		if persistNum != 0 {
-			m.storagePersist(saveNodePrefs(m.db, m.radioID, persistNum, persistFav, persistMute))
+			if m.store != nil {
+				m.storagePersist(
+					m.store.SaveNodePrefs(m.radioID, persistNum, persistFav, persistMute),
+				)
+			}
 		}
 	case "m":
 		var persistNum uint32
@@ -674,7 +678,11 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			persistMute = n.state == stateMuted
 		})
 		if persistNum != 0 {
-			m.storagePersist(saveNodePrefs(m.db, m.radioID, persistNum, persistFav, persistMute))
+			if m.store != nil {
+				m.storagePersist(
+					m.store.SaveNodePrefs(m.radioID, persistNum, persistFav, persistMute),
+				)
+			}
 		}
 	case "s":
 		if m.focused == paneNodes {

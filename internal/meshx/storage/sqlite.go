@@ -224,7 +224,23 @@ func recordBootNotes(notes []string) {
 	}
 	bootNotes.mu.Lock()
 	defer bootNotes.mu.Unlock()
-	bootNotes.notes = append(bootNotes.notes, notes...)
+	for _, n := range notes {
+		// Skip goose's steady-state "nothing to do" line. The
+		// autoconnect flow opens storage two-to-three times per
+		// launch (AutoConnectTarget reads ble_devices → RunBLE
+		// resolves friendly name → newModel for the TUI session),
+		// and every open re-runs goose. Without this filter the
+		// log shows "no migrations to run" once per open, which
+		// is pure noise. Apply lines ("OK   010_xxx.sql (Xms)")
+		// and the post-apply success summary still pass through —
+		// those are the genuinely useful trace and only fire on
+		// the first open of a process where a migration actually
+		// applied.
+		if strings.Contains(n, "no migrations to run") {
+			continue
+		}
+		bootNotes.notes = append(bootNotes.notes, n)
+	}
 }
 
 // ConsumeBootNotes drains and returns the captured migration trace.

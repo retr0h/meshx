@@ -208,11 +208,46 @@ func DefaultDemo() *Demo {
 			// id so the zebra stripe treats them as one visual card.
 			// Hand-seeded with group=1 and matching timestamps so the
 			// render loop groups them the same way.
-			{Message: mdl.Message{Time: "14:14", Text: "-!- whois TangoBravo_7", Status: mdl.StatusSystem}, group: 1},
-			{Message: mdl.Message{Time: "14:14", Text: "-!-    hw:     RAK4631", Status: mdl.StatusSystem}, group: 1},
-			{Message: mdl.Message{Time: "14:14", Text: "-!-    fw:     2.6.11", Status: mdl.StatusSystem}, group: 1},
-			{Message: mdl.Message{Time: "14:14", Text: "-!-    heard:  3m ago", Status: mdl.StatusSystem}, group: 1},
-			{Message: mdl.Message{Time: "14:14", Text: "-!-    state:  online", Status: mdl.StatusSystem}, group: 1},
+			{
+				Message: mdl.Message{
+					Time:   "14:14",
+					Text:   "-!- whois TangoBravo_7",
+					Status: mdl.StatusSystem,
+				},
+				group: 1,
+			},
+			{
+				Message: mdl.Message{
+					Time:   "14:14",
+					Text:   "-!-    hw:     RAK4631",
+					Status: mdl.StatusSystem,
+				},
+				group: 1,
+			},
+			{
+				Message: mdl.Message{
+					Time:   "14:14",
+					Text:   "-!-    fw:     2.6.11",
+					Status: mdl.StatusSystem,
+				},
+				group: 1,
+			},
+			{
+				Message: mdl.Message{
+					Time:   "14:14",
+					Text:   "-!-    heard:  3m ago",
+					Status: mdl.StatusSystem,
+				},
+				group: 1,
+			},
+			{
+				Message: mdl.Message{
+					Time:   "14:14",
+					Text:   "-!-    state:  online",
+					Status: mdl.StatusSystem,
+				},
+				group: 1,
+			},
 			{
 				Message: mdl.Message{
 					Time:   "14:14",
@@ -221,7 +256,14 @@ func DefaultDemo() *Demo {
 				},
 				group: 1,
 			},
-			{Message: mdl.Message{Time: "14:14", Text: "-!-    end of /whois", Status: mdl.StatusSystem}, group: 1},
+			{
+				Message: mdl.Message{
+					Time:   "14:14",
+					Text:   "-!-    end of /whois",
+					Status: mdl.StatusSystem,
+				},
+				group: 1,
+			},
 			{Message: mdl.Message{
 				Time: "14:16", From: "retr0h", Mine: true,
 				Text:   "running the 30w build again, let me know if it's too loud",

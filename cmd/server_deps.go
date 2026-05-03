@@ -41,18 +41,16 @@ import (
 const meshtasticServiceUUID = "6ba1b218-15a8-461f-9fa8-5dcae273eafd"
 
 // serverDeps wires the optional server dependencies — sqlite store,
-// BLE scanner, BLE pairer. Each can fail independently; the server
-// returns 503 from endpoints that need a missing dep so callers see
-// a real signal instead of silent breakage. Errors get logged but
-// don't abort daemon startup.
+// BLE scanner, BLE pairer, USB scanner. Each can fail independently;
+// the server returns 503 from endpoints that need a missing dep so
+// callers see a real signal instead of silent breakage. Errors get
+// logged but don't abort daemon startup.
 func serverDeps(
 	cmd *cobra.Command,
 	log *slog.Logger,
-) (server.Store, server.BLEScanner, server.BLEPairer) {
+) (server.Store, server.BLEScanner, server.BLEPairer, server.USBScanner) {
 	store := openStorage(cmd, log)
-	scanner := bleScanner{}
-	pairer := blePairer{}
-	return store, scanner, pairer
+	return store, bleScanner{}, blePairer{}, usbScanner{}
 }
 
 // openStorage opens the shared sqlite handle (~/.meshx/meshx.db),
@@ -164,4 +162,33 @@ func (blePairer) PairMeshtastic(uuid string) error {
 		return fmt.Errorf("close after pair: %w", cerr)
 	}
 	return nil
+}
+
+// usbScanner satisfies server.USBScanner — wraps the transport
+// package's IdentifyAllSerial probe and lifts each transport.DeviceInfo
+// into a server.USBSighting (renaming Err → Reason as a string so the
+// shape survives JSON marshaling).
+type usbScanner struct{}
+
+func (usbScanner) IdentifyAllSerial(timeoutMS int) ([]server.USBSighting, error) {
+	infos, err := transport.IdentifyAllSerial(time.Duration(timeoutMS) * time.Millisecond)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]server.USBSighting, 0, len(infos))
+	for _, d := range infos {
+		hit := server.USBSighting{
+			Port:         d.Port,
+			IsMeshtastic: d.IsMeshtastic,
+			NodeNum:      d.NodeNum,
+			ShortName:    d.ShortName,
+			LongName:     d.LongName,
+			HWModel:      d.HWModel,
+		}
+		if d.Err != nil {
+			hit.Reason = d.Err.Error()
+		}
+		out = append(out, hit)
+	}
+	return out, nil
 }

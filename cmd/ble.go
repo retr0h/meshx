@@ -52,17 +52,19 @@ API for both this CLI and remote clients.`,
 }
 
 // localServer constructs an in-process server with the daemon's
-// dependencies typed as the narrow bleOps consumer interface. The HTTP
-// listener is never started — cmd calls handler methods directly so
-// CLI ops execute the same code path the HTTP daemon does.
-func localServer(cmd *cobra.Command) bleOps {
-	store, scanner, pairer := serverDeps(cmd, logger)
+// dependencies. The HTTP listener is never started — cmd calls
+// handler methods directly so CLI ops execute the same code path the
+// HTTP daemon does. Returns *server.Server so the caller can narrow
+// to whichever consumer interface (bleOps, usbOps, …) it needs.
+func localServer(cmd *cobra.Command) *server.Server {
+	store, scanner, pairer, usbScan := serverDeps(cmd, logger)
 	return server.New(server.Config{
-		Radios:  server.NewRegistry(),
-		Store:   store,
-		Scanner: scanner,
-		Pairer:  pairer,
-		Logger:  logger,
+		Radios:     server.NewRegistry(),
+		Store:      store,
+		Scanner:    scanner,
+		Pairer:     pairer,
+		USBScanner: usbScan,
+		Logger:     logger,
 	})
 }
 
@@ -75,7 +77,7 @@ var bleScanCmd = &cobra.Command{
 	RunE: func(c *cobra.Command, _ []string) error {
 		logger.With(slog.String("subsystem", "ble.scan")).
 			Debug("running", slog.Int("timeout_ms", 10000))
-		srv := localServer(c)
+		var srv bleOps = localServer(c)
 		hits, err := srv.ScanBLE(c.Context(), 10000)
 		if err != nil {
 			return err
@@ -124,7 +126,7 @@ Linux goes through the BlueZ agent.`,
 		uuid := args[0]
 		logger.With(slog.String("subsystem", "ble.pair")).
 			Debug("running", slog.String("uuid", uuid))
-		srv := localServer(c)
+		var srv bleOps = localServer(c)
 		fmt.Printf("pairing %s …\n", uuid)
 		fmt.Println("  if your OS pops a Bluetooth pair prompt, enter the PIN shown on the radio.")
 		if err := srv.PairBLE(c.Context(), uuid); err != nil {
@@ -144,7 +146,7 @@ var bleListCmd = &cobra.Command{
 	Short: "Show saved Bluetooth devices",
 	RunE: func(c *cobra.Command, _ []string) error {
 		logger.With(slog.String("subsystem", "ble.list")).Debug("running")
-		srv := localServer(c)
+		var srv bleOps = localServer(c)
 		devs, err := srv.ListBLEDevices(c.Context())
 		if err != nil {
 			return err
@@ -178,7 +180,7 @@ var bleForgetCmd = &cobra.Command{
 	RunE: func(c *cobra.Command, args []string) error {
 		logger.With(slog.String("subsystem", "ble.forget")).
 			Debug("running", slog.String("target", args[0]))
-		srv := localServer(c)
+		var srv bleOps = localServer(c)
 		if err := srv.ForgetBLEDevice(c.Context(), args[0]); err != nil {
 			return err
 		}
@@ -194,7 +196,7 @@ var bleConnectCmd = &cobra.Command{
 	RunE: func(c *cobra.Command, args []string) error {
 		log := logger.With(slog.String("subsystem", "ble.connect"))
 		log.Debug("running", slog.String("target", args[0]))
-		srv := localServer(c)
+		var srv bleOps = localServer(c)
 		uuid, err := srv.ResolveBLE(c.Context(), args[0])
 		if err != nil {
 			return err
@@ -209,7 +211,7 @@ var bleDisconnectCmd = &cobra.Command{
 	Short: "Clear the auto-connect favorite",
 	RunE: func(c *cobra.Command, _ []string) error {
 		logger.With(slog.String("subsystem", "ble.disconnect")).Debug("running")
-		srv := localServer(c)
+		var srv bleOps = localServer(c)
 		return srv.ClearBLEFavorite(c.Context())
 	},
 }
@@ -221,7 +223,7 @@ var bleFavCmd = &cobra.Command{
 	RunE: func(c *cobra.Command, args []string) error {
 		logger.With(slog.String("subsystem", "ble.fav")).
 			Debug("running", slog.String("target", args[0]))
-		srv := localServer(c)
+		var srv bleOps = localServer(c)
 		view, err := srv.SetBLEFavoriteByName(c.Context(), args[0])
 		if err != nil {
 			return err

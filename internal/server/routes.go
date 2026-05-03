@@ -168,4 +168,22 @@ func (s *Server) registerRoutes() {
 		Description: "Removes the favorite flag from whichever device currently holds it. Auto-connect falls back to the single-saved-device rule.",
 		Tags:        []string{"transports"},
 	}, s.handleClearBLEFavorite)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "scan-usb",
+		Method:      http.MethodPost,
+		Path:        "/transports/usb/scan",
+		Summary:     "Identify Meshtastic radios on USB-serial",
+		Description: "Walks every candidate USB-serial port, sends a Meshtastic WantConfigId handshake, returns each port's outcome (IsMeshtastic + node identity, or a reason it didn't respond).",
+		Tags:        []string{"transports"},
+	}, s.handleScanUSB)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "auto-detect-usb",
+		Method:      http.MethodPost,
+		Path:        "/transports/usb/auto",
+		Summary:     "Auto-detect a single Meshtastic radio on USB",
+		Description: "Convenience over /transports/usb/scan — returns the device path of the single Meshtastic radio found. 404 when zero, 409 when multiple.",
+		Tags:        []string{"transports"},
+	}, s.handleAutoDetectUSB)
 }

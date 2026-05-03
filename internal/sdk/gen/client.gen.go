@@ -17,6 +17,24 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// AutoUSBInputBody defines model for AutoUSBInputBody.
+type AutoUSBInputBody struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// TimeoutMs per-port identify timeout in milliseconds; default 1500
+	TimeoutMs *int64 `json:"timeout_ms,omitempty"`
+}
+
+// AutoUSBOutputBody defines model for AutoUSBOutputBody.
+type AutoUSBOutputBody struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Port serial device path of the single Meshtastic radio found
+	Port string `json:"port"`
+}
+
 // BLEDeviceView defines model for BLEDeviceView.
 type BLEDeviceView struct {
 	// Schema A URL to the JSON Schema for this object.
@@ -290,6 +308,22 @@ type ScanBLEOutputBody struct {
 	Devices *[]BLESighting `json:"devices"`
 }
 
+// ScanUSBInputBody defines model for ScanUSBInputBody.
+type ScanUSBInputBody struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// TimeoutMs per-port identify timeout in milliseconds; default 1500
+	TimeoutMs *int64 `json:"timeout_ms,omitempty"`
+}
+
+// ScanUSBOutputBody defines model for ScanUSBOutputBody.
+type ScanUSBOutputBody struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema  *string        `json:"$schema,omitempty"`
+	Devices *[]USBSighting `json:"devices"`
+}
+
 // SendMessageRequest defines model for SendMessageRequest.
 type SendMessageRequest struct {
 	// Schema A URL to the JSON Schema for this object.
@@ -340,6 +374,24 @@ type SessionSnapshot struct {
 	RadioRole      *string  `json:"radio_role,omitempty"`
 }
 
+// USBSighting defines model for USBSighting.
+type USBSighting struct {
+	// HwModel e.g. T-Beam v1.1, HELTEC_V3
+	HwModel *string `json:"hw_model,omitempty"`
+
+	// IsMeshtastic true when the port responded to a Meshtastic WantConfigId handshake
+	IsMeshtastic bool    `json:"is_meshtastic"`
+	LongName     *string `json:"long_name,omitempty"`
+	NodeNum      *int32  `json:"node_num,omitempty"`
+
+	// Port serial device path (/dev/cu.usbmodem*, /dev/ttyUSB*)
+	Port string `json:"port"`
+
+	// Reason why identification failed; empty when IsMeshtastic
+	Reason    *string `json:"reason,omitempty"`
+	ShortName *string `json:"short_name,omitempty"`
+}
+
 // ListMessagesParams defines parameters for ListMessages.
 type ListMessagesParams struct {
 	// Limit max rows to return; 0 = no limit
@@ -354,6 +406,12 @@ type PairBleJSONRequestBody = PairBLEInputBody
 
 // ScanBleJSONRequestBody defines body for ScanBle for application/json ContentType.
 type ScanBleJSONRequestBody = ScanBLEInputBody
+
+// AutoDetectUsbJSONRequestBody defines body for AutoDetectUsb for application/json ContentType.
+type AutoDetectUsbJSONRequestBody = AutoUSBInputBody
+
+// ScanUsbJSONRequestBody defines body for ScanUsb for application/json ContentType.
+type ScanUsbJSONRequestBody = ScanUSBInputBody
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -475,6 +533,16 @@ type ClientInterface interface {
 	ScanBleWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	ScanBle(ctx context.Context, body ScanBleJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AutoDetectUsbWithBody request with any body
+	AutoDetectUsbWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	AutoDetectUsb(ctx context.Context, body AutoDetectUsbJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ScanUsbWithBody request with any body
+	ScanUsbWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ScanUsb(ctx context.Context, body ScanUsbJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) Health(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -671,6 +739,54 @@ func (c *Client) ScanBleWithBody(ctx context.Context, contentType string, body i
 
 func (c *Client) ScanBle(ctx context.Context, body ScanBleJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewScanBleRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AutoDetectUsbWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAutoDetectUsbRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AutoDetectUsb(ctx context.Context, body AutoDetectUsbJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAutoDetectUsbRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ScanUsbWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewScanUsbRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ScanUsb(ctx context.Context, body ScanUsbJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewScanUsbRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1181,6 +1297,86 @@ func NewScanBleRequestWithBody(server string, contentType string, body io.Reader
 	return req, nil
 }
 
+// NewAutoDetectUsbRequest calls the generic AutoDetectUsb builder with application/json body
+func NewAutoDetectUsbRequest(server string, body AutoDetectUsbJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAutoDetectUsbRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewAutoDetectUsbRequestWithBody generates requests for AutoDetectUsb with any type of body
+func NewAutoDetectUsbRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/transports/usb/auto")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewScanUsbRequest calls the generic ScanUsb builder with application/json body
+func NewScanUsbRequest(server string, body ScanUsbJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewScanUsbRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewScanUsbRequestWithBody generates requests for ScanUsb with any type of body
+func NewScanUsbRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/transports/usb/scan")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -1271,6 +1467,16 @@ type ClientWithResponsesInterface interface {
 	ScanBleWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ScanBleResponse, error)
 
 	ScanBleWithResponse(ctx context.Context, body ScanBleJSONRequestBody, reqEditors ...RequestEditorFn) (*ScanBleResponse, error)
+
+	// AutoDetectUsbWithBodyWithResponse request with any body
+	AutoDetectUsbWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AutoDetectUsbResponse, error)
+
+	AutoDetectUsbWithResponse(ctx context.Context, body AutoDetectUsbJSONRequestBody, reqEditors ...RequestEditorFn) (*AutoDetectUsbResponse, error)
+
+	// ScanUsbWithBodyWithResponse request with any body
+	ScanUsbWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ScanUsbResponse, error)
+
+	ScanUsbWithResponse(ctx context.Context, body ScanUsbJSONRequestBody, reqEditors ...RequestEditorFn) (*ScanUsbResponse, error)
 }
 
 type HealthResponse struct {
@@ -1705,6 +1911,68 @@ func (r ScanBleResponse) ContentType() string {
 	return ""
 }
 
+type AutoDetectUsbResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON200                       *AutoUSBOutputBody
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r AutoDetectUsbResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AutoDetectUsbResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AutoDetectUsbResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ScanUsbResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON200                       *ScanUSBOutputBody
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r ScanUsbResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ScanUsbResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ScanUsbResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 // HealthWithResponse request returning *HealthResponse
 func (c *ClientWithResponses) HealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*HealthResponse, error) {
 	rsp, err := c.Health(ctx, reqEditors...)
@@ -1853,6 +2121,40 @@ func (c *ClientWithResponses) ScanBleWithResponse(ctx context.Context, body Scan
 		return nil, err
 	}
 	return ParseScanBleResponse(rsp)
+}
+
+// AutoDetectUsbWithBodyWithResponse request with arbitrary body returning *AutoDetectUsbResponse
+func (c *ClientWithResponses) AutoDetectUsbWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AutoDetectUsbResponse, error) {
+	rsp, err := c.AutoDetectUsbWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAutoDetectUsbResponse(rsp)
+}
+
+func (c *ClientWithResponses) AutoDetectUsbWithResponse(ctx context.Context, body AutoDetectUsbJSONRequestBody, reqEditors ...RequestEditorFn) (*AutoDetectUsbResponse, error) {
+	rsp, err := c.AutoDetectUsb(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAutoDetectUsbResponse(rsp)
+}
+
+// ScanUsbWithBodyWithResponse request with arbitrary body returning *ScanUsbResponse
+func (c *ClientWithResponses) ScanUsbWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ScanUsbResponse, error) {
+	rsp, err := c.ScanUsbWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseScanUsbResponse(rsp)
+}
+
+func (c *ClientWithResponses) ScanUsbWithResponse(ctx context.Context, body ScanUsbJSONRequestBody, reqEditors ...RequestEditorFn) (*ScanUsbResponse, error) {
+	rsp, err := c.ScanUsb(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseScanUsbResponse(rsp)
 }
 
 // ParseHealthResponse parses an HTTP response from a HealthWithResponse call
@@ -2286,6 +2588,72 @@ func ParseScanBleResponse(rsp *http.Response) (*ScanBleResponse, error) {
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest ScanBLEOutputBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAutoDetectUsbResponse parses an HTTP response from a AutoDetectUsbWithResponse call
+func ParseAutoDetectUsbResponse(rsp *http.Response) (*AutoDetectUsbResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AutoDetectUsbResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AutoUSBOutputBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseScanUsbResponse parses an HTTP response from a ScanUsbWithResponse call
+func ParseScanUsbResponse(rsp *http.Response) (*ScanUsbResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ScanUsbResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ScanUSBOutputBody
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

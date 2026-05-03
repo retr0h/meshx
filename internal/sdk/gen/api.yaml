@@ -1,5 +1,34 @@
 components:
   schemas:
+    AutoUSBInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/AutoUSBInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        timeout_ms:
+          description: per-port identify timeout in milliseconds; default 1500
+          format: int64
+          type: integer
+      type: object
+    AutoUSBOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/AutoUSBOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        port:
+          description: serial device path of the single Meshtastic radio found
+          type: string
+      required:
+        - port
+      type: object
     BLEDeviceView:
       additionalProperties: false
       properties:
@@ -458,6 +487,37 @@ components:
       required:
         - devices
       type: object
+    ScanUSBInputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ScanUSBInputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        timeout_ms:
+          description: per-port identify timeout in milliseconds; default 1500
+          format: int64
+          type: integer
+      type: object
+    ScanUSBOutputBody:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ScanUSBOutputBody.json
+          format: uri
+          readOnly: true
+          type: string
+        devices:
+          items:
+            $ref: "#/components/schemas/USBSighting"
+          nullable: true
+          type: array
+      required:
+        - devices
+      type: object
     SendMessageRequest:
       additionalProperties: false
       properties:
@@ -564,6 +624,33 @@ components:
         - connected
         - current_channel
         - connect_dest
+      type: object
+    USBSighting:
+      additionalProperties: false
+      properties:
+        hw_model:
+          description: e.g. T-Beam v1.1, HELTEC_V3
+          type: string
+        is_meshtastic:
+          description: true when the port responded to a Meshtastic WantConfigId handshake
+          type: boolean
+        long_name:
+          type: string
+        node_num:
+          format: int32
+          minimum: 0
+          type: integer
+        port:
+          description: serial device path (/dev/cu.usbmodem*, /dev/ttyUSB*)
+          type: string
+        reason:
+          description: why identification failed; empty when IsMeshtastic
+          type: string
+        short_name:
+          type: string
+      required:
+        - port
+        - is_meshtastic
       type: object
 info:
   description: meshx mesh-radio HTTP API — channels, nodes, messages, transports, and live events from one or more Meshtastic-compatible LoRa radios. Radio-scoped resources live under /radios/{radio_id}/…; transport-management endpoints under /transports/…
@@ -930,5 +1017,57 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: Scan for nearby Meshtastic radios over Bluetooth
+      tags:
+        - transports
+  /transports/usb/auto:
+    post:
+      description: Convenience over /transports/usb/scan — returns the device path of the single Meshtastic radio found. 404 when zero, 409 when multiple.
+      operationId: auto-detect-usb
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AutoUSBInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutoUSBOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Auto-detect a single Meshtastic radio on USB
+      tags:
+        - transports
+  /transports/usb/scan:
+    post:
+      description: Walks every candidate USB-serial port, sends a Meshtastic WantConfigId handshake, returns each port's outcome (IsMeshtastic + node identity, or a reason it didn't respond).
+      operationId: scan-usb
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScanUSBInputBody"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanUSBOutputBody"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Identify Meshtastic radios on USB-serial
       tags:
         - transports

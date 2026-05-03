@@ -60,3 +60,26 @@ type BLEScanner interface {
 type BLEPairer interface {
 	PairMeshtastic(uuid string) error
 }
+
+// USBSighting is one candidate USB-serial port observed during a
+// scan, with whether it responded to a Meshtastic handshake and the
+// node identity if it did. Mirrors transport.DeviceInfo across the
+// API seam without leaking that struct's internal fields (Err is
+// rendered as a string for JSON).
+type USBSighting struct {
+	Port         string `json:"port"                 doc:"serial device path (/dev/cu.usbmodem*, /dev/ttyUSB*)"`
+	IsMeshtastic bool   `json:"is_meshtastic"        doc:"true when the port responded to a Meshtastic WantConfigId handshake"`
+	NodeNum      uint32 `json:"node_num,omitempty"`
+	ShortName    string `json:"short_name,omitempty"`
+	LongName     string `json:"long_name,omitempty"`
+	HWModel      string `json:"hw_model,omitempty"   doc:"e.g. T-Beam v1.1, HELTEC_V3"`
+	Reason       string `json:"reason,omitempty"     doc:"why identification failed; empty when IsMeshtastic"`
+}
+
+// USBScanner is the narrow scan surface — walks every candidate
+// USB-serial port, sends a non-destructive Meshtastic handshake on
+// each, returns every port's outcome. Implemented by an adapter in
+// cmd/ that wraps internal/meshx/transport.IdentifyAllSerial.
+type USBScanner interface {
+	IdentifyAllSerial(timeoutMS int) ([]USBSighting, error)
+}

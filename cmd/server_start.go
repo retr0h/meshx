@@ -110,13 +110,14 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		)
 	}
 
-	store, scanner, pairer := serverDeps(cmd, log)
+	store, scanner, pairer, usbScan := serverDeps(cmd, log)
 	var srv daemonRunner = server.New(server.Config{
-		Radios:  radios,
-		Store:   store,
-		Scanner: scanner,
-		Pairer:  pairer,
-		Logger:  logger,
+		Radios:     radios,
+		Store:      store,
+		Scanner:    scanner,
+		Pairer:     pairer,
+		USBScanner: usbScan,
+		Logger:     logger,
 	})
 
 	log.Info("listening",

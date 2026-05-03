@@ -62,10 +62,11 @@ import (
 // at request time so clients get a real signal instead of a
 // silently-broken route.
 type Config struct {
-	Radios  *Registry
-	Store   Store
-	Scanner BLEScanner
-	Pairer  BLEPairer
+	Radios     *Registry
+	Store      Store
+	Scanner    BLEScanner
+	Pairer     BLEPairer
+	USBScanner USBScanner
 
 	// Logger is the slog handle every middleware (request log, panic
 	// recovery, future audit) emits through. Nil falls back to a
@@ -77,13 +78,14 @@ type Config struct {
 // to clients. Constructed via New(Config); the http.Server inside is
 // driven by Run.
 type Server struct {
-	radios  *Registry
-	store   Store
-	scanner BLEScanner
-	pairer  BLEPairer
-	http    *http.Server
-	api     huma.API
-	logger  *slog.Logger
+	radios     *Registry
+	store      Store
+	scanner    BLEScanner
+	pairer     BLEPairer
+	usbScanner USBScanner
+	http       *http.Server
+	api        huma.API
+	logger     *slog.Logger
 }
 
 // New wires a Server around the given Config. The Registry is
@@ -112,12 +114,13 @@ func New(cfg Config) *Server {
 	api := humago.New(mux, hc)
 
 	s := &Server{
-		radios:  cfg.Radios,
-		store:   cfg.Store,
-		scanner: cfg.Scanner,
-		pairer:  cfg.Pairer,
-		api:     api,
-		logger:  cfg.Logger.With(slog.String("subsystem", "http")),
+		radios:     cfg.Radios,
+		store:      cfg.Store,
+		scanner:    cfg.Scanner,
+		pairer:     cfg.Pairer,
+		usbScanner: cfg.USBScanner,
+		api:        api,
+		logger:     cfg.Logger.With(slog.String("subsystem", "http")),
 		http: &http.Server{
 			Handler: mux,
 			// ReadHeaderTimeout protects against slowloris-style attacks;

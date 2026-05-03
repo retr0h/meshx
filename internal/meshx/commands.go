@@ -829,14 +829,6 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		lines = append(lines, fmt.Sprintf("age:      %s ago", humanDuration(time.Since(env.at))))
 		m.systemBlock(fmt.Sprintf("env %s", n.callsign), lines...)
-	case "sked":
-		target := rest
-		if target == "" {
-			m.flash = "usage: /sked <callsign>"
-			return nil
-		}
-		m.sendBang("/sked "+target, "proposing scheduled contact, 24h from now")
-		m.flash = fmt.Sprintf("!sked %s — proposal sent", target)
 
 	// ── Extra ham/Meshtastic slang ────────────────────────────────
 	case "qrz":
@@ -1271,7 +1263,21 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		m.flash = fmt.Sprintf("no channel named %s — /channel list", rest)
 	case "part":
-		m.flash = "/part — channel leave needs radio transport to wire"
+		// Meshtastic channels aren't IRC channels — they live on the
+		// RADIO as "Channel" config slots (each with a name + a shared
+		// PSK), not as a per-client membership. There's nothing for
+		// meshX to "part" from; removing a channel means deleting the
+		// slot on the radio (phone app or `meshtastic --ch-disable
+		// <idx>`). Surface the explanation as a systemBlock instead of
+		// a one-line flash so the user sees the model spelled out.
+		m.systemBlock(
+			"/part",
+			"Meshtastic channels live on the radio, not the client.",
+			"To leave a channel, disable the slot via the phone app or",
+			"the meshtastic CLI (`meshtastic --ch-disable <index>`).",
+			"meshX will stop seeing it once the radio drops the slot.",
+		)
+		m.flash = "/part: channels are radio-configured — see the log"
 	case "channels":
 		m.openOverlay(overlayChannels)
 	case "nodes":

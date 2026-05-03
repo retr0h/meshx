@@ -249,7 +249,6 @@ func (p helpPane) Render(box Box) string {
 		kv("/88", "love-and-kisses ham slang"),
 		kv("/qsl", "acknowledge / confirm receipt"),
 		kv("/qth [grid]", "broadcast your location / grid square"),
-		kv("/sked <call>", "propose a scheduled contact"),
 		kv("/qrz", "\"who is calling me?\" — prompt for ID"),
 		kv("/qrm <call>", "report interference on their signal"),
 		kv("/qsb <call>", "report that their signal is fading"),

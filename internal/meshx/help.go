@@ -68,10 +68,6 @@ var helpEntries = map[string]helpEntry{
 		usage:   "/grid [locator]",
 		summary: "just the Maidenhead grid locator — shorter / more data-friendly than /qth",
 	},
-	"sked": {
-		usage:   "/sked <call>",
-		summary: "propose a scheduled contact with <call> ~24h out",
-	},
 	"qrz": {
 		usage:   "/qrz",
 		summary: "\"who is calling me?\" — broadcast a prompt for identification",

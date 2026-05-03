@@ -79,7 +79,7 @@ var slashCommands = []string{
 	"cq", "cqr", "exit", "grid", "h", "help", "info", "join",
 	"k", "mesh", "msg", "mute", "nearby", "nick", "nodes", "part", "pin",
 	"ping", "q", "qrm", "qrz", "qsb", "qsl", "qth", "quit", "r", "radar",
-	"reply", "rs", "search", "sk", "sked", "sync", "tr",
+	"reply", "rs", "search", "sk", "sync", "tr",
 	"w", "whois", "wx",
 }
 

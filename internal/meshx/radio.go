@@ -41,6 +41,8 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
 // sanitizeMessageText scrubs peer-originated text so one bad packet
@@ -207,9 +209,14 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 	// launch — same behavior as the official phone app. Placeholder
 	// "node 0x…" callsigns (both longname and shortname empty) are
 	// skipped inside saveNode itself.
-	m.storagePersist(
-		saveNode(m.db, m.radioID, msg.nodeNum, msg.longName, msg.shortName, msg.hwModel),
-	)
+	if m.store != nil {
+		m.storagePersist(m.store.SaveNode(m.radioID, mdl.CachedNode{
+			NodeNum:   msg.nodeNum,
+			LongName:  msg.longName,
+			ShortName: msg.shortName,
+			HwModel:   msg.hwModel,
+		}))
+	}
 
 	if idx, ok := m.nodesByNum[msg.nodeNum]; ok {
 		// Preserve fav flag across updates.
@@ -390,7 +397,11 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 			if prev.status == statusPending {
 				prev.status = statusAck
 			}
-			m.storagePersist(saveMessage(m.db, m.radioID, channelName, *prev))
+			if m.store != nil {
+				m.storagePersist(
+					m.store.SaveMessage(m.radioID, channelName, messageItemToModel(*prev)),
+				)
+			}
 			return nil
 		}
 	}
@@ -414,7 +425,9 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 	}
 
 	// Persist the incoming message so it survives a restart.
-	m.storagePersist(saveMessage(m.db, m.radioID, channelName, item))
+	if m.store != nil {
+		m.storagePersist(m.store.SaveMessage(m.radioID, channelName, messageItemToModel(item)))
+	}
 
 	// Bump unread count on non-active channels.
 	if msg.channel < len(m.channels) && m.channels[msg.channel].name != m.currentChannel && !mine {
@@ -645,7 +658,11 @@ func (m *model) applyRouting(msg radioRoutingMsg) {
 			m.messages[i].status = statusFail
 			m.flash = "delivery failed: " + msg.errorName + "  (R to resend)"
 		}
-		m.storagePersist(saveMessage(m.db, m.radioID, m.currentChannel, m.messages[i]))
+		if m.store != nil {
+			m.storagePersist(
+				m.store.SaveMessage(m.radioID, m.currentChannel, messageItemToModel(m.messages[i])),
+			)
+		}
 		return
 	}
 }

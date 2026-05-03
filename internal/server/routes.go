@@ -114,4 +114,58 @@ func (s *Server) registerRoutes() {
 		Description: "Live SSE stream of mesh activity for the named radio — node updates, incoming text, ack receipts, reconnect status. Clients consume this for real-time UI updates.",
 		Tags:        []string{"events"},
 	}, s.handleEvents)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "list-ble-devices",
+		Method:      http.MethodGet,
+		Path:        "/transports/ble/devices",
+		Summary:     "List paired Bluetooth devices",
+		Description: "Returns every BLE device the daemon has saved for auto-connect. Favorite devices are flagged.",
+		Tags:        []string{"transports"},
+	}, s.handleListBLEDevices)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "scan-ble",
+		Method:      http.MethodPost,
+		Path:        "/transports/ble/scan",
+		Summary:     "Scan for nearby Meshtastic radios over Bluetooth",
+		Description: "Runs a discovery scan for the configured timeout (default 10s) and returns peripherals advertising the Meshtastic GATT service.",
+		Tags:        []string{"transports"},
+	}, s.handleScanBLE)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "pair-ble",
+		Method:      http.MethodPost,
+		Path:        "/transports/ble/devices",
+		Summary:     "Pair a Bluetooth radio",
+		Description: "Opens an encrypted GATT connection to trigger OS-level bonding (PIN prompt on macOS, agent on Linux), then saves the device to the daemon's pairing table.",
+		Tags:        []string{"transports"},
+	}, s.handlePairBLE)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "forget-ble-device",
+		Method:      http.MethodDelete,
+		Path:        "/transports/ble/devices/{uuid}",
+		Summary:     "Remove a paired Bluetooth device",
+		Description: "Removes the device from the saved-pairings table. Does not unbind at the OS level.",
+		Tags:        []string{"transports"},
+	}, s.handleForgetBLE)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "set-ble-favorite",
+		Method:      http.MethodPut,
+		Path:        "/transports/ble/devices/{uuid}/favorite",
+		Summary:     "Mark a Bluetooth device as the auto-connect favorite",
+		Description: "Sets this device as the bare-`meshx` auto-connect target when no USB radio is plugged in.",
+		Tags:        []string{"transports"},
+	}, s.handleSetBLEFavorite)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "clear-ble-favorite",
+		Method:      http.MethodDelete,
+		Path:        "/transports/ble/favorite",
+		Summary:     "Clear the auto-connect favorite",
+		Description: "Removes the favorite flag from whichever device currently holds it. Auto-connect falls back to the single-saved-device rule.",
+		Tags:        []string{"transports"},
+	}, s.handleClearBLEFavorite)
 }

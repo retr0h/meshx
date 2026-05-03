@@ -54,35 +54,51 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 )
 
-// Server bundles the HTTP listener with the Registry of radios it
-// multiplexes across. Routes live under /radios/{radio_id}/… so one
-// daemon process can host multiple radios (HT + mobile + base, etc.)
-// and clients address each by its canonical RadioID. Concrete
-// listener / mux / api / registry types are unexported so callers
-// go through New + Run + Drivers, never poke them directly.
-type Server struct {
-	radios *Registry
-	http   *http.Server
-	api    huma.API
+// Config bundles the server's dependencies. Optional fields
+// (Store / Scanner / Pairer) gate corresponding endpoints — the
+// daemon serves whatever surface is wired; missing deps return 503
+// at request time so clients get a real signal instead of a
+// silently-broken route.
+type Config struct {
+	Radios  *Registry
+	Store   Store
+	Scanner BLEScanner
+	Pairer  BLEPairer
 }
 
-// New wires a Server around the given Registry. The Registry must
-// be constructed and (optionally) pre-populated by the caller;
-// drivers can also attach later via Drivers().Add(...) — the
-// /radios endpoints reflect the live registry state, no restart
-// required when a radio joins or leaves.
-func New(radios *Registry) *Server {
-	if radios == nil {
-		radios = NewRegistry()
+// Server is the HTTP+SSE daemon that multiplexes one or more radios
+// to clients. Constructed via New(Config); the http.Server inside is
+// driven by Run.
+type Server struct {
+	radios  *Registry
+	store   Store
+	scanner BLEScanner
+	pairer  BLEPairer
+	http    *http.Server
+	api     huma.API
+}
+
+// New wires a Server around the given Config. The Registry is
+// required; optional Store / Scanner / Pairer enable the BLE
+// transport-management endpoints (and the radio + message endpoints
+// that need persistence). Drivers can attach to the Registry later
+// via Drivers().Add(...) — the /radios endpoints reflect live
+// registry state with no restart required.
+func New(cfg Config) *Server {
+	if cfg.Radios == nil {
+		cfg.Radios = NewRegistry()
 	}
 	mux := http.NewServeMux()
-	cfg := huma.DefaultConfig("meshx", "0.1.0")
-	cfg.Info.Description = "meshx mesh-radio HTTP API — channels, nodes, messages, and live events from one or more Meshtastic-compatible LoRa radios. Every radio-scoped resource is addressed under /radios/{radio_id}/…"
-	api := humago.New(mux, cfg)
+	hc := huma.DefaultConfig("meshx", "0.1.0")
+	hc.Info.Description = "meshx mesh-radio HTTP API — channels, nodes, messages, transports, and live events from one or more Meshtastic-compatible LoRa radios. Radio-scoped resources live under /radios/{radio_id}/…; transport-management endpoints under /transports/…"
+	api := humago.New(mux, hc)
 
 	s := &Server{
-		radios: radios,
-		api:    api,
+		radios:  cfg.Radios,
+		store:   cfg.Store,
+		scanner: cfg.Scanner,
+		pairer:  cfg.Pairer,
+		api:     api,
 		http: &http.Server{
 			Handler: mux,
 			// ReadHeaderTimeout protects against slowloris-style attacks;

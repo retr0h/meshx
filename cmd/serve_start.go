@@ -103,7 +103,13 @@ func runServeStart(cmd *cobra.Command, _ []string) error {
 		)
 	}
 
-	var srv daemonRunner = server.New(radios)
+	store, scanner, pairer := serveDeps(cmd)
+	var srv daemonRunner = server.New(server.Config{
+		Radios:  radios,
+		Store:   store,
+		Scanner: scanner,
+		Pairer:  pairer,
+	})
 
 	_, _ = fmt.Fprintf(
 		cmd.OutOrStdout(),

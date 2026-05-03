@@ -50,9 +50,8 @@ meshx/
 │   ├── ble.go                    # `meshx ble {scan,pair,list,forget,connect,disconnect,fav}`
 │   ├── ble_probe.go              # `meshx ble probe` — diagnostic packet dump
 │   ├── serve.go                  # `meshx serve` parent command
-│   └── serve_start.go            # `meshx serve start` — headless HTTP+SSE daemon (declares daemonRunner consumer interface)
-├── internal/meshx/               # public-API shell — BLE CLI helpers + RunBLE / AutoConnectTarget
-│   └── ble.go                    # BLEScan / BLEPair / BLEListDevices / BLEForget / BLEMarkFavorite / BLESetFavorite / RunBLE / AutoConnectTarget (declares its own narrow bleStore consumer interface)
+│   ├── serve_start.go            # `meshx serve start` — headless HTTP+SSE daemon (declares daemonRunner consumer interface)
+│   └── serve_deps.go             # constructs the daemon's optional deps (sqlite store, BLE scanner/pairer adapters using tinygo bluetooth)
 ├── internal/driver/              # headless radio session layer — owns canonical State, wraps Pump + Store
 │   ├── driver.go                 # *driver.Driver type + New(state, pump, store) + Send / Stop / Session
 │   ├── state.go                  # *driver.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests, reconnect banner
@@ -62,8 +61,10 @@ meshx/
 │   ├── server.go                 # *server.Server type + New(Registry) + Run(ctx, addr) + Drivers()
 │   ├── registry.go               # *server.Registry — radio_id → Driver multiplex, mutex-guarded for concurrent HTTP handlers
 │   ├── driver.go                 # consumer interface (Driver) at the seam — concrete *driver.Driver satisfies via Session() + Send()
-│   ├── routes.go                 # huma.Register calls — every radio-scoped resource lives under /radios/{radio_id}/...
-│   └── handlers.go               # per-route handlers; channels/nodes/messages emit model types directly (single source of truth, no DTO duplication)
+│   ├── store.go                  # Store / BLEScanner / BLEPairer consumer interfaces (osapi-io seam) + BLESighting wire shape
+│   ├── routes.go                 # huma.Register calls — radio-scoped under /radios/{radio_id}/..., transports under /transports/...
+│   ├── handlers.go               # per-route handlers; channels/nodes/messages emit model types directly (single source of truth, no DTO duplication)
+│   └── transport_ble.go          # /transports/ble/* HTTP routes + in-process counterparts (ScanBLE/PairBLE/ListBLEDevices/...) used by cmd/ble.go
 ├── internal/tui/                 # Bubble Tea rendering surface (model dispatches apply* directly today)
 │   #                             # GAP: TUI consumes *driver.Driver concretely (m.driver.Pump.Send, m.driver.Store.SaveMessage,
 │   #                             # m.driver.Pump = p). Should declare a narrow consumer interface per osapi-io once apply*

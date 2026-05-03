@@ -21,12 +21,16 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"sort"
 	"text/tabwriter"
 
-	"github.com/retr0h/meshx/internal/meshx"
 	"github.com/spf13/cobra"
+
+	"github.com/retr0h/meshx/internal/server"
+	"github.com/retr0h/meshx/internal/tui"
 )
 
 // bleCmd groups every Bluetooth LE operation. Pair once via
@@ -35,66 +39,108 @@ import (
 // which saved device bare `meshx` falls through to when no USB
 // radio is connected.
 //
-// The actual BLE transport is defined in
-// internal/meshx/transport/ble.go. Commands in this file shell out
-// to meshx.BLE* helpers that thread through that transport.
+// Every subcommand here goes through the in-process server — same
+// code path the daemon's HTTP routes use. The CLI is just a local
+// HTTP-less consumer of the same surface; nothing here knows about
+// storage or transport directly.
 var bleCmd = &cobra.Command{
 	Use:   "ble",
 	Short: "Bluetooth LE Meshtastic transport",
 	Long: `Commands for discovering, pairing, and connecting to
 Meshtastic radios over Bluetooth LE. Pair a device once; its uuid
-and friendly names are saved to the local SQLite store so future
-sessions can reconnect by uuid, longname, or shortname.`,
+is saved to the local SQLite store and reachable through the daemon
+API for both this CLI and remote clients.`,
 }
 
-// bleScanCmd performs a timed BLE scan and prints every radio that
-// advertises the Meshtastic service UUID. Hardware-only; requires
-// an active Bluetooth adapter on the host.
+// localServer constructs an in-process server with the daemon's
+// dependencies. The HTTP listener is never started — cmd just calls
+// handler methods directly so CLI ops execute the same code path
+// the HTTP daemon does.
+func localServer(cmd *cobra.Command) *server.Server {
+	store, scanner, pairer := serveDeps(cmd)
+	return server.New(server.Config{
+		Radios:  server.NewRegistry(),
+		Store:   store,
+		Scanner: scanner,
+		Pairer:  pairer,
+	})
+}
+
 var bleScanCmd = &cobra.Command{
 	Use:   "scan",
 	Short: "Scan for nearby Meshtastic radios over BLE",
 	Long: "Runs a 10-second BLE scan and prints every peripheral that\n" +
-		"advertises the Meshtastic service uuid. Column output is:\n\n" +
-		"  UUID                                  Name            RSSI\n\n" +
-		"The uuid shown here is what `meshx ble pair` accepts.",
-	RunE: func(_ *cobra.Command, _ []string) error {
-		return meshx.BLEScan(os.Stdout)
+		"advertises the Meshtastic service uuid. The uuid shown here\n" +
+		"is what `meshx ble pair` accepts.",
+	RunE: func(c *cobra.Command, _ []string) error {
+		srv := localServer(c)
+		hits, err := srv.ScanBLE(c.Context(), 10000)
+		if err != nil {
+			return err
+		}
+		if len(hits) == 0 {
+			fmt.Println("no Meshtastic radios responded.")
+			fmt.Println()
+			fmt.Println("troubleshooting:")
+			fmt.Println("  - confirm Bluetooth is on for both the host and the radio")
+			fmt.Println("  - the radio must have BLE enabled in its config (default)")
+			fmt.Println("  - on macOS, grant the first-time Bluetooth permission prompt")
+			return nil
+		}
+		sort.SliceStable(hits, func(i, j int) bool {
+			if hits[i].RSSI != hits[j].RSSI {
+				return hits[i].RSSI > hits[j].RSSI
+			}
+			return hits[i].LocalName < hits[j].LocalName
+		})
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(tw, "UUID\tNAME\tRSSI")
+		for _, h := range hits {
+			name := h.LocalName
+			if name == "" {
+				name = "—"
+			}
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%d dBm\n", h.UUID, name, h.RSSI)
+		}
+		_ = tw.Flush()
+		fmt.Println()
+		fmt.Println("  → `meshx ble pair <uuid>` to save one of these")
+		return nil
 	},
 }
 
-// blePairCmd walks the user through OS-level Bluetooth pairing for
-// a specific device and persists it to the ble_devices table.
 var blePairCmd = &cobra.Command{
 	Use:   "pair <uuid>",
 	Short: "Pair with a Meshtastic radio over BLE",
-	Long: `Initiates OS-level Bluetooth pairing with the device at <uuid>.
+	Long: `Initiates OS-level Bluetooth pairing with the device at <uuid>
+and persists it to the local pairing table.
 
-macOS: the system pairing dialog handles the 6-digit PIN that the
-radio displays on its OLED. Accept it in the dialog; meshx will
-record the device on success.
-
-Linux: pairing goes through the BlueZ agent at /org/bluez/agent.
-You'll be prompted on stdin for the PIN shown on the radio.
-
-On success, the device is saved to ~/.meshx/meshx.db and shows up
-in ` + "`meshx ble list`" + ` for future connects.`,
+macOS handles the 6-digit PIN through the system pairing dialog;
+Linux goes through the BlueZ agent.`,
 	Args: cobra.ExactArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
-		return meshx.BLEPair(os.Stdout, os.Stdin, args[0])
+	RunE: func(c *cobra.Command, args []string) error {
+		srv := localServer(c)
+		uuid := args[0]
+		fmt.Printf("pairing %s …\n", uuid)
+		fmt.Println("  if your OS pops a Bluetooth pair prompt, enter the PIN shown on the radio.")
+		if err := srv.PairBLE(c.Context(), uuid); err != nil {
+			return err
+		}
+		fmt.Printf("paired with %s, saved to ~/.meshx/meshx.db\n", uuid)
+		fmt.Println()
+		fmt.Println("next steps:")
+		fmt.Printf("  - `meshx ble connect %s` to open the TUI\n", uuid)
+		fmt.Printf("  - `meshx ble fav %s` to make bare `meshx` auto-connect here\n", uuid)
+		return nil
 	},
 }
 
-// bleListCmd prints the saved Bluetooth devices. Columns fit on a
-// typical 120-col terminal; the first row of output is highlighted
-// with `★` when a favorite is set.
 var bleListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Show saved Bluetooth devices",
-	Long: `Prints every device previously paired with ` + "`meshx ble pair`" + `.
-The favorite (if any) is marked with a leading ★. That device is
-what bare ` + "`meshx`" + ` falls through to when no USB radio is plugged in.`,
-	RunE: func(_ *cobra.Command, _ []string) error {
-		devs, err := meshx.BLEListDevices()
+	RunE: func(c *cobra.Command, _ []string) error {
+		srv := localServer(c)
+		devs, err := srv.ListBLEDevices(c.Context())
 		if err != nil {
 			return err
 		}
@@ -120,73 +166,67 @@ what bare ` + "`meshx`" + ` falls through to when no USB radio is plugged in.`,
 	},
 }
 
-// bleForgetCmd removes a paired device from persistence. Accepts
-// uuid OR friendly name (longname / shortname). Does NOT unpair
-// at the OS level — macOS doesn't expose that, and on Linux the
-// user can run `bluetoothctl remove <mac>` separately if they
-// want to scrub it from BlueZ.
 var bleForgetCmd = &cobra.Command{
 	Use:   "forget <uuid|name>",
 	Short: "Remove a saved Bluetooth device",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
-		return meshx.BLEForget(os.Stdout, args[0])
+	RunE: func(c *cobra.Command, args []string) error {
+		srv := localServer(c)
+		if err := srv.ForgetBLEDevice(c.Context(), args[0]); err != nil {
+			return err
+		}
+		fmt.Printf("forgot %s\n", args[0])
+		return nil
 	},
 }
 
-// bleConnectCmd opens the TUI against a saved Bluetooth device.
-// `meshx ble connect <name>` is the everyday "launch meshx pointed
-// at my radio" command when Bluetooth is the transport.
 var bleConnectCmd = &cobra.Command{
 	Use:   "connect <uuid|name>",
 	Short: "Open the TUI over Bluetooth",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
-		return meshx.RunBLE(args[0])
+	RunE: func(c *cobra.Command, args []string) error {
+		srv := localServer(c)
+		uuid, err := srv.ResolveBLE(c.Context(), args[0])
+		if err != nil {
+			return err
+		}
+		return tui.RunRadio("ble:" + uuid)
 	},
 }
 
-// bleDisconnectCmd is a state-only command — it doesn't close an
-// active session (there isn't one outside of the TUI), it just
-// clears the favorite flag so bare `meshx` stops auto-connecting
-// to the previously-marked device.
 var bleDisconnectCmd = &cobra.Command{
 	Use:   "disconnect",
 	Short: "Clear the auto-connect favorite",
-	Long: `Removes the ★ favorite flag from whichever saved device
-currently holds it. After this, bare ` + "`meshx`" + ` will stop falling
-through to Bluetooth when no USB radio is connected, unless there's
-exactly one saved device in which case it keeps working.`,
-	RunE: func(_ *cobra.Command, _ []string) error {
-		return meshx.BLESetFavorite("")
+	RunE: func(c *cobra.Command, _ []string) error {
+		srv := localServer(c)
+		return srv.ClearBLEFavorite(c.Context())
 	},
 }
 
-// bleFavCmd marks a saved device as THE auto-connect target for
-// bare `meshx`. Only one device at a time holds the flag;
-// re-setting moves it. Pairs with `ble disconnect` to clear.
 var bleFavCmd = &cobra.Command{
 	Use:   "fav <uuid|name>",
 	Short: "Mark a saved device as the bare-launch favorite",
-	Long: `With multiple saved Bluetooth radios, bare ` + "`meshx`" + ` needs
-a tiebreaker when no USB radio is plugged in. ` + "`meshx ble fav`" + ` sets
-that tiebreaker. The marked device appears with a leading ★ in
-` + "`meshx ble list`" + `.`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
-		return meshx.BLEMarkFavorite(os.Stdout, args[0])
+	Args:  cobra.ExactArgs(1),
+	RunE: func(c *cobra.Command, args []string) error {
+		srv := localServer(c)
+		view, err := srv.SetBLEFavoriteByName(c.Context(), args[0])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("★ %s is now the auto-connect favorite\n", view.UUID)
+		return nil
 	},
 }
 
-// orDash returns "—" instead of an empty string so the tabwriter
-// output reads clean (no trailing blank columns). Callers using
-// this pipe every optional field through it.
 func orDash(s string) string {
 	if s == "" {
 		return "—"
 	}
 	return s
 }
+
+// silence unused import linter — context is consumed via cobra.Cmd.Context.
+var _ = context.Background
 
 func init() {
 	bleCmd.AddCommand(bleScanCmd)

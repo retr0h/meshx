@@ -198,8 +198,8 @@ var helpEntries = map[string]helpEntry{
 		summary: "alias for /channels — IRC convention for \"show me the channels\"",
 	},
 	"lastlog": {
-		usage:   "/lastlog",
-		summary: "jump to the most recent message in the log (like vim's G). Closes any overlay, parks the cursor on the tail in nav mode",
+		usage:   "/lastlog [call|text]",
+		summary: "with no args, jump to the most recent message (like vim G). With a callsign, jump to the last message FROM that peer; falls back to a body substring match if no sender hits",
 	},
 	"info": {
 		usage:   "/info",

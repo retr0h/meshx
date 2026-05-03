@@ -1652,24 +1652,62 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			"summary: "+entry.summary,
 		)
 	case "lastlog":
-		// /lastlog jumps to the most recent message in the log —
-		// equivalent to `G` in nav mode. Closes any open overlay so
-		// the messages pane is visible, parks the cursor on the
-		// tail, and lands in nav mode so the highlight is on.
-		// Earlier this was aliased to /search which produced
-		// confusing behaviour (search is a filter prompt, not a
-		// jump-to-bottom).
+		// /lastlog              — jump to the very last message
+		// /lastlog <call|text>  — jump to the last chat message FROM
+		//                          <call> (matches the from column,
+		//                          not body), or the last row whose
+		//                          body contains <text> if no sender
+		//                          matches. Substring + case-
+		//                          insensitive lookup, same loose
+		//                          match /whois uses.
+		// Closes any overlay, lands in nav mode on the located row.
 		if len(m.messages) == 0 {
 			m.flash = "/lastlog: log is empty"
 			return nil
 		}
 		m.overlay = overlayNone
 		m.focused = paneMessages
-		m.selectedMsg = len(m.messages) - 1
-		m.mode = modeNav
 		m.input.Blur()
-		latest := m.messages[m.selectedMsg]
-		m.flash = fmt.Sprintf("lastlog: %s — %s", latest.time, latest.from)
+		idx := -1
+		switch {
+		case rest == "":
+			idx = len(m.messages) - 1
+		default:
+			needle := strings.ToLower(strings.TrimSpace(rest))
+			// First pass: prefer matches in the from column — that's
+			// what "the last message FROM gleep" means semantically.
+			for i := len(m.messages) - 1; i >= 0; i-- {
+				if m.messages[i].status == "system" {
+					continue
+				}
+				if strings.Contains(strings.ToLower(m.messages[i].from), needle) {
+					idx = i
+					break
+				}
+			}
+			// Second pass: body match if no sender hit. Lets users
+			// /lastlog "morning" find the last message containing it.
+			if idx < 0 {
+				for i := len(m.messages) - 1; i >= 0; i-- {
+					if m.messages[i].status == "system" {
+						continue
+					}
+					if strings.Contains(strings.ToLower(m.messages[i].text), needle) {
+						idx = i
+						break
+					}
+				}
+			}
+		}
+		if idx < 0 {
+			m.flash = fmt.Sprintf("lastlog: no chat row matches %q", rest)
+			m.mode = modeNav
+			return nil
+		}
+		m.selectedMsg = idx
+		m.mode = modeNav
+		hit := m.messages[idx]
+		m.flash = fmt.Sprintf("lastlog: %s — %s", hit.time, hit.from)
 	case "search":
 		if rest == "" {
 			m.flash = "usage: /search <pattern>"

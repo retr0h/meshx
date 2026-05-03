@@ -37,6 +37,54 @@ import (
 )
 
 // nodeItem is the in-memory projection of a Meshtastic peer — the
+// nodeState is a typed enum for nodeItem.state. Purely runtime — no
+// SQLite column. Derived by currentState() from lastHeardAt at every
+// render, with a "muted" override that wins (user-sticky preference).
+// Typed so a typo like `stateOnlne` is a compile error instead of a
+// silently-never-matching switch case.
+type nodeState int
+
+const (
+	// stateUnknown is the zero value — used when we've never heard
+	// from a peer (lastHeardAt zero, no fixture seed). Renders as a
+	// dim placeholder.
+	stateUnknown nodeState = iota
+	// stateOnline — heard from in the last 15 minutes.
+	stateOnline
+	// stateOffline — known peer we haven't heard from recently.
+	stateOffline
+	// stateFailed — peer we've actively failed to reach (currently
+	// only set by /tr / /ping timeout flows; semantic placeholder for
+	// future health-check work).
+	stateFailed
+	// stateMuted — user-sticky preference (the `m` nav key flips
+	// this). Always wins over the lastHeardAt-derived states; persists
+	// across restarts via the nodes.muted column.
+	stateMuted
+)
+
+// String returns the human/wire form. Used in render switches and
+// kept stable for fixture seeding clarity. stateUnknown stringifies
+// to the empty string so display call sites that printf("%s") get
+// nothing visible for a never-heard peer instead of a literal
+// "unknown" or "stateUnknown" leaking into the UI.
+func (s nodeState) String() string {
+	switch s {
+	case stateUnknown:
+		return ""
+	case stateOnline:
+		return "online"
+	case stateOffline:
+		return "offline"
+	case stateFailed:
+		return "failed"
+	case stateMuted:
+		return "muted"
+	default:
+		return ""
+	}
+}
+
 // subset of User / NodeInfo / telemetry fields the UI cares about.
 // Populated by upsertNode on NodeInfo arrival, updated by
 // applyTextMessage when a peer transmits, and rendered via the
@@ -57,7 +105,7 @@ type nodeItem struct {
 	// rows and gates the "identified <newname> (was <old>)" system
 	// line that fires when a real NodeInfo finally lands.
 	unresolved bool
-	state      string // "online", "offline", "failed", "muted"
+	state      nodeState
 	fav        bool
 	lastHeard  string // display string like "2m", "14:02", "3h"; fallback
 	// when lastHeardAt is zero (demo fixtures, rows that haven't
@@ -139,17 +187,17 @@ func (s sortMode) label() string {
 // lastHeardAt falls back to the stored n.state so demo fixtures and
 // rows that haven't been touched since the timestamp migration
 // still render their pre-set values.
-func (n *nodeItem) currentState() string {
-	if n.state == "muted" {
-		return "muted"
+func (n *nodeItem) currentState() nodeState {
+	if n.state == stateMuted {
+		return stateMuted
 	}
 	if n.lastHeardAt.IsZero() {
 		return n.state
 	}
 	if time.Since(n.lastHeardAt) < 15*time.Minute {
-		return "online"
+		return stateOnline
 	}
-	return "offline"
+	return stateOffline
 }
 
 // currentLastHeard returns the display string for "how long ago we

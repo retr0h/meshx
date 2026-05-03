@@ -165,7 +165,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 	if msg.bang != "" {
 		accentColor = mhYellow
 	}
-	if msg.status == "fail" {
+	if msg.status == statusFail {
 		accentColor = mhPink
 	}
 	accent := lipgloss.NewStyle().
@@ -179,7 +179,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 	flagGlyph := " "
 	flagStyle := tstamp
 	switch {
-	case msg.status == "fail":
+	case msg.status == statusFail:
 		flagGlyph = "✗"
 		flagStyle = fail
 	case msg.bang != "":
@@ -242,12 +242,12 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 	statusGlyph := " "
 	statusRender := tstamp
 	switch msg.status {
-	case "pending":
+	case statusPending:
 		statusGlyph = "…"
-	case "ack":
+	case statusAck:
 		statusGlyph = "✓"
 		statusRender = ack
-	case "fail":
+	case statusFail:
 		statusGlyph = "✗"
 		statusRender = fail
 	}

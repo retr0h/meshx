@@ -648,7 +648,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			n.fav = !n.fav
 			persistNum = m.nodeNumOf(n.callsign)
 			persistFav = n.fav
-			persistMute = n.state == "muted"
+			persistMute = n.state == stateMuted
 			m.flash = fmt.Sprintf(
 				"%s %s",
 				n.callsign,
@@ -662,16 +662,16 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var persistNum uint32
 		var persistFav, persistMute bool
 		m.actOnSelectedNode(func(n *nodeItem) {
-			if n.state == "muted" {
-				n.state = "online"
+			if n.state == stateMuted {
+				n.state = stateOnline
 				m.flash = fmt.Sprintf("%s unmuted", n.callsign)
 			} else {
-				n.state = "muted"
+				n.state = stateMuted
 				m.flash = fmt.Sprintf("%s muted", n.callsign)
 			}
 			persistNum = m.nodeNumOf(n.callsign)
 			persistFav = n.fav
-			persistMute = n.state == "muted"
+			persistMute = n.state == stateMuted
 		})
 		if persistNum != 0 {
 			m.storagePersist(saveNodePrefs(m.db, persistNum, persistFav, persistMute))

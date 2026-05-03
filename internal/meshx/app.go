@@ -289,13 +289,92 @@ type channelItem struct {
 	psk []byte
 }
 
+// messageStatus is a typed enum for messageItem.status. Strings on
+// the wire / disk (the SQLite messages.status column stays TEXT for
+// debuggability — `sqlite3 meshx.db "select status from messages"`
+// reads as "ack" / "pending" / etc., not opaque ints) but typed in
+// the model so a typo like `statusPendng` becomes a compile error
+// instead of a row that silently never matches a switch case. The
+// boundary lives in storage.go (saveMessage/loadMessages) and uses
+// String() / parseMessageStatus() for the conversion.
+type messageStatus int
+
+const (
+	// statusOK is the zero value — used for inbound chat that doesn't
+	// carry a delivery indicator. Persisted as the empty string "".
+	statusOK messageStatus = iota
+	// statusAck — outbound message the radio confirmed delivery for
+	// (Routing.NONE on a routing reply OR a real REPLY_APP echo).
+	// Renders the trailing ✓ glyph.
+	statusAck
+	// statusPending — outbound message we've enqueued but haven't
+	// heard back on. Renders the trailing … glyph; the stale-pending
+	// sweep at startup flips any row stuck here past the cutoff to
+	// statusFail.
+	statusPending
+	// statusFail — outbound message the radio actively rejected OR
+	// that aged out without an ack. Renders the trailing ✗ glyph;
+	// the `R` nav-key resends.
+	statusFail
+	// statusSystem — locally generated row (`-!-` notice, /whois /
+	// /info / /config blocks, etc.). NOT persisted to SQLite — the
+	// saveMessage early-return drops these on the floor since they're
+	// regenerated from live state on every launch.
+	statusSystem
+	// statusNotice — TTL-expiring `-!-` row from notices.go. Same
+	// rendering as statusSystem but with a fade + reap path; NOT
+	// persisted for the same reason.
+	statusNotice
+)
+
+// String returns the wire/disk form. Kept stable so historic SQLite
+// rows replay correctly after this refactor (column stays TEXT, no
+// migration needed).
+func (s messageStatus) String() string {
+	switch s {
+	case statusAck:
+		return "ack"
+	case statusPending:
+		return "pending"
+	case statusFail:
+		return "fail"
+	case statusSystem:
+		return "system"
+	case statusNotice:
+		return "notice"
+	default:
+		return ""
+	}
+}
+
+// parseMessageStatus is the inverse — used by loadMessages when
+// reading the messages.status TEXT column off disk. Unknown values
+// fall back to statusOK rather than panicking; an invalid row is
+// surface-level wrong (no glyph) but doesn't crash the UI.
+func parseMessageStatus(s string) messageStatus {
+	switch s {
+	case "ack":
+		return statusAck
+	case "pending":
+		return statusPending
+	case "fail":
+		return statusFail
+	case "system":
+		return statusSystem
+	case "notice":
+		return statusNotice
+	default:
+		return statusOK
+	}
+}
+
 type messageItem struct {
 	time   string
 	from   string
 	text   string
 	mine   bool
 	bang   string // empty or "!cq", "!cqr", "!qth", etc.
-	status string // "", "ack", "fail", "system"
+	status messageStatus
 	acks   string // optional child line — "↳ 3 acks — ..."
 	hops   int    // mesh hop count; 0 = direct/self
 	snr    string // "-8.5" etc., empty to hide
@@ -855,9 +934,9 @@ func newModel(demo *Demo, dest string) model {
 						if name == "" {
 							name = fmt.Sprintf("node 0x%x", n.nodeNum)
 						}
-						state := "offline"
+						state := stateOffline
 						if n.muted {
-							state = "muted"
+							state = stateMuted
 						}
 						m.nodes = append(m.nodes, nodeItem{
 							callsign:  name,
@@ -933,7 +1012,7 @@ func newModel(demo *Demo, dest string) model {
 							shortName:  short,
 							nodeNum:    msg.fromNum,
 							unresolved: true,
-							state:      "offline",
+							state:      stateOffline,
 							lastHeard:  msg.time,
 							lastSNR:    msg.snr,
 							lastHops:   msg.hops,

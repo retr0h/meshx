@@ -55,7 +55,7 @@ func (r messageRow) Render(box Box) string {
 	}
 	var raw string
 	switch r.msg.status {
-	case "notice", "system":
+	case statusNotice, statusSystem:
 		raw = noticeRowRender(
 			r.m, r.msg, r.selected, innerW, r.rowBg, r.pinFirst, r.pinLast,
 		)
@@ -205,7 +205,7 @@ func chatRowRender(
 	// other Meshtastic clients see something sensible too — meshx
 	// just chooses a richer presentation when we recognize the
 	// pattern.
-	isAction := msg.bang == "" && msg.status != "system" &&
+	isAction := msg.bang == "" && msg.status != statusSystem &&
 		strings.HasPrefix(msg.text, "* ") && len(msg.text) > 2
 
 	bodyLines := strings.Split(msg.text, "\n")

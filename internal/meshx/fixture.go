@@ -124,37 +124,37 @@ func DefaultDemo() *Demo {
 			// Index 0 is "me" — matches NodeNum above so myNode()
 			// resolves via m.nodesByNum[0x103d20cd] = 0.
 			{
-				callsign: "retr0h", shortName: "💀", state: "online", fav: true,
+				callsign: "retr0h", shortName: "💀", state: stateOnline, fav: true,
 				lastHeard: "now", heardRank: 0, lastSNR: "0.0", lastRSSI: "0",
 				lastHops: 0, hwModel: "HELTEC_V3_E", firmware: "2.7.15.567b8ea",
 			},
 			{
-				callsign: "TangoBravo_7", shortName: "TB7", state: "online",
+				callsign: "TangoBravo_7", shortName: "TB7", state: stateOnline,
 				lastHeard: "2m", heardRank: 2, lastSNR: "4.2", lastRSSI: "-92",
 				lastHops: 5, hwModel: "RAK4631", firmware: "2.6.11",
 			},
 			{
-				callsign: "MeshLab - plrmsh.io", shortName: "MLAB", state: "online",
+				callsign: "MeshLab - plrmsh.io", shortName: "MLAB", state: stateOnline,
 				lastHeard: "14s", heardRank: 1, lastSNR: "5.5", lastRSSI: "-89",
 				lastHops: 2, hwModel: "HELTEC_V3", firmware: "2.7.15",
 			},
 			{
-				callsign: "SolarRelay_HillNode", shortName: "SOLR", state: "online",
+				callsign: "SolarRelay_HillNode", shortName: "SOLR", state: stateOnline,
 				lastHeard: "1m", heardRank: 3, lastSNR: "3.2", lastRSSI: "-103",
 				lastHops: 3, hwModel: "Station-G2", firmware: "2.7.15",
 			},
 			{
-				callsign: "Helmsdeep", shortName: "HDP", state: "online",
+				callsign: "Helmsdeep", shortName: "HDP", state: stateOnline,
 				lastHeard: "4m", heardRank: 4, lastSNR: "-5.0", lastRSSI: "-98",
 				lastHops: 2, hwModel: "TRACKER_T1000_E", firmware: "2.7.15",
 			},
 			{
-				callsign: "BoarSense 1f4a", shortName: "🐗", state: "online",
+				callsign: "BoarSense 1f4a", shortName: "🐗", state: stateOnline,
 				lastHeard: "5m", heardRank: 5, lastSNR: "-8.5", lastRSSI: "-101",
 				lastHops: 3, hwModel: "T-Beam v1.1", firmware: "2.6.11",
 			},
 			{
-				callsign: "KE9NIL", shortName: "NIL", state: "offline",
+				callsign: "KE9NIL", shortName: "NIL", state: stateOffline,
 				lastHeard: "2h", heardRank: 99, lastSNR: "-16.0", lastRSSI: "-115",
 				lastHops: 5, hwModel: "T-Deck", firmware: "2.1.0",
 			},
@@ -182,7 +182,7 @@ func DefaultDemo() *Demo {
 				time: "14:10", from: "retr0h", mine: true, bang: "/cq",
 				text: "CQ CQ CQ de retr0h via meshx (github.com/retr0h/meshx) — " +
 					"testing signals, please ack",
-				status: "ack", packetID: 7001,
+				status: statusAck, packetID: 7001,
 			},
 			{
 				time: "14:11", from: "TangoBravo_7", fromNum: 0x5a00aa01,
@@ -204,22 +204,22 @@ func DefaultDemo() *Demo {
 			// id so the zebra stripe treats them as one visual card.
 			// Hand-seeded with group=1 and matching timestamps so the
 			// render loop groups them the same way.
-			{time: "14:14", text: "-!- whois TangoBravo_7", status: "system", group: 1},
-			{time: "14:14", text: "-!-    hw:     RAK4631", status: "system", group: 1},
-			{time: "14:14", text: "-!-    fw:     2.6.11", status: "system", group: 1},
-			{time: "14:14", text: "-!-    heard:  3m ago", status: "system", group: 1},
-			{time: "14:14", text: "-!-    state:  online", status: "system", group: 1},
+			{time: "14:14", text: "-!- whois TangoBravo_7", status: statusSystem, group: 1},
+			{time: "14:14", text: "-!-    hw:     RAK4631", status: statusSystem, group: 1},
+			{time: "14:14", text: "-!-    fw:     2.6.11", status: statusSystem, group: 1},
+			{time: "14:14", text: "-!-    heard:  3m ago", status: statusSystem, group: 1},
+			{time: "14:14", text: "-!-    state:  online", status: statusSystem, group: 1},
 			{
 				time:   "14:14",
 				text:   "-!-    signal: hop 3, SNR -5.2 dB, RSSI -92 dBm",
-				status: "system",
+				status: statusSystem,
 				group:  1,
 			},
-			{time: "14:14", text: "-!-    end of /whois", status: "system", group: 1},
+			{time: "14:14", text: "-!-    end of /whois", status: statusSystem, group: 1},
 			{
 				time: "14:16", from: "retr0h", mine: true,
 				text:   "running the 30w build again, let me know if it's too loud",
-				status: "ack",
+				status: statusAck,
 			},
 			// Ghost peer — fromNum populated but NOT in m.nodes /
 			// m.nodesByNum, so displayFrom falls back to msg.from and
@@ -237,7 +237,7 @@ func DefaultDemo() *Demo {
 				time: "14:17", from: "mmca solar test", fromNum: 0x5a00aa03,
 				text: "End of Day Report:\nMax Power: 1375.2576 mW at Pot setting: 133, Voltage: 6.0160 V, Current: 228.6000 mA\nWas the battery fully charged during the day? Yes",
 				hops: 4, snr: "-3.5",
-				status: "ack",
+				status: statusAck,
 			},
 			{
 				time: "14:18", from: "MeshLab - plrmsh.io", fromNum: 0x5a00aa02,
@@ -251,17 +251,17 @@ func DefaultDemo() *Demo {
 			{
 				time: "14:19", from: "",
 				text:   "-!- identified BoarSense 1f4a (was node 0xe7f4aa01)",
-				status: "system",
+				status: statusSystem,
 			},
 			{
 				time: "14:21", from: "retr0h", mine: true,
-				text: "brb lunch 🌮", status: "ack",
+				text: "brb lunch 🌮", status: statusAck,
 			},
 			// Failed send — renders with pink ✗ in the status col,
 			// shows the fail variant of the status column.
 			{
 				time: "14:23", from: "retr0h", mine: true, bang: "/73",
-				text: "73 👋", status: "fail",
+				text: "73 👋", status: statusFail,
 			},
 		},
 	}

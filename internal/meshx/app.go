@@ -898,10 +898,6 @@ func newModel(demo *Demo, dest string) model {
 	}
 
 	if demo == nil {
-		// Default radio identity for the pre-storage-open window —
-		// ensures every storage call below has a non-empty radioID
-		// even if the resolution step below fails for some reason.
-		m.radioID = defaultRadioID
 		// Live-radio mode — open the persistence store and replay the
 		// last chunk of history so the log survives restarts. We fail
 		// open: any storage error (missing $HOME, bad perms, corrupt
@@ -910,15 +906,17 @@ func newModel(demo *Demo, dest string) model {
 		if path, err := defaultStoragePath(); err == nil {
 			if db, notes, err := openStorage(path); err == nil {
 				m.db = db
-				// Bind this session to a Radio row before any storage
-				// call references radioID. resolveOrCreateRadio claims
-				// the migration's seeded default UUID the first time
-				// any radio connects, so historical rows (which carry
-				// radio_id = defaultRadioID after the migration)
-				// remain correctly attributed to whatever radio comes
-				// online first.
+				// Bind this session to a radio identity before any
+				// storage call references radioID. resolveRadioByConnection
+				// returns the canonical "0xNNNNNNNN" form for radios
+				// we've handshaken with before (cache hit on
+				// radios.my_node_num); for never-seen-before connections
+				// it returns a "pending:<transport>:<addr>" placeholder
+				// the radioMyInfoMsg handler swaps out via
+				// claimRadioIdentity once the handshake reveals the
+				// real my_node_num.
 				transport, addr := parseRadioDest(dest)
-				if rid, err := resolveOrCreateRadio(db, transport, addr); err == nil {
+				if rid, err := resolveRadioByConnection(db, transport, addr); err == nil {
 					m.radioID = rid
 				}
 				// Hydrate persisted prefs early — /mute (terminal ding,
@@ -1322,11 +1320,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case radioMyInfoMsg:
 		m.myNodeNum = msg.nodeNum
-		// Stamp the radio's own node num onto its persisted row. Best-
-		// effort; the value is denormalized convenience data — useful
-		// for `meshx ble list` style tooling later, not load-bearing
-		// for any query the model issues today.
-		m.storagePersist(updateRadioMyNodeNum(m.db, m.radioID, msg.nodeNum))
+		// First MyNodeInfo of the session locks in the radio's
+		// canonical identity — "0x" + hex(my_node_num), the same
+		// shape the Meshtastic phone app + Python CLI use. If
+		// m.radioID is still a placeholder (a "pending:…" string
+		// minted pre-handshake by resolveRadioByConnection, or the
+		// legacy migration-009 seed UUID), claimRadioIdentity does
+		// the atomic rewrite across radios + every FK column
+		// (messages, nodes, settings) in one transaction. Already-
+		// canonical IDs (we've handshaken with this radio before)
+		// just refresh my_node_num + last_seen.
+		if newID, err := claimRadioIdentity(m.db, m.radioID, msg.nodeNum); err == nil {
+			m.radioID = newID
+		} else {
+			m.storagePersist(err)
+		}
 		// MyInfo = first frame of the handshake. Reset the received
 		// counter to 0 and emit the start-of-sync notice so the
 		// user sees node-list progress instead of staring at an

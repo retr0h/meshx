@@ -21,7 +21,6 @@
 package meshx
 
 import (
-	"crypto/rand"
 	"database/sql"
 	"embed"
 	"errors"
@@ -38,13 +37,44 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// defaultRadioID is the seed UUID inserted by migration 009 for the
-// pre-existing single-radio data. The first time meshx connects after
-// the multi-radio migration, resolveOrCreateRadio claims this row by
-// rewriting its transport + addr to the live values — keeping every
-// historical message + node row correctly attributed without a
-// rewrite-foreign-keys backfill.
-const defaultRadioID = "00000000-0000-0000-0000-000000000001"
+// legacyRadioID is the placeholder UUID migration 009 used to seed
+// pre-existing single-radio data. Migration 010 rewrites it to
+// `radioIDFromNodeNum(my_node_num)` for any radio whose handshake
+// has populated my_node_num; the application-level claimRadioIdentity
+// covers the remaining case (placeholder still present because the
+// radio hasn't finished a handshake yet). We keep the constant so
+// claimRadioIdentity can recognize the legacy placeholder and
+// upgrade it on first MyNodeInfo arrival.
+const legacyRadioID = "00000000-0000-0000-0000-000000000001"
+
+// radioIDFromNodeNum returns the canonical Meshtastic identity string
+// for a radio: "0x" + lower-cased 8-hex-digit zero-padded node num.
+// Matches what the Meshtastic phone app, Python CLI, and the firmware
+// itself all surface (e.g. "0x103e034d"). Used as the primary key in
+// the radios table once a handshake reveals my_node_num.
+func radioIDFromNodeNum(myNodeNum uint32) string {
+	return fmt.Sprintf("0x%08x", myNodeNum)
+}
+
+// pendingRadioID returns the placeholder ID for a connection whose
+// my_node_num isn't known yet — the gap between transport.Dial
+// returning and MyNodeInfo arriving. The form is self-describing
+// ("pending:<transport>:<addr>") so a developer poking at the DB
+// or the daemon's API mid-handshake can tell at a glance that the
+// row is unresolved. Replaced by `radioIDFromNodeNum(my_node_num)`
+// the moment MyNodeInfo arrives — see claimRadioIdentity.
+func pendingRadioID(transport, addr string) string {
+	return fmt.Sprintf("pending:%s:%s", transport, addr)
+}
+
+// isPlaceholderRadioID reports whether id is one of the placeholder
+// shapes claimRadioIdentity should rewrite on first handshake — the
+// legacy migration-009 seed UUID, or any "pending:…" string minted
+// pre-handshake by resolveRadioByConnection. Real radio IDs ("0xNN…")
+// fall through unchanged.
+func isPlaceholderRadioID(id string) bool {
+	return id == legacyRadioID || strings.HasPrefix(id, "pending:")
+}
 
 // embedMigrations ships every SQL file under migrations/ into the
 // binary so goose can apply them against a user's ~/.meshx/meshx.db
@@ -699,38 +729,36 @@ func parseRadioDest(dest string) (transport, addr string) {
 	return "usb", dest
 }
 
-// randomUUID returns a v4-style UUID string built from crypto/rand.
-// We hand-roll the 16-byte format rather than pull in a uuid package
-// — the dependency surface is one function and one stdlib import.
-// Returns the error so callers can flash a message instead of
-// panicking inside an Update path.
-func randomUUID() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("crypto/rand: %w", err)
-	}
-	b[6] = (b[6] & 0x0F) | 0x40 // version 4
-	b[8] = (b[8] & 0x3F) | 0x80 // variant 10
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
-}
-
-// resolveOrCreateRadio looks up a radio row by (transport, addr) and
-// returns its UUID. If no row matches, the migration's seeded
-// "default" row is claimed by rewriting its transport + addr to the
-// live values — that keeps every historical message + node row
-// (which carries radio_id = defaultRadioID after the migration)
-// correctly attributed to whatever radio connects first. Subsequent
-// connects to a different (transport, addr) create fresh UUID rows.
+// resolveRadioByConnection returns the radio_id for the given
+// (transport, addr) connection — either the canonical
+// `radioIDFromNodeNum` form for radios we've handshaken with before
+// (cache hit on radios.my_node_num), or a `pendingRadioID` placeholder
+// for fresh connections whose handshake hasn't completed yet. The
+// placeholder gets rewritten to the canonical form by
+// claimRadioIdentity once MyNodeInfo arrives.
 //
-// Always succeeds when db is non-nil; demo mode (db == nil) returns
-// (defaultRadioID, nil) so callers don't need to special-case.
-func resolveOrCreateRadio(db *sql.DB, transport, addr string) (string, error) {
+// Steady state: a radio that's connected at least once before sits in
+// radios with id="0xNNNNNNNN" and an exact (transport, addr) match.
+// Cache lookup returns instantly; history loads against the real
+// identity before the handshake even starts.
+//
+// First connect to a never-seen-before radio: no exact match. We
+// insert a placeholder row keyed on `pendingRadioID(transport, addr)`
+// so the storage calls this session issues land somewhere consistent;
+// when MyNodeInfo lands, claimRadioIdentity rewrites the placeholder
+// across radios + every FK column in one transaction.
+//
+// Demo mode (db == nil): returns ("", nil) — callers treat empty
+// radioID as "no persistence" and skip storage writes entirely.
+func resolveRadioByConnection(
+	db *sql.DB, transport, addr string,
+) (string, error) {
 	if db == nil {
-		return defaultRadioID, nil
+		return "", nil
 	}
-	// Exact (transport, addr) hit — this is the steady-state path
-	// after a radio has connected at least once before.
+	// Exact (transport, addr) hit — return whatever id is on the row.
+	// For an upgraded DB that's "0xNNNNNNNN"; for an in-flight pending
+	// connection that's the same placeholder we'd otherwise mint.
 	var id string
 	err := db.QueryRow(
 		`SELECT id FROM radios WHERE transport = ? AND addr = ?`,
@@ -743,61 +771,126 @@ func resolveOrCreateRadio(db *sql.DB, transport, addr string) (string, error) {
 		return "", fmt.Errorf("lookup radio: %w", err)
 	}
 
-	// No exact match. Try to claim the migration's seeded default row
-	// — but only if it's still in its placeholder state. Once any
-	// radio has connected, the default row's transport/addr have
-	// been rewritten and a second radio coming online creates its
-	// own row instead.
-	var defaultAddr string
+	// No row for this (transport, addr). Two sub-cases to handle:
+	//
+	// 1. Legacy seeded radios.id='00…01' from migration 009 still
+	//    sitting in placeholder state (transport='unknown'). Claim it
+	//    by rewriting transport+addr in place — keeps the seed row
+	//    pointing at the radio that connects first, so historical FKs
+	//    (which all reference 00…01 until claimRadioIdentity runs)
+	//    stay correctly attributed.
+	//
+	// 2. Genuine new radio. Insert a fresh placeholder row keyed on
+	//    pendingRadioID(transport, addr); claimRadioIdentity rewrites
+	//    it to the canonical 0xNN form on MyNodeInfo arrival.
+	var legacyAddr string
 	err = db.QueryRow(
-		`SELECT addr FROM radios WHERE id = ?`, defaultRadioID,
-	).Scan(&defaultAddr)
-	if err == nil && defaultAddr == "unknown" {
+		`SELECT addr FROM radios WHERE id = ?`, legacyRadioID,
+	).Scan(&legacyAddr)
+	if err == nil && legacyAddr == "unknown" {
 		_, err = db.Exec(
 			`UPDATE radios SET transport = ?, addr = ?, last_seen = CURRENT_TIMESTAMP
              WHERE id = ?`,
-			transport, addr, defaultRadioID,
+			transport, addr, legacyRadioID,
 		)
 		if err != nil {
-			return "", fmt.Errorf("claim default radio: %w", err)
+			return "", fmt.Errorf("claim legacy radio: %w", err)
 		}
-		return defaultRadioID, nil
+		return legacyRadioID, nil
 	}
 
-	// Default row is taken (or missing); mint a new UUID for this
-	// radio. This is the path a second / third / Nth radio takes
-	// when meshx serve grows multi-radio support in PR #3.
-	newID, err := randomUUID()
-	if err != nil {
-		return "", err
-	}
+	pending := pendingRadioID(transport, addr)
 	_, err = db.Exec(
 		`INSERT INTO radios (id, name, transport, addr, last_seen)
          VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-		newID, "radio", transport, addr,
+		pending, "radio", transport, addr,
 	)
 	if err != nil {
-		return "", fmt.Errorf("insert radio: %w", err)
+		return "", fmt.Errorf("insert pending radio: %w", err)
 	}
-	return newID, nil
+	return pending, nil
 }
 
-// updateRadioMyNodeNum fills in the my_node_num column once the
-// pump's MyNodeInfo packet arrives. Best-effort — failure is
-// non-fatal (the value is denormalized convenience data, not load-
-// bearing for any query). Idempotent: same value re-saved every
-// reconnect.
-func updateRadioMyNodeNum(db *sql.DB, radioID string, myNodeNum uint32) error {
-	if db == nil || radioID == "" {
-		return nil
+// claimRadioIdentity rewrites a placeholder radio_id (the legacy 009
+// seed UUID, or any "pending:…" string) to the canonical
+// `radioIDFromNodeNum(myNodeNum)` form, propagating the change across
+// every foreign-key column (messages, nodes, settings) and the radios
+// row itself. Returns the new canonical id.
+//
+// Called from the radioMyInfoMsg handler the moment the radio's own
+// node num arrives. No-op when oldID is already canonical (steady
+// state — we've handshaken with this radio before; nothing to claim).
+//
+// All four UPDATEs run in one transaction so a crash mid-rewrite
+// can't leave dangling FKs. Idempotent on retry: if oldID has
+// already been rewritten, every WHERE clause matches zero rows.
+func claimRadioIdentity(
+	db *sql.DB, oldID string, myNodeNum uint32,
+) (string, error) {
+	newID := radioIDFromNodeNum(myNodeNum)
+	if !isPlaceholderRadioID(oldID) {
+		// Already canonical (we've connected to this radio before, or
+		// migration 010 already rewrote it). Just refresh my_node_num
+		// + last_seen so the radios row reflects the current handshake.
+		if db != nil {
+			_, _ = db.Exec(
+				`UPDATE radios SET my_node_num = ?, last_seen = CURRENT_TIMESTAMP
+                 WHERE id = ?`,
+				myNodeNum, oldID,
+			)
+		}
+		return newID, nil
 	}
-	_, err := db.Exec(
-		`UPDATE radios SET my_node_num = ?, last_seen = CURRENT_TIMESTAMP
-         WHERE id = ?`,
-		myNodeNum, radioID,
-	)
+	if db == nil {
+		return newID, nil
+	}
+	tx, err := db.Begin()
 	if err != nil {
-		return fmt.Errorf("update radio my_node_num: %w", err)
+		return "", fmt.Errorf("claim begin: %w", err)
 	}
-	return nil
+	defer func() { _ = tx.Rollback() }()
+
+	// If the canonical row already exists (extremely unlikely — would
+	// require a previous claim from a different placeholder for the
+	// same node num, e.g. user paired the same radio over BLE then
+	// USB without restart in between), merge by deleting the
+	// placeholder before reassigning FKs. Without this guard the
+	// UPDATE radios SET id=newID would PK-conflict.
+	var canonExists int
+	err = tx.QueryRow(
+		`SELECT COUNT(*) FROM radios WHERE id = ?`, newID,
+	).Scan(&canonExists)
+	if err != nil {
+		return "", fmt.Errorf("claim probe: %w", err)
+	}
+	if canonExists > 0 {
+		if _, err := tx.Exec(`DELETE FROM radios WHERE id = ?`, oldID); err != nil {
+			return "", fmt.Errorf("claim drop placeholder: %w", err)
+		}
+	} else {
+		if _, err := tx.Exec(
+			`UPDATE radios
+             SET id = ?, my_node_num = ?, last_seen = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+			newID, myNodeNum, oldID,
+		); err != nil {
+			return "", fmt.Errorf("claim radios: %w", err)
+		}
+	}
+
+	// Cascade to the FK columns. SQLite doesn't enforce these as real
+	// foreign keys (the migration ALTER ADDs can't declare them as FKs
+	// once columns already exist), so we do the cascade in app code.
+	for _, table := range []string{"messages", "nodes", "settings"} {
+		if _, err := tx.Exec(
+			fmt.Sprintf(`UPDATE %s SET radio_id = ? WHERE radio_id = ?`, table),
+			newID, oldID,
+		); err != nil {
+			return "", fmt.Errorf("claim %s: %w", table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("claim commit: %w", err)
+	}
+	return newID, nil
 }

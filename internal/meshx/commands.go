@@ -34,6 +34,8 @@
 package meshx
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	mathrand "math/rand"
 	"strings"
@@ -410,6 +412,121 @@ func (m *model) findChannelByName(typed string) int {
 		}
 	}
 	return -1
+}
+
+// channelNew creates a fresh secondary channel with a randomly
+// generated 32-byte AES256 PSK and pushes it to the first free slot.
+// The PSK never lands on disk — meshX has no channels table; the
+// bytes round-trip through pump → channelItem.psk where they wait in
+// RAM for /channel share to wrap them in a meshtastic:// URL.
+//
+// Name is enforced ≤ 11 bytes per the proto comment ("Less than 12
+// bytes") — Meshtastic packs the name into the URL and short names
+// keep the QR small and the channel selector readable.
+//
+// We print a SHA-256 fingerprint (first 8 hex of the PSK hash) so the
+// user can verbally confirm key parity with whoever they share it
+// with — "my fingerprint is a3f2c9b1, what's yours?" — without
+// reading the raw PSK bytes aloud. Same convention SSH uses for host
+// key fingerprints.
+func (m *model) channelNew(name string) tea.Cmd {
+	if m.isDemo() {
+		m.flash = "/channel new takes effect on a real radio (demo mode)"
+		return nil
+	}
+	if m.pump == nil {
+		m.flash = "/channel new needs a live radio connection"
+		return nil
+	}
+	name = strings.TrimSpace(name)
+	name = strings.TrimPrefix(name, "#")
+	if name == "" {
+		m.flash = "usage: /channel new <name>"
+		return nil
+	}
+	if len(name) > 11 {
+		m.flash = fmt.Sprintf(
+			"/channel new rejected: name %d bytes, max 11 (Meshtastic field cap)", len(name),
+		)
+		return nil
+	}
+	if m.findChannelByName(name) >= 0 {
+		m.flash = fmt.Sprintf("/channel new: %q already exists — /channel del first", name)
+		return nil
+	}
+	slot := m.findFreeChannelSlot()
+	if slot < 0 {
+		m.flash = fmt.Sprintf(
+			"/channel new: no free slots (max %d, /channel del to free one)",
+			meshtasticChannelSlots-1,
+		)
+		return nil
+	}
+	psk := make([]byte, 32)
+	if _, err := rand.Read(psk); err != nil {
+		m.flash = fmt.Sprintf("/channel new: rand.Read failed: %v", err)
+		return nil
+	}
+	settings := &pb.ChannelSettings{
+		Name: name,
+		Psk:  psk,
+		// Id randomized so the channel hash collides minimally with
+		// other meshes using the same name. Per the proto's note: any
+		// 64-bit-random uint32 is fine for collision avoidance among
+		// the small number of meshtastic users.
+		Id: randUint32(),
+	}
+	envelope, err := newAdminSetChannel(
+		m.myNodeNum, int32(slot), pb.Channel_SECONDARY, settings,
+	)
+	if err != nil {
+		m.flash = fmt.Sprintf("/channel new failed: %v", err)
+		return nil
+	}
+	if !m.pump.Enqueue(envelope) {
+		m.flash = "/channel new dropped — outbound buffer full"
+		return nil
+	}
+	// Optimistically populate so a second /channel new doesn't race
+	// the radio's ChannelInfo broadcast and pick the same slot.
+	display := "*" + name + "*"
+	m.channels[slot] = channelItem{
+		name:    display,
+		private: true,
+		index:   slot,
+		role:    "SECONDARY",
+		psk:     psk,
+	}
+	fp := pskFingerprint(psk)
+	m.systemBlock(
+		fmt.Sprintf("/channel new — %s created at slot %d", display, slot),
+		"psk:         32 random bytes (AES256), RAM-only — never written to disk",
+		fmt.Sprintf("fingerprint: %s   ← read aloud to verify parity with the recipient", fp),
+		fmt.Sprintf("share:       /channel share %s", name),
+	)
+	m.flash = fmt.Sprintf("created %s (fp %s)", display, fp)
+	return nil
+}
+
+// pskFingerprint returns the first 8 hex chars of SHA-256(psk) — a
+// short, human-readable identifier the user can read aloud to confirm
+// key parity with a recipient ("my fingerprint is a3f2c9b1, what's
+// yours?"). Same convention SSH uses for host key fingerprints. The
+// PSK itself is never displayed — only the hash.
+func pskFingerprint(psk []byte) string {
+	sum := sha256.Sum256(psk)
+	return fmt.Sprintf("%x", sum[:4])
+}
+
+// randUint32 returns a crypto/rand uint32 for ChannelSettings.Id.
+// Panics on rand failure because that's a fatal entropy-source
+// problem, not something to swallow with a flash.
+func randUint32() uint32 {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(fmt.Errorf("crypto/rand exhausted: %w", err))
+	}
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 }
 
 // channelDel disables a channel slot via AdminMessage_SetChannel
@@ -1690,8 +1807,14 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 				return nil
 			}
 			return m.channelDel(arg)
+		case "new":
+			if arg == "" {
+				m.flash = "usage: /channel new <name>"
+				return nil
+			}
+			return m.channelNew(arg)
 		default:
-			m.flash = "usage: /channel list  |  /channel add <url>  |  /channel del <name>"
+			m.flash = "usage: /channel list  |  /channel add <url>  |  /channel new <name>  |  /channel del <name>"
 		}
 	case "nick":
 		// /nick (no args) — read-only display of the current

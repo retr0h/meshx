@@ -218,7 +218,10 @@ func saveMessage(db *sql.DB, channel string, msg messageItem) error {
 	if db == nil {
 		return nil
 	}
-	if msg.status == "system" {
+	// statusSystem (and statusNotice) are locally generated rows that
+	// regenerate from live state on every launch — don't waste a
+	// SQLite write on them.
+	if msg.status == statusSystem || msg.status == statusNotice {
 		return nil
 	}
 	mine := 0
@@ -240,7 +243,7 @@ func saveMessage(db *sql.DB, channel string, msg messageItem) error {
             status = excluded.status,
             hops   = excluded.hops,
             snr    = excluded.snr`,
-		channel, msg.time, msg.from, msg.text, mine, msg.bang, msg.status,
+		channel, msg.time, msg.from, msg.text, mine, msg.bang, msg.status.String(),
 		msg.hops, msg.snr, msg.packetID, msg.replyID, msg.fromNum,
 	)
 	if err != nil {
@@ -429,13 +432,15 @@ func loadMessages(db *sql.DB, channel string, limit int) ([]messageItem, error) 
 			msg  messageItem
 			mine int
 		)
+		var statusStr string
 		if err := rows.Scan(
-			&msg.time, &msg.from, &msg.text, &mine, &msg.bang, &msg.status,
+			&msg.time, &msg.from, &msg.text, &mine, &msg.bang, &statusStr,
 			&msg.hops, &msg.snr, &msg.packetID, &msg.replyID, &msg.fromNum,
 			&msg.sentAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
+		msg.status = parseMessageStatus(statusStr)
 		msg.mine = mine != 0
 		// Historic rows may have been written before sanitizeMessageText
 		// landed in applyTextMessage. Clean on read so old end-of-day

@@ -160,18 +160,13 @@ func (m *model) upsertNode(msg radioNodeInfoMsg) {
 		callsign = msg.shortName
 	}
 
-	// Derive state from lastHeard age.
-	state := "offline"
-	if !msg.lastHeardAt.IsZero() {
-		age := time.Since(msg.lastHeardAt)
-		switch {
-		case age < 15*time.Minute:
-			state = "online"
-		case age < 2*time.Hour:
-			state = "offline"
-		default:
-			state = "offline"
-		}
+	// Derive state from lastHeard age. Anything past the 15-minute
+	// online window is "offline" — we used to branch on age < 2h vs
+	// older, but both arms set the same value, so the live derivation
+	// here matches what currentState() does at render time anyway.
+	state := stateOffline
+	if !msg.lastHeardAt.IsZero() && time.Since(msg.lastHeardAt) < 15*time.Minute {
+		state = stateOnline
 	}
 	lastHeard := "never"
 	if !msg.lastHeardAt.IsZero() {
@@ -344,7 +339,7 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 		mine:      mine,
 		text:      cleanText,
 		corrupted: corrupted,
-		status:    "ack",
+		status:    statusAck,
 		hops:      msg.hops,
 		snr:       msg.snr,
 		packetID:  msg.packetID,
@@ -376,8 +371,8 @@ func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 			prev := &m.messages[existing]
 			prev.hops = msg.hops
 			prev.snr = msg.snr
-			if prev.status == "pending" {
-				prev.status = "ack"
+			if prev.status == statusPending {
+				prev.status = statusAck
 			}
 			m.storagePersist(saveMessage(m.db, channelName, *prev))
 			return nil
@@ -628,10 +623,10 @@ func (m *model) applyRouting(msg radioRoutingMsg) {
 			continue
 		}
 		if msg.ok {
-			m.messages[i].status = "ack"
+			m.messages[i].status = statusAck
 			m.flash = "ack received"
 		} else {
-			m.messages[i].status = "fail"
+			m.messages[i].status = statusFail
 			m.flash = "delivery failed: " + msg.errorName + "  (R to resend)"
 		}
 		m.storagePersist(saveMessage(m.db, m.currentChannel, m.messages[i]))
@@ -658,9 +653,9 @@ func (m *model) resend(idx int) {
 		return
 	}
 	switch msg.status {
-	case "fail", "pending":
+	case statusFail, statusPending:
 		// Fall through to retransmit.
-	case "ack":
+	case statusAck:
 		m.flash = "R: this message already delivered ✓"
 		return
 	default:
@@ -673,7 +668,7 @@ func (m *model) resend(idx int) {
 	}
 	envelope, pid := newTextToRadio(msg.text, m.currentChannelIndex(), msg.replyID)
 	msg.packetID = pid
-	msg.status = "pending"
+	msg.status = statusPending
 	m.pump.Enqueue(envelope)
 	m.flash = fmt.Sprintf("↻ retransmit sent (pid=0x%08x) — awaiting ack", pid)
 }

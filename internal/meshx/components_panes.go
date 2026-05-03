@@ -74,7 +74,7 @@ func (p nodesPane) Render(box Box) string {
 	total := len(m.nodes)
 	online := 0
 	for i := range m.nodes {
-		if m.nodes[i].currentState() == "online" {
+		if m.nodes[i].currentState() == stateOnline {
 			online++
 		}
 	}
@@ -648,15 +648,15 @@ func (m model) sortedNodes() []nodeItem {
 }
 
 // stateWeight orders node states: online < offline < muted < failed.
-func stateWeight(s string) int {
+func stateWeight(s nodeState) int {
 	switch s {
-	case "online":
+	case stateOnline:
 		return 0
-	case "offline":
+	case stateOffline:
 		return 1
-	case "muted":
+	case stateMuted:
 		return 2
-	case "failed":
+	case stateFailed:
 		return 3
 	default:
 		return 4
@@ -862,7 +862,7 @@ func messagesPaneRender(m model, width, height int) string {
 		// typed and read system status. Substring match against the
 		// from column handles the "[shortname] longname" rendering
 		// vs. raw callsign — same lowercase comparison /whois uses.
-		if msg.status != "system" && !msg.mine && m.isIgnored(msg.from) {
+		if msg.status != statusSystem && !msg.mine && m.isIgnored(msg.from) {
 			continue
 		}
 		faded := m.nodeFilter != "" && !m.msgMatchesFilter(msg)
@@ -883,7 +883,7 @@ func messagesPaneRender(m model, width, height int) string {
 			bg = rowBgOdd
 			lastGroup = msg.group
 			groupBg = bg
-		case msg.status == "system" || msg.status == "notice":
+		case msg.status == statusSystem || msg.status == statusNotice:
 			// Standalone `-!-` rows (storage notices, single-line
 			// system messages) also pin to rowBgOdd so they read
 			// the same shade as grouped system blocks above and
@@ -905,7 +905,7 @@ func messagesPaneRender(m model, width, height int) string {
 		// via n/N visually swaps the highlight without losing the
 		// at-a-glance "these N rows match" cue. Skipped on system
 		// rows since the search semantics target chat content.
-		if msg.status != "system" && m.isMsgSearchHit(msg) {
+		if msg.status != statusSystem && m.isMsgSearchHit(msg) {
 			bg = searchHitRowBg
 		}
 

@@ -76,7 +76,7 @@ func (m *model) sendPlainReply(text string, replyToID uint32) {
 	}
 	item := messageItem{
 		time: timeNowHHMM(), from: "me", mine: true, text: text,
-		status: "pending", packetID: pid,
+		status: statusPending, packetID: pid,
 		replyID: replyToID,
 		fromNum: m.myNodeNum,
 		sentAt:  time.Now(),
@@ -1175,7 +1175,7 @@ func (m *model) activate() tea.Cmd {
 		if m.selectedMsg < len(m.messages) {
 			msg := m.messages[m.selectedMsg]
 			switch {
-			case msg.status == "system":
+			case msg.status == statusSystem:
 				m.flash = "system message — no metadata"
 			case msg.mine:
 				m.flash = fmt.Sprintf("to %s  ·  hop %d  ·  ACK %s",
@@ -1195,11 +1195,11 @@ func (m *model) activate() tea.Cmd {
 	return nil
 }
 
-func ackWord(status string) string {
+func ackWord(status messageStatus) string {
 	switch status {
-	case "ack":
+	case statusAck:
 		return "ok"
-	case "fail":
+	case statusFail:
 		return "timeout"
 	default:
 		return "pending"
@@ -1461,11 +1461,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		online, muted, offline := 0, 0, 0
 		for i := range m.nodes {
 			switch m.nodes[i].currentState() {
-			case "online":
+			case stateOnline:
 				online++
-			case "muted":
+			case stateMuted:
 				muted++
-			case "offline", "failed":
+			case stateOffline, stateFailed:
 				offline++
 			}
 		}
@@ -2262,7 +2262,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			// First pass: prefer matches in the from column — that's
 			// what "the last message FROM gleep" means semantically.
 			for i := len(m.messages) - 1; i >= 0; i-- {
-				if m.messages[i].status == "system" {
+				if m.messages[i].status == statusSystem {
 					continue
 				}
 				if strings.Contains(strings.ToLower(m.messages[i].from), needle) {
@@ -2274,7 +2274,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			// /lastlog "morning" find the last message containing it.
 			if idx < 0 {
 				for i := len(m.messages) - 1; i >= 0; i-- {
-					if m.messages[i].status == "system" {
+					if m.messages[i].status == statusSystem {
 						continue
 					}
 					if strings.Contains(strings.ToLower(m.messages[i].text), needle) {
@@ -2358,11 +2358,11 @@ func (m *model) sendBang(bang, body string) {
 // the same replyID so the renderer can draw a quoted-parent line
 // above the reply.
 func (m *model) sendBangReply(bang, body string, replyToID uint32) {
-	status := "ack"
+	status := statusAck
 	var pid uint32
 	var envelope *pb.ToRadio
 	if !m.isDemo() {
-		status = "pending" // flipped by radioRoutingMsg handler
+		status = statusPending // flipped by radioRoutingMsg handler
 	}
 	if m.pump != nil {
 		envelope, pid = newTextToRadio(body, m.currentChannelIndex(), replyToID)
@@ -2404,7 +2404,7 @@ func (m *model) replyTargetFor(call string) uint32 {
 	target := strings.ToLower(strings.TrimSpace(call))
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		msg := m.messages[i]
-		if msg.mine || msg.status == "system" || msg.packetID == 0 {
+		if msg.mine || msg.status == statusSystem || msg.packetID == 0 {
 			continue
 		}
 		if strings.Contains(strings.ToLower(msg.from), target) {

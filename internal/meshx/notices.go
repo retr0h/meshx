@@ -107,7 +107,7 @@ func buildNotice(text string, style noticeStyle) messageItem {
 	return messageItem{
 		time:   timeNowHHMM(),
 		text:   "-!- " + text,
-		status: "notice",
+		status: statusNotice,
 		style:  &s,
 	}
 }

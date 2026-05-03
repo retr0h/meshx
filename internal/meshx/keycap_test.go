@@ -33,19 +33,19 @@ func TestMessagesPane_KeycapRowFitsBox(t *testing.T) {
 		m.messages = []messageItem{
 			{
 				time: "12:16", from: "RumpleDumpleAuto", fromNum: 0xdead0001,
-				text: "6️⃣", hops: 6, snr: "4.5", status: "ack",
+				text: "6️⃣", hops: 6, snr: "4.5", status: statusAck,
 			},
 			{
 				time: "12:17", from: "RumpleDumpleAuto", fromNum: 0xdead0001,
-				text: "7️⃣", hops: 6, snr: "6.8", status: "ack",
+				text: "7️⃣", hops: 6, snr: "6.8", status: statusAck,
 			},
 			{
 				time: "12:24", from: "Node",
-				text: "Heard diamond bar", hops: 2, snr: "6.0", status: "ack",
+				text: "Heard diamond bar", hops: 2, snr: "6.0", status: statusAck,
 			},
 			{
 				time: "12:25", from: "Node",
-				text: "2️⃣ 6️⃣ 7️⃣", hops: 4, snr: "5.5", status: "ack",
+				text: "2️⃣ 6️⃣ 7️⃣", hops: 4, snr: "5.5", status: statusAck,
 			},
 		}
 		boxW := termW - 1 // mirrors View()'s safeW frame

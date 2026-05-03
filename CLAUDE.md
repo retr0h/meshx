@@ -88,7 +88,8 @@ meshx/
 │   ├── session/                  # canonical per-radio session state — no Bubble Tea import
 │   │   └── session.go            # Session struct + PendingPing/Traceroute, PeerPosition/EnvMetrics, ReconnectState
 │   ├── pump/                     # transport ↔ tea bridge (concrete *pump.Pump)
-│   │   ├── pump.go               # Transport (consumer interface) + New / Stop + run loop with reconnect policy
+│   │   ├── pump.go               # New / Stop + run loop with reconnect policy
+│   │   ├── transport.go          # consumer interface (Transport) for the transport package — twin of meshx/pump.go and meshx/store.go
 │   │   ├── translate.go          # FromRadio → []model.X (proto→model inbound boundary)
 │   │   ├── outbound.go           # (*Pump).Send(model.Command) + envelope builders (model→proto outbound)
 │   │   ├── channel_url.go        # ParseChannelShareURL / BuildChannelShareURL (model.ChannelInfo ↔ meshtastic://)

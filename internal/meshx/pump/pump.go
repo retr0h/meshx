@@ -67,23 +67,6 @@ const (
 	maxReconnectBackoff = 30 * time.Second
 )
 
-// Transport is the wire-level bridge the pump consumes — a
-// bidirectional stream of Meshtastic protobuf envelopes. Declared
-// here at the consumer seam (osapi-io pattern), implemented
-// structurally by transport.Serial / transport.TCP / transport.BLE
-// returned from transport.Dial. Twins meshx.Store / meshx.Pump:
-// each consumer narrows the producer's surface to just the methods
-// it actually calls.
-type Transport interface {
-	// Run pumps FromRadio frames to `out` and reads ToRadio envelopes
-	// from `in`. Blocks until ctx is cancelled or the connection
-	// fails. Returns the first error encountered.
-	Run(ctx context.Context, out chan<- *pb.FromRadio, in <-chan *pb.ToRadio) error
-	// Close shuts down the underlying connection. Always called from
-	// runSession's defer; safe to call on a half-open client.
-	Close() error
-}
-
 // reconnectBackoff returns the delay before the Nth retry. attempt
 // is 1-indexed (the first retry uses attempt=1 → 1s).
 func reconnectBackoff(attempt int) time.Duration {

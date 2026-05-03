@@ -39,6 +39,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // sanitizeMessageText scrubs peer-originated text so one bad packet
@@ -261,8 +263,12 @@ func (m *model) applyChannel(msg radioChannelMsg) {
 
 // applyTextMessage appends a received text packet to the message log.
 // Resolves fromNum to a callsign via the NodeDB; unread count bumps
-// on the destination channel when it's not the active one.
-func (m *model) applyTextMessage(msg radioTextMsg) {
+// on the destination channel when it's not the active one. Returns a
+// tea.Cmd carrying the BEL when the message is from a peer and the
+// user hasn't /muted it; nil otherwise. Update threads it back to the
+// runtime so the bell write happens in a controlled goroutine instead
+// of racing the renderer.
+func (m *model) applyTextMessage(msg radioTextMsg) tea.Cmd {
 	// Default ghost identity from the firmware's last-4-hex
 	// convention so the FROM column matches what other Meshtastic
 	// clients display for the same peer (iOS shows "c7f7", we
@@ -356,7 +362,7 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 				prev.status = "ack"
 			}
 			m.storagePersist(saveMessage(m.db, channelName, *prev))
-			return
+			return nil
 		}
 	}
 
@@ -386,29 +392,34 @@ func (m *model) applyTextMessage(msg radioTextMsg) {
 		m.channels[msg.channel].unread++
 	}
 
-	// Terminal ding — fire BEL when the message came from someone
-	// else and the user hasn't /muted it. ringTerminalBell handles
-	// the /dev/tty open/write/close so /dingtest can share the
-	// exact same path for verification.
+	// Terminal ding — return the BEL Cmd when the message came from
+	// someone else and the user hasn't /muted it. Update threads the
+	// Cmd back through the runtime; /dingtest returns the same Cmd
+	// so manual verification and the live ingress path share one
+	// code path.
 	if !mine && !m.dingMuted {
-		ringTerminalBell()
+		return ringTerminalBellCmd()
 	}
+	return nil
 }
 
-// ringTerminalBell writes a single BEL byte (0x07) to /dev/tty,
-// bypassing bubbletea's alt-screen FD redirection. iTerm + macOS
-// Terminal interpret BEL as audible / visual bell per their own
-// preferences. Used by applyTextMessage on inbound chat (when not
-// muted) and by /dingtest as a manual verification surface.
+// ringTerminalBellCmd returns a tea.Cmd that writes a BEL byte to
+// os.Stdout — the canonical bubbletea pattern for terminal side
+// effects. The runtime executes the Cmd in a goroutine so the BEL
+// write doesn't interleave with the renderer's frame output. Stdout
+// (not /dev/tty) because that's the FD bubbletea renders to and
+// what tmux watches for bell-activity (`printf '\a'` works for the
+// same reason — same FD). Returns nil msg so nothing routes back
+// to Update.
 //
-// Errors are deliberately swallowed — if /dev/tty isn't openable
-// (e.g. running under a CI runner with no controlling terminal)
-// the bell silently no-ops; no point surfacing an error the user
-// can't act on.
-func ringTerminalBell() {
-	if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
-		_, _ = tty.Write([]byte{'\a'})
-		_ = tty.Close()
+// If the user has BEL silenced in their terminal preferences (iTerm
+// "Silence bell", Terminal.app "Audible Bell" / "Visual Bell" both
+// off) the byte goes through but no audible / visual bell fires —
+// that's terminal-side, not a meshx issue.
+func ringTerminalBellCmd() tea.Cmd {
+	return func() tea.Msg {
+		fmt.Fprint(os.Stdout, "\a")
+		return nil
 	}
 }
 

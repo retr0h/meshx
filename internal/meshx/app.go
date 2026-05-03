@@ -1238,8 +1238,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case radioTextMsg:
-		m.applyTextMessage(msg)
-		return m, nil
+		return m, m.applyTextMessage(msg)
 
 	case radioRoutingMsg:
 		m.applyRouting(msg)

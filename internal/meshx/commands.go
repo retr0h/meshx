@@ -279,10 +279,22 @@ func newAdminSetBuzzer(
 	// paths (alert_bell_*) stay at whatever the snapshot had — that
 	// flag is for the BEL character on incoming text, separate from
 	// the message-arrival alert /config exposes.
+	//
+	// UsePwm rides with the toggle because most ham-radio boards
+	// (T-Beam, Heltec, RAK 4631 with WisBlock buzzer) have a hardware
+	// buzzer on the device-level `device.buzzer_gpio` pin, NOT on
+	// External Notification's per-module output_pin (which is "Unset"
+	// out of the box). With UsePwm=true the module ignores the
+	// per-module output pin / duration / active polarity and routes
+	// through device.buzzer_gpio — which is what's actually wired.
+	// Without it, "buzzer on" sets every alert flag but the firmware
+	// has no GPIO to drive and the radio stays silent. The phone app
+	// surfaces this same field as "Use PWM Buzzer".
 	ext.Enabled = enabled
 	ext.AlertMessage = enabled
 	ext.AlertMessageBuzzer = enabled
 	ext.AlertMessageVibra = enabled
+	ext.UsePwm = enabled
 	admin := &pb.AdminMessage{
 		PayloadVariant: &pb.AdminMessage_SetModuleConfig{
 			SetModuleConfig: &pb.ModuleConfig{
@@ -1438,17 +1450,21 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// /config is now the consistent path for radio-side knobs.
 		m.openOverlay(overlayConfig)
 	case "dingtest":
-		// Manual BEL verification — fires the exact code path
-		// applyTextMessage uses on inbound chat. If you don't hear /
-		// see the bell after running this, the /mute toggle isn't
-		// the culprit — your terminal has BEL silenced (Terminal.app
-		// or iTerm Profile → Audible/Visual bell preferences).
-		ringTerminalBell()
-		state := "on"
-		if m.dingMuted {
-			state = "off (silenced by /mute — BEL was still emitted, but inbound chat suppresses)"
-		}
-		m.flash = "/dingtest: BEL emitted to /dev/tty — ding pref: " + state
+		// Manual BEL verification — returns the exact tea.Cmd
+		// applyTextMessage uses on inbound chat. Going through the
+		// bubbletea runtime (instead of writing to stdout inline) is
+		// what makes the BEL actually reach the terminal under the
+		// alt-screen renderer. If the bell still doesn't fire after
+		// /dingtest, the cause is your terminal's audible + visual
+		// bell preferences (Terminal.app / iTerm Profile → Audible
+		// Bell + Visual Bell) — not a meshX bug.
+		m.systemBlock("/dingtest",
+			"emit:    BEL queued via tea.Cmd",
+			"hint:    if no audible/visual bell, check",
+			"         Terminal/iTerm Profile → Audible Bell + Visual Bell.",
+		)
+		m.flash = "/dingtest: BEL queued"
+		return ringTerminalBellCmd()
 	case "mute":
 		// Toggle the meshX terminal ding (BEL on inbound text).
 		// Persists to settings.ding_muted so the pref survives

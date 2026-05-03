@@ -565,14 +565,14 @@ func (s *Sqlite) SaveMessage(radioID, channel string, msg model.Message) error {
 	// so those still append freely.
 	_, err := s.db.Exec(`
         INSERT INTO messages
-        (radio_id, channel, time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (radio_id, channel, time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num, to_num)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(packet_id) WHERE packet_id > 0 DO UPDATE SET
             status = excluded.status,
             hops   = excluded.hops,
             snr    = excluded.snr`,
 		radioID, channel, msg.Time, msg.From, msg.Text, mine, msg.Bang, msg.Status.String(),
-		msg.Hops, msg.SNR, msg.PacketID, msg.ReplyID, msg.FromNum,
+		msg.Hops, msg.SNR, msg.PacketID, msg.ReplyID, msg.FromNum, msg.ToNum,
 	)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
@@ -596,7 +596,7 @@ func (s *Sqlite) LoadMessages(
 		return nil, nil
 	}
 	query := `
-        SELECT time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num, created_at
+        SELECT time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num, to_num, created_at
         FROM messages
         WHERE radio_id = ?`
 	args := []any{radioID}
@@ -625,7 +625,7 @@ func (s *Sqlite) LoadMessages(
 		if err := rows.Scan(
 			&msg.Time, &msg.From, &msg.Text, &mine, &msg.Bang, &statusStr,
 			&msg.Hops, &msg.SNR, &msg.PacketID, &msg.ReplyID, &msg.FromNum,
-			&msg.SentAt,
+			&msg.ToNum, &msg.SentAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}

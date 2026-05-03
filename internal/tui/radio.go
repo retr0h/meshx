@@ -372,6 +372,7 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 		PacketID:  body.PacketID,
 		ReplyID:   body.ReplyID,
 		FromNum:   body.FromNum,
+		ToNum:     ev.ToNum,
 		SentAt:    body.SentAt,
 	}}
 

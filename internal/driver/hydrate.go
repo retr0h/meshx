@@ -58,33 +58,47 @@ type HydrationResult struct {
 	BootNotes []string
 }
 
-// HydrationOptions tunes the behavior of HydrateFromStore.
+// Sanitizer scrubs a message's Text and reports whether any
+// substitution / drop happened. The TUI passes its own
+// sanitizeMessageText (UTF-8 + control-byte hardening for the
+// terminal-layout invariants); the daemon leaves it nil and stores
+// the bytes the radio actually sent.
+type Sanitizer func(text string) (cleaned string, corrupted bool)
+
+// RadioResolver looks up the canonical radio_id for a (transport,
+// addr) pair. Backed by *storage.Sqlite.ResolveRadioByConnection.
+// Pulled out as a function type so this package doesn't import
+// storage.
+type RadioResolver func(transport, addr string) (string, error)
+
+// DestParser splits a connection target ("usb:/dev/cu...",
+// "tcp:host:4403", "ble:<uuid>") into (transport, addr) so
+// RadioResolver can consume it. Backed by storage.ParseRadioDest;
+// caller supplies it for the same reason as RadioResolver.
+type DestParser func(dest string) (transport, addr string)
+
+// HydrationOptions tunes the behavior of HydrateFromStore. Zero
+// values for the numeric fields fall back to sensible defaults
+// (500 messages, 5-minute pending TTL); nil callbacks skip the
+// corresponding step.
 type HydrationOptions struct {
-	// Dest is the transport-prefixed connection target ("usb:/dev/cu...",
-	// "tcp:host:4403", "ble:<uuid>") used to look up the canonical
-	// radio_id from the store. Empty Dest skips identity resolution
-	// (caller has already populated State.RadioID some other way).
+	// Dest is the transport-prefixed connection target used to look
+	// up the canonical radio_id from the store. Empty Dest skips
+	// identity resolution (caller has populated State.RadioID some
+	// other way).
 	Dest string
-	// MessageLimit caps LoadMessages. Zero falls back to 500 — the
-	// same default the TUI's history pane has used since launch.
+	// MessageLimit caps LoadMessages. Zero → 500.
 	MessageLimit int
-	// PendingTTL is the cutoff ExpireStalePendingMessages applies.
-	// Zero falls back to 5 minutes.
+	// PendingTTL is the cutoff for ExpireStalePendingMessages.
+	// Zero → 5 minutes.
 	PendingTTL time.Duration
-	// SanitizeText is an optional pass run on every loaded message's
-	// Text. Returns (cleaned, corrupted). Used by the TUI to scrub
-	// invalid UTF-8 / control bytes before they wreck the layout
-	// invariants. Daemon callers leave it nil — they store and
-	// re-emit raw bytes; sanitization is a TUI render concern.
-	SanitizeText func(s string) (string, bool)
-	// ResolveRadioByConnection is the dest → radio_id lookup. Always
-	// populated by callers with the underlying *storage.Sqlite.
-	// Pulled out as a function so this package doesn't import
-	// storage. Nil = skip identity resolution.
-	ResolveRadioByConnection func(transport, addr string) (string, error)
-	// ParseRadioDest splits the dest into (transport, addr) for
-	// ResolveRadioByConnection. Pulled out for the same reason.
-	ParseRadioDest func(dest string) (transport, addr string)
+	// SanitizeText is an optional Sanitizer applied to every loaded
+	// message's Text on read. See Sanitizer for who supplies what.
+	SanitizeText Sanitizer
+	// ResolveRadioByConnection is the dest → radio_id lookup.
+	ResolveRadioByConnection RadioResolver
+	// ParseRadioDest splits Dest for ResolveRadioByConnection.
+	ParseRadioDest DestParser
 }
 
 // HydrateFromStore replays the cached identity, NodeDB, and message

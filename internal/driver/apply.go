@@ -538,10 +538,12 @@ func (d *Driver) RecordOutbound(opts RecordOutboundOptions) ApplyTextResult {
 	return ApplyTextResult{Index: idx, FromMine: true}
 }
 
-// timeHHMM is the same HH:MM formatter the TUI uses; lifted here so
-// RecordOutbound doesn't reach into the TUI package for the format.
+// timeHHMM is the HH:MM formatter Message.Time uses; lifted here
+// so RecordOutbound doesn't reach into the TUI package for the
+// format. Standard Go reference layout (15 = 24-hour hour, 04 =
+// zero-padded minute).
 func timeHHMM(t time.Time) string {
-	return fmt.Sprintf("%02d:%02d", t.Hour(), t.Minute())
+	return t.Format("15:04")
 }
 
 // ApplyConfigComplete marks the handshake as complete — Connected

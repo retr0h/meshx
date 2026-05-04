@@ -28,84 +28,46 @@ package model
 
 import "time"
 
-// MessageStatus is a typed enum for Message.Status. Strings on the
-// wire / disk (the SQLite messages.status column stays TEXT for
-// debuggability — `sqlite3 meshx.db "select status from messages"`
-// reads as "ack" / "pending" / etc., not opaque ints) but typed in
-// the model so a typo like StatusPendng becomes a compile error
-// instead of a row that silently never matches a switch case. The
-// boundary lives in the storage package's saveMessage/loadMessages
-// using String() and ParseMessageStatus() for the conversion.
-type MessageStatus int
+// MessageStatus is a string-typed enum for Message.Status — the wire
+// form (HTTP/SSE JSON), the persistence form (SQLite messages.status
+// TEXT column), and the in-memory form are all the same string. Using
+// a named string type rather than a raw string keeps typo'd values
+// (StatusPendng, "pendnig") a compile error instead of a row that
+// silently never matches a switch case, and lets OpenAPI codegen emit
+// proper typed enums in every consumer language.
+type MessageStatus string
 
+// Each constant's value is the canonical wire/disk string. Stable —
+// historic SQLite rows replay correctly across refactors. Order
+// matches the lifecycle: empty ↔ inbound, ack/pending/fail are
+// outbound, system/notice are TUI-local.
 const (
-	// StatusOK is the zero value — used for inbound chat that doesn't
-	// carry a delivery indicator. Persisted as the empty string "".
-	StatusOK MessageStatus = iota
+	// StatusOK is the zero value — inbound chat without a delivery
+	// indicator. Persists as the empty string in SQLite.
+	StatusOK MessageStatus = ""
 	// StatusAck — outbound message the radio confirmed delivery for
 	// (Routing.NONE on a routing reply OR a real REPLY_APP echo).
 	// Renders the trailing ✓ glyph.
-	StatusAck
+	StatusAck MessageStatus = "ack"
 	// StatusPending — outbound message we've enqueued but haven't
 	// heard back on. Renders the trailing … glyph; the stale-pending
 	// sweep at startup flips any row stuck here past the cutoff to
 	// StatusFail.
-	StatusPending
+	StatusPending MessageStatus = "pending"
 	// StatusFail — outbound message the radio actively rejected OR
 	// that aged out without an ack. Renders the trailing ✗ glyph;
 	// the `R` nav-key resends.
-	StatusFail
+	StatusFail MessageStatus = "fail"
 	// StatusSystem — locally generated row (`-!-` notice, /whois /
 	// /info / /config blocks, etc.). NOT persisted to SQLite — the
 	// storage layer's saveMessage early-returns on these since they
 	// regenerate from live state on every launch.
-	StatusSystem
+	StatusSystem MessageStatus = "system"
 	// StatusNotice — TTL-expiring `-!-` row from notices.go. Same
 	// rendering as StatusSystem but with a fade + reap path; NOT
 	// persisted for the same reason.
-	StatusNotice
+	StatusNotice MessageStatus = "notice"
 )
-
-// String returns the wire/disk form. Kept stable so historic SQLite
-// rows replay correctly across refactors (column stays TEXT, no
-// migration needed).
-func (s MessageStatus) String() string {
-	switch s {
-	case StatusAck:
-		return "ack"
-	case StatusPending:
-		return "pending"
-	case StatusFail:
-		return "fail"
-	case StatusSystem:
-		return "system"
-	case StatusNotice:
-		return "notice"
-	default:
-		return ""
-	}
-}
-
-// ParseMessageStatus is the inverse — used by the storage layer when
-// reading the messages.status TEXT column off disk. Unknown values
-// fall back to StatusOK rather than panicking; an invalid row is
-// surface-level wrong (no glyph) but doesn't crash the UI.
-func ParseMessageStatus(s string) MessageStatus {
-	switch s {
-	case "ack":
-		return StatusAck
-	case "pending":
-		return StatusPending
-	case "fail":
-		return StatusFail
-	case "system":
-		return StatusSystem
-	case "notice":
-		return StatusNotice
-	default:
-		return StatusOK
-	}
-}
 
 // Message is the persistence/wire shape of one chat row — every
 // field maps to a SQLite messages column AND (eventually) a JSON
@@ -118,83 +80,18 @@ func ParseMessageStatus(s string) MessageStatus {
 // `doc:"…"` tags to seed the OpenAPI spec; not adding them now to
 // keep this package zero-dependency.
 type Message struct {
-	// Time is the rendered timestamp ("09:47") shown in the chat
-	// row. Captured at receive (live) or restored from
-	// messages.time (replay).
-	Time string
-
-	// From is the sender callsign as resolved at receive time. For
-	// peers we hadn't seen NodeInfo for yet this is the placeholder
-	// "node 0x<hex>"; the renderer backfills the live callsign at
-	// display time using FromNum + the in-memory NodeDB so a
-	// mid-session NodeInfo arrival doesn't leave history stuck on
-	// the placeholder.
-	From string
-
-	// Text is the message body, post-sanitization (CRLF trim,
-	// non-printable rune drop). Multi-line bodies preserve internal
-	// `\n`; edge whitespace is trimmed.
-	Text string
-
-	// Mine flags rows the local user composed (true) vs incoming
-	// peer chat (false). Drives the right-aligned styling + ack
-	// glyph rendering.
-	Mine bool
-
-	// Bang carries the leading verb for ham-bang messages — "!cq",
-	// "!qth", "!cqr", etc. Empty for plain chat.
-	Bang string
-
-	// Status is the delivery-state enum — see MessageStatus.
-	Status MessageStatus
-
-	// Hops is the mesh hop count; 0 means direct (no relay) or
-	// self.
-	Hops int
-
-	// SNR is the signal-to-noise ratio at receive ("-8.5"), empty
-	// to hide.
-	SNR string
-
-	// PacketID is MeshPacket.id as seen on the wire. Zero for
-	// in-memory-only entries (system lines, demo seeds, pre-feature
-	// rows). Used as the unique key for ack matching + replay
-	// dedup.
-	PacketID uint32
-
-	// ReplyID is Data.reply_id pointing at the message this one is
-	// answering. Zero when the message isn't a reply.
-	ReplyID uint32
-
-	// FromNum is the Meshtastic node num of the sender, captured at
-	// ingest. Persisted so the renderer can backfill the displayed
-	// callsign from the in-memory NodeDB live (the From field is
-	// only a snapshot at receive time — if NodeInfo arrives later
-	// we'd otherwise be stuck showing "node 0xabc" forever). Zero
-	// for "me" / system lines / demo seeds.
-	FromNum uint32
-
-	// ToNum is the Meshtastic node num of the addressee, captured
-	// from MeshPacket.to at ingest. 0xFFFFFFFF (4294967295) means
-	// broadcast, anything else is a directed message (DM) — the row
-	// was sent specifically to ToNum and not to the channel at large.
-	// Zero on outbound rows we built before ToNum was introduced and
-	// on system / demo rows that have no addressee. Future MR-7b
-	// uses this to split DMs into per-peer @threads in the tab strip.
-	ToNum uint32
-
-	// SentAt is the absolute timestamp the message was received
-	// (live) or originally persisted (replay). Populated from
-	// messages.created_at on replay; set to time.Now() on live
-	// inbound/outbound.
-	SentAt time.Time
-
-	// Corrupted is true when sanitization replaced bad bytes or
-	// dropped non-printable runes from the body. Drives the ⚠
-	// marker + dim italic styling on the row so the user knows
-	// the content isn't trustworthy without throwing away the
-	// salvageable printable bits. Recomputed on every replay so
-	// a future sanitizer change automatically re-evaluates
-	// historic rows.
-	Corrupted bool
+	Time      string        `json:"time"                doc:"display timestamp like '09:47'"`
+	From      string        `json:"from"                doc:"sender callsign at receive time"`
+	Text      string        `json:"text"                doc:"message body, post-sanitization"`
+	Mine      bool          `json:"mine"                doc:"true when local user composed this row"`
+	Bang      string        `json:"bang,omitempty"      doc:"leading verb for ham-bang messages"`
+	Status    MessageStatus `json:"status"              doc:"ok | ack | pending | fail | system | notice"`
+	Hops      int           `json:"hops"                doc:"mesh hop count; 0 = direct"`
+	SNR       string        `json:"snr,omitempty"       doc:"signal-to-noise ratio at receive"`
+	PacketID  uint32        `json:"packet_id"           doc:"MeshPacket.id; 0 for system / demo rows"     format:"int64" minimum:"0"`
+	ReplyID   uint32        `json:"reply_id,omitempty"  doc:"PacketID this message answers"               format:"int64" minimum:"0"`
+	FromNum   uint32        `json:"from_num"            doc:"sender node num"                             format:"int64" minimum:"0"`
+	ToNum     uint32        `json:"to_num"              doc:"addressee node num; 0xFFFFFFFF = broadcast"  format:"int64" minimum:"0"`
+	SentAt    time.Time     `json:"sent_at"             doc:"absolute time of receive / persist"`
+	Corrupted bool          `json:"corrupted,omitempty" doc:"sanitization replaced/dropped bytes"`
 }

@@ -21,27 +21,47 @@
 package cmd
 
 import (
-	"github.com/retr0h/meshx/internal/tui"
+	"fmt"
+	"log/slog"
+	"os"
+	"text/tabwriter"
+
 	"github.com/spf13/cobra"
 )
 
-// demoCmd launches the TUI with the canned demo fixture — same UI
-// and feature surface as a live radio session, no hardware needed.
-// Replaces the old `--demo` top-level flag so `meshx demo` sits
-// alongside `meshx usb connect` / `meshx tcp connect` / `meshx ble
-// connect` as peer verbs under the same tree.
-var demoCmd = &cobra.Command{
-	Use:   "demo",
-	Short: "Run the UI with canned data — no radio required",
-	Long: `Launch the meshX TUI populated from a hand-curated Demo
-fixture. Every feature renders exactly as it does in live mode; use
-this to kick the tires on the UI without a radio, or to capture
-screenshots for docs.`,
+var bleListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "Show saved Bluetooth devices",
 	RunE: func(_ *cobra.Command, _ []string) error {
-		return tui.RunDemo()
+		logger.With(slog.String("subsystem", "ble.list")).Debug("running")
+		store, err := cliOpenBLEStore()
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		defer func() { _ = store.Close() }()
+		devs, err := store.LoadBLEDevices()
+		if err != nil {
+			return fmt.Errorf("load: %w", err)
+		}
+		if len(devs) == 0 {
+			fmt.Println("no saved Bluetooth devices.")
+			fmt.Println()
+			fmt.Println("  → run `meshx ble scan` to discover nearby radios,")
+			fmt.Println("    then `meshx ble pair <uuid>` to save one.")
+			return nil
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(tw, "   UUID\tLONGNAME\tSHORTNAME\tHW")
+		for _, d := range devs {
+			star := "  "
+			if d.Favorite {
+				star = " ★"
+			}
+			_, _ = fmt.Fprintf(
+				tw, "%s %s\t%s\t%s\t%s\n",
+				star, d.UUID, orDash(d.LongName), orDash(d.ShortName), orDash(d.HWModel),
+			)
+		}
+		return tw.Flush()
 	},
-}
-
-func init() {
-	rootCmd.AddCommand(demoCmd)
 }

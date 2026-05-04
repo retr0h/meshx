@@ -98,8 +98,8 @@ func noticeRowRender(
 		rowBg = selectionRowBg
 	}
 	style := noticeStyle{}
-	if msg.style != nil {
-		style = *msg.style
+	if msg.Style != nil {
+		style = *msg.Style.(*noticeStyle)
 	}
 	fade := 0.0
 	if m.mode != modeNav {
@@ -270,8 +270,8 @@ func chatRowRender(
 			row += "\n" + chatContinuationLine(parts, bl, bodyText, contentW)
 		}
 	}
-	if msg.acks != "" {
-		row += "\n" + chatAckLine(parts, msg.acks, sys, contentW)
+	if msg.Acks != "" {
+		row += "\n" + chatAckLine(parts, msg.Acks, sys, contentW)
 	}
 	if msg.ReplyID != 0 {
 		if parent := m.findMessageByPacketID(msg.ReplyID); parent != nil {
@@ -290,13 +290,13 @@ func chatRowRender(
 // tailStartList / renderMessagesPane — system blocks with embedded
 // '\n' are taller, an `acks` sub-line adds 1, and `replyID` threading
 // adds the quote line above ONLY when the parent message is still
-// in m.messages (renderMessageRow drops the threading quote when
+// in m.Messages (renderMessageRow drops the threading quote when
 // the parent has been reaped, so claiming +1 height in that case
 // would leave the messageRow Component padding a blank row above
 // — visible as a phantom gap between two unrelated messages).
 func messageRowVisualHeight(m model, msg messageItem) int {
 	h := 1 + strings.Count(msg.Text, "\n")
-	if msg.acks != "" {
+	if msg.Acks != "" {
 		h++
 	}
 	if msg.ReplyID != 0 && m.findMessageByPacketID(msg.ReplyID) != nil {

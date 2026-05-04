@@ -44,14 +44,25 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 
 	"github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/transport"
 )
+
+// Sink is the consumer of every event the pump emits — translated
+// FromRadio packets (mdl.Text, mdl.NodeInfo, …), reconnect status
+// (mdl.Reconnecting, mdl.Disconnected), and transport errors. One
+// method, Send(any), so both bubbletea (tea.Program.Send takes
+// tea.Msg = any) and the daemon's apply-dispatch shim satisfy it
+// structurally without an adapter. The pump treats every value as
+// opaque — Send IS the publish boundary.
+type Sink interface {
+	Send(msg any)
+}
 
 // Reconnect policy: truncated exponential backoff with no jitter,
 // retried indefinitely. Schedule is 1s,2s,4s,8s,16s,30s,30s,30s,…
@@ -84,10 +95,17 @@ func reconnectBackoff(attempt int) time.Duration {
 	return d
 }
 
-// Pump is the running transport ↔ tea bridge.
+// Pump is the running transport ↔ Sink bridge.
 type Pump struct {
-	client  Transport
-	program *tea.Program
+	// clientMu guards every read and write of `client`. The run
+	// goroutine swaps it across reconnects; Stop reads it from the
+	// caller's goroutine to close the live transport. Without a lock
+	// these races trip `go test -race` and could in pathological
+	// timing close a client another goroutine is mid-Read on.
+	clientMu sync.Mutex
+	client   Transport
+
+	sink Sink
 
 	// Destination string from the original Dial — re-used by the
 	// reconnect loop. Stash it so the pump doesn't need to plumb the
@@ -107,12 +125,35 @@ type Pump struct {
 	cancel context.CancelFunc
 }
 
+// setClient swaps the live transport under the mutex. Returns the
+// previous client so callers (the reconnect loop) can close it
+// outside the lock.
+func (p *Pump) setClient(c Transport) Transport {
+	p.clientMu.Lock()
+	defer p.clientMu.Unlock()
+	prev := p.client
+	p.client = c
+	return prev
+}
+
+// getClient reads the live transport under the mutex.
+func (p *Pump) getClient() Transport {
+	p.clientMu.Lock()
+	defer p.clientMu.Unlock()
+	return p.client
+}
+
 // New spins up a pump goroutine and returns the handle immediately.
 // Dialing happens inside the goroutine — that way an 8-second BLE
-// scan at startup doesn't block the tea Update loop, and a doomed
-// dest (radio off, bad UUID) flows through the same indefinite-retry
-// path as a mid-session drop. Call p.Stop() to tear down.
-func New(dest string, program *tea.Program) *Pump {
+// scan at startup doesn't block the consumer's main loop, and a
+// doomed dest (radio off, bad UUID) flows through the same
+// indefinite-retry path as a mid-session drop. Call p.Stop() to
+// tear down.
+//
+// sink is the destination for every translated event — bubbletea's
+// *tea.Program (whose Send takes tea.Msg = any) satisfies Sink
+// structurally; the daemon hands a Driver-backed dispatch shim.
+func New(dest string, sink Sink) *Pump {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	p := &Pump{
@@ -120,7 +161,7 @@ func New(dest string, program *tea.Program) *Pump {
 		// == nil" branch performs the first dial. That keeps initial
 		// connect and reconnect on the same code path.
 		client:   nil,
-		program:  program,
+		sink:     sink,
 		dest:     dest,
 		outbound: make(chan *pb.ToRadio, 16),
 		cancel:   cancel,
@@ -132,15 +173,13 @@ func New(dest string, program *tea.Program) *Pump {
 }
 
 // Stop cancels the run loop and closes any live client. Safe to call
-// repeatedly; safe to call before the first dial completes.
+// repeatedly; safe to call before the first dial completes. Reads
+// the client through getClient so a concurrent reconnect-loop swap
+// doesn't race the Close call.
 func (p *Pump) Stop() {
 	p.cancel()
-	// p.client is nil between New and the first successful dial, so a
-	// Ctrl+X during the initial BLE scan would panic here without the
-	// guard. The run loop owns subsequent client mutations and will
-	// observe ctx cancellation on its next iteration to clean up.
-	if p.client != nil {
-		_ = p.client.Close()
+	if c := p.getClient(); c != nil {
+		_ = c.Close()
 	}
 }
 
@@ -193,18 +232,18 @@ func (p *Pump) run(ctx context.Context) {
 		// Re-dial if we're between sessions. First time through, the
 		// client is nil (set by New) so we always dial here.
 		var sessErr error
-		if p.client == nil {
+		if p.getClient() == nil {
 			dbgf("re-dial attempt %d", attempt+1)
 			client, derr := transport.Dial(p.dest)
 			if derr != nil {
 				dbgf("re-dial failed: %v", derr)
 				sessErr = derr
 			} else {
-				p.client = client
+				p.setClient(client)
 			}
 		}
 
-		if sessErr == nil && p.client != nil {
+		if sessErr == nil && p.getClient() != nil {
 			established, err := p.runSession(ctx, dbgf)
 			if ctx.Err() != nil {
 				dbgf("ctx done after session — exiting")
@@ -216,15 +255,16 @@ func (p *Pump) run(ctx context.Context) {
 			if established {
 				attempt = 0
 			}
-			_ = p.client.Close()
-			p.client = nil
+			if prev := p.setClient(nil); prev != nil {
+				_ = prev.Close()
+			}
 
 			if err == nil {
 				// Clean disconnect — radio rebooted or got unplugged.
 				// Don't auto-redial; the user probably did this on
 				// purpose and the pump goroutine should exit.
 				dbgf("clean disconnect — not retrying")
-				p.program.Send(model.Disconnected{})
+				p.sink.Send(model.Disconnected{})
 				return
 			}
 			sessErr = err
@@ -236,7 +276,7 @@ func (p *Pump) run(ctx context.Context) {
 		attempt++
 		backoff := reconnectBackoff(attempt)
 		dbgf("retry %d in %s after: %v", attempt, backoff, sessErr)
-		p.program.Send(model.Reconnecting{
+		p.sink.Send(model.Reconnecting{
 			Attempt: attempt,
 			After:   backoff,
 			Err:     sessErr,
@@ -268,9 +308,13 @@ func (p *Pump) runSession(
 	sessCtx, sessCancel := context.WithCancel(ctx)
 	defer sessCancel()
 
+	// Snapshot the live client once at session start. The reconnect
+	// loop won't swap it mid-session (it only swaps when runSession
+	// returns), so a single getClient is enough.
+	client := p.getClient()
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- p.client.Run(sessCtx, inbound, p.outbound)
+		runErr <- client.Run(sessCtx, inbound, p.outbound)
 	}()
 	dbgf("transport.Run goroutine started")
 
@@ -306,8 +350,8 @@ func (p *Pump) runSession(
 				continue
 			}
 			for _, tm := range tms {
-				dbgf("[%d] sending %T to tea", totalIn, tm)
-				p.program.Send(tm)
+				dbgf("[%d] sending %T to sink", totalIn, tm)
+				p.sink.Send(tm)
 			}
 		}
 	}

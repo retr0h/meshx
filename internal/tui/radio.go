@@ -29,7 +29,7 @@ package tui
 // Boundary with node.go: node.go is read-side identity + lookup +
 // derived display. radio.go is the mutation side — it creates /
 // updates nodeItem rows in response to NodeInfo + text packets.
-// Everything that changes m.nodes, m.channels, or m.messages in
+// Everything that changes m.Nodes, m.Channels, or m.Messages in
 // response to incoming RF traffic lives here.
 
 import (
@@ -42,6 +42,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/retr0h/meshx/internal/driver"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
@@ -151,303 +152,78 @@ func sanitizeMessageText(s string) (string, bool) {
 	return b.String(), corrupted
 }
 
-// upsertNode inserts a NodeInfo arrival or updates the existing row
-// by node num. Uses nodesByNum for O(1) lookup. Falls back to
-// short/long name for display text, and chooses state from lastHeard.
-//
-// When BOTH names are empty the NodeInfo is effectively
-// content-free — usually a peer the radio has only heard via mesh
-// forwarding without ever decoding a User packet. Synthesize the
-// firmware-default ("Meshtastic <last-4-hex>" / "<last-4-hex>") so
-// the row matches what every other Meshtastic client renders for
-// the same node and flag it unresolved so the UI can dim it + the
-// "identified" notification can fire later when a real User packet
-// finally lands.
-func (m *model) upsertNode(msg mdl.NodeInfo) {
-	unresolved := false
-	if msg.LongName == "" && msg.ShortName == "" {
-		long, short := defaultCallsign(msg.NodeNum)
-		msg.LongName = long
-		msg.ShortName = short
-		unresolved = true
-	}
-	callsign := msg.LongName
-	if callsign == "" {
-		callsign = msg.ShortName
-	}
-
-	// Derive state from lastHeard age. Anything past the 15-minute
-	// online window is "offline" — we used to branch on age < 2h vs
-	// older, but both arms set the same value, so the live derivation
-	// here matches what currentState() does at render time anyway.
-	state := stateOffline
-	if !msg.LastHeardAt.IsZero() && time.Since(msg.LastHeardAt) < 15*time.Minute {
-		state = stateOnline
-	}
-	lastHeard := "never"
-	if !msg.LastHeardAt.IsZero() {
-		lastHeard = humanDuration(time.Since(msg.LastHeardAt))
-	}
-
-	item := nodeItem{
-		callsign:    callsign,
-		shortName:   msg.ShortName,
-		nodeNum:     msg.NodeNum,
-		unresolved:  unresolved,
-		state:       state,
-		lastHeard:   lastHeard,
-		lastHeardAt: msg.LastHeardAt,
-		heardRank:   int(time.Since(msg.LastHeardAt).Seconds()),
-		lastSNR:     msg.SNR,
-		lastRSSI:    msg.RSSI,
-		lastHops:    msg.Hops,
-		hwModel:     msg.HwModel,
-	}
-
-	// Persist to the cross-session NodeDB cache so once we've learned
-	// a peer's real User info we remember it on every subsequent
-	// launch — same behavior as the official phone app. Placeholder
-	// "node 0x…" callsigns (both longname and shortname empty) are
-	// skipped inside saveNode itself.
-	if m.driver.Store != nil {
-		m.storagePersist(m.driver.Store.SaveNode(m.RadioID, mdl.CachedNode{
-			NodeNum:   msg.NodeNum,
-			LongName:  msg.LongName,
-			ShortName: msg.ShortName,
-			HwModel:   msg.HwModel,
-		}))
-	}
-
-	if idx, ok := m.NodesByNum[msg.NodeNum]; ok {
-		// Preserve fav flag across updates.
-		item.fav = m.nodes[idx].fav
-		// Preserve the NEWER lastHeardAt — text packets between
-		// NodeInfo beacons bump lastHeardAt on applyTextMessage,
-		// and a subsequent NodeInfo arrival would clobber that
-		// recency if we just overwrote the row wholesale. Take
-		// the max so the derived currentState always reflects the
-		// most recent evidence we have.
-		if m.nodes[idx].lastHeardAt.After(item.lastHeardAt) {
-			item.lastHeardAt = m.nodes[idx].lastHeardAt
-		}
-		wasUnresolved := m.nodes[idx].unresolved
-		prevCallsign := m.nodes[idx].callsign
-		m.nodes[idx] = item
-		// Ghost upgrade notification — when a peer that was
-		// previously a synthesized firmware-default placeholder
-		// (because NodeInfo hadn't arrived yet) just got resolved
-		// to a real User packet, drop a grey inline system line in
-		// the log so the user sees the name flip happen. Skipped
-		// when we're still on a default (NodeInfo lacked both
-		// names) or when the callsign didn't actually change
-		// (re-applied same NodeInfo).
-		if wasUnresolved && !item.unresolved && prevCallsign != item.callsign {
-			m.systemLine(fmt.Sprintf("identified %s (was %s)", item.callsign, prevCallsign))
-		}
-		return
-	}
-	m.NodesByNum[msg.NodeNum] = len(m.nodes)
-	m.nodes = append(m.nodes, item)
-}
-
-// applyChannel sets or replaces a channel slot. DISABLED slots are
-// kept in m.channels (with role="DISABLED") so /channel new can find
-// the first free slot to allocate into; renderers (channelTabsRow,
-// channelsPane) skip DISABLED so empty slots don't clutter the UI.
-func (m *model) applyChannel(msg mdl.ChannelInfo) {
-	// Grow the slice up to msg.Index regardless of role so the slot is
-	// addressable for delete + re-apply later.
-	for len(m.channels) <= msg.Index {
-		m.channels = append(m.channels, channelItem{role: roleDisabled})
-	}
-	if string(msg.Role) == roleDisabled {
-		// Preserve any unread accumulated before the slot was disabled
-		// (rare but possible if a /channel del raced an inbound packet)
-		// and mark the slot empty so /channel new can re-use it.
-		prevUnread := m.channels[msg.Index].unread
-		m.channels[msg.Index] = channelItem{
-			index:  msg.Index,
-			role:   roleDisabled,
-			unread: prevUnread,
-		}
-		return
-	}
-	name := msg.Name
-	if name == "" {
-		// Empty-name PRIMARY is the default "LongFast" channel — give
-		// it a readable label in the UI.
-		name = "#default"
-	} else if msg.HasPSK {
-		name = "*" + msg.Name + "*"
-	} else {
-		name = "#" + msg.Name
-	}
-	c := channelItem{
-		name:    name,
-		private: msg.HasPSK,
-		index:   msg.Index,
-		role:    string(msg.Role),
-		psk:     msg.PSK,
-	}
-	// Preserve unread count across re-apply.
-	c.unread = m.channels[msg.Index].unread
-	m.channels[msg.Index] = c
-	if m.CurrentChannel == "" {
-		m.CurrentChannel = name
-	}
-}
-
 // applyTextMessage appends a received text packet to the message log.
-// Resolves fromNum to a callsign via the NodeDB; unread count bumps
-// on the destination channel when it's not the active one. Returns a
-// tea.Cmd carrying the BEL when the message is from a peer and the
-// user hasn't /muted it; nil otherwise. Update threads it back to the
-// runtime so the bell write happens in a controlled goroutine instead
-// of racing the renderer.
+// State mutation (ghost-create the sender, append the message,
+// dedupe by PacketID, persist, bump unread) lives in
+// Driver.ApplyText so daemon and TUI write the exact same row.
+// This wrapper sanitizes the body (TUI is the boundary that decides
+// what survives the layout invariants), snapshots whether the user
+// was reading at the tail (TUI-only autoscroll concern), delegates
+// to ApplyText, then layers the autoscroll cursor advance + the
+// terminal-bell ding Cmd.
 func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
-	// body is the partial wire shape pump produced; the renderer-only
-	// fields (From, Mine, Status, …) get filled in below.
-	body := ev.Body
+	cleanText, corrupted := sanitizeMessageText(ev.Body.Text)
 
-	// Default ghost identity from the firmware's last-4-hex
-	// convention so the FROM column matches what other Meshtastic
-	// clients display for the same peer (iOS shows "c7f7", we
-	// shouldn't be the outlier showing "node 0x273cc7f7").
-	defaultLong, _ := defaultCallsign(body.FromNum)
-	from := defaultLong
-	if idx, ok := m.NodesByNum[body.FromNum]; ok {
-		from = m.nodes[idx].callsign
-		// Live RF contact — stamp lastHeardAt + refresh signal
-		// telemetry. currentState / currentLastHeard derive
-		// "online" and "now" from lastHeardAt at render time, so
-		// there's no need to poke state / lastHeard strings here;
-		// the renderer always reads the live derivation.
-		m.nodes[idx].lastHeardAt = time.Now()
-		m.nodes[idx].heardRank = 0
-		if body.SNR != "" {
-			m.nodes[idx].lastSNR = body.SNR
-		}
-		if ev.RSSI != "" {
-			m.nodes[idx].lastRSSI = ev.RSSI
-		}
-		if body.Hops > 0 {
-			m.nodes[idx].lastHops = body.Hops
-		}
-	} else if body.FromNum != 0 {
-		// We've heard a text packet from a peer whose NodeInfo we
-		// haven't received yet — ghost them into m.nodes so /cqr,
-		// /rs, /whois, /ping can find them by id, hex, or shortname
-		// substring. The entry gets upgraded by upsertNode the
-		// moment a real NodeInfo arrives (nodesByNum index is
-		// stable so all references stay valid). Synthesize the
-		// firmware-default callsigns up front so the row already
-		// reads the same way every other Meshtastic client renders
-		// the peer.
-		long, short := defaultCallsign(body.FromNum)
-		m.nodes = append(m.nodes, nodeItem{
-			callsign:    long,
-			shortName:   short,
-			nodeNum:     body.FromNum,
-			unresolved:  true,
-			lastHeardAt: time.Now(),
-			lastSNR:     body.SNR,
-			lastRSSI:    ev.RSSI,
-			lastHops:    body.Hops,
-		})
-		m.NodesByNum[body.FromNum] = len(m.nodes) - 1
-		from = long
-	}
-	mine := body.FromNum == m.MyNodeNum
+	// Snapshot the autoscroll anchor BEFORE Apply — if the user was
+	// at the bottom of the log, advance the cursor to the new tail
+	// so live traffic stays in view. Scrolled-up readers stay where
+	// they are (irssi convention: scrollback is sticky).
+	wasAtTail := len(m.Messages) == 0 || m.selectedMsg == len(m.Messages)-1
 
-	cleanText, corrupted := sanitizeMessageText(body.Text)
-	item := messageItem{Message: mdl.Message{
-		Time:      body.Time,
-		From:      from,
-		Mine:      mine,
-		Text:      cleanText,
-		Corrupted: corrupted,
-		Status:    mdl.StatusAck,
-		Hops:      body.Hops,
-		SNR:       body.SNR,
-		PacketID:  body.PacketID,
-		ReplyID:   body.ReplyID,
-		FromNum:   body.FromNum,
-		ToNum:     ev.ToNum,
-		SentAt:    body.SentAt,
-	}}
+	res := m.driver.ApplyText(ev, cleanText, corrupted)
 
-	// Dedupe replays from the radio's RAM queue. When we reconnect
-	// after a short disconnect, the radio re-drains any packets it
-	// still holds — some of those will be ones we already persisted
-	// to SQLite in the previous session. Without dedup, the same
-	// on-wire packet lands twice (once from loadMessages, again from
-	// this replay), duplicating both m.messages and SQLite rows.
-	// The messagesByPacketID index lets us find the existing entry
-	// and upgrade it in place (telemetry refresh) instead.
-	channelName := m.CurrentChannel
-	if ev.Channel < len(m.channels) {
-		channelName = m.channels[ev.Channel].name
-	}
-	if body.PacketID != 0 {
-		if existing, ok := m.MessagesByPacketID[body.PacketID]; ok &&
-			existing >= 0 && existing < len(m.messages) {
-			// Refresh signal telemetry in case the replay carries
-			// fresher RSSI/SNR/hops than the stored row (can happen
-			// when the firmware re-measures before handing off).
-			// Leave status alone unless it was pending and we now
-			// have a real ack.
-			prev := &m.messages[existing]
-			prev.Hops = body.Hops
-			prev.SNR = body.SNR
-			if prev.Status == mdl.StatusPending {
-				prev.Status = mdl.StatusAck
-			}
-			if m.driver.Store != nil {
-				m.storagePersist(
-					m.driver.Store.SaveMessage(m.RadioID, channelName, prev.Message),
-				)
-			}
-			return nil
-		}
+	if !res.Skipped && wasAtTail && res.Index >= 0 {
+		m.selectedMsg = res.Index
 	}
 
-	// Snapshot whether the user was anchored at the tail BEFORE we
-	// append. If they were (selectedMsg was on the last row of the
-	// log, or the log was empty) we auto-follow new traffic by
-	// advancing selectedMsg to the fresh tail. If they'd scrolled up
-	// to read history, leave selectedMsg alone — irssi convention:
-	// scrollback is sticky, new messages appear at the bottom
-	// invisibly until the user returns to tail. Without this
-	// incoming texts would arrive but never scroll into view because
-	// renderMessagesPane anchors its viewport on selectedMsg.
-	wasAtTail := len(m.messages) == 0 || m.selectedMsg == len(m.messages)-1
-	m.messages = append(m.messages, item)
-	if body.PacketID != 0 {
-		m.MessagesByPacketID[body.PacketID] = len(m.messages) - 1
-	}
-	if wasAtTail {
-		m.selectedMsg = len(m.messages) - 1
-	}
-
-	// Persist the incoming message so it survives a restart.
-	if m.driver.Store != nil {
-		m.storagePersist(m.driver.Store.SaveMessage(m.RadioID, channelName, item.Message))
-	}
-
-	// Bump unread count on non-active channels.
-	if ev.Channel < len(m.channels) && m.channels[ev.Channel].name != m.CurrentChannel && !mine {
-		m.channels[ev.Channel].unread++
-	}
-
-	// Terminal ding — return the BEL Cmd when the message came from
-	// someone else and the user hasn't /muted it. Update threads the
-	// Cmd back through the runtime; /dingtest returns the same Cmd
-	// so manual verification and the live ingress path share one
-	// code path.
-	if !mine && !m.DingMuted {
+	if !res.FromMine && !m.DingMuted {
 		return ringTerminalBellCmd()
 	}
 	return nil
+}
+
+// reactRouting layers TUI-only side effects on top of
+// Driver.ApplyRouting's status flip. Two concerns:
+//
+//   - PendingPing fallback. Some firmware acks WantAck packets via
+//     Routing without ever sending REPLY_APP, so a /ping that times
+//     out on echo can still resolve here when the routing receipt
+//     matches its packet id.
+//   - User-visible flash for our own outbound messages — "ack
+//     received" / "delivery failed: ...". State stays in Driver.
+func (m *model) reactRouting(msg mdl.Routing, res driver.ApplyRoutingResult) {
+	if msg.RequestID == 0 {
+		return
+	}
+	if m.PendingPing != nil && m.PendingPing.PacketID == msg.RequestID {
+		tgt := m.PendingPing.TargetCall
+		rtt := time.Since(m.PendingPing.RequestedAt).Round(100 * time.Millisecond)
+		if msg.OK {
+			m.systemBlock(
+				fmt.Sprintf("ping %s", tgt),
+				fmt.Sprintf("rtt:     %s (ack only — no echo)", rtt),
+				"note:    radio acknowledged delivery, but REPLY_APP echo",
+				"         did not return. Common when the target's REPLY_APP",
+				"         module is disabled — /tr still works in that case.",
+			)
+			m.flash = fmt.Sprintf("ping: %s — ack in %s (no echo)", tgt, rtt)
+		} else {
+			m.systemBlock(
+				fmt.Sprintf("ping %s", tgt),
+				fmt.Sprintf("result:  delivery failed (%s)", msg.ErrorName),
+			)
+			m.flash = fmt.Sprintf("ping: %s — %s", tgt, msg.ErrorName)
+		}
+		m.PendingPing = nil
+		return
+	}
+	if res.Matched {
+		if res.OK {
+			m.flash = "ack received"
+		} else {
+			m.flash = "delivery failed: " + res.ErrorName + "  (R to resend)"
+		}
+	}
 }
 
 // ringTerminalBellCmd returns a tea.Cmd that writes a BEL byte to
@@ -481,7 +257,7 @@ func ringTerminalBellCmd() tea.Cmd {
 // at MeshPacket.From / .To), and the resolved callsign of every hop
 // when we know one (placeholder hex when we don't).
 //
-// On match the session.PendingTraceroute slot clears so the user can fire a
+// On match the driver.PendingTraceroute slot clears so the user can fire a
 // fresh /tr without waiting for the timeout to elapse, and the
 // scheduled tracerouteTimeoutMsg becomes a no-op when its tick lands
 // (the packetID guard there falls through silently).
@@ -495,7 +271,7 @@ func (m *model) applyTraceroute(msg mdl.Traceroute) {
 	// TRACEROUTE_APP request with a fresh MeshPacket whose Data does
 	// NOT echo the original packetID, so a strict request_id match
 	// silently times out every time. The fromNum fallback only fires
-	// while a request is in flight, and `session.PendingTraceroute` enforces
+	// while a request is in flight, and `driver.PendingTraceroute` enforces
 	// one-in-flight, so the worst-case false positive is "we accept
 	// a foreign traceroute reply that happens to come from the exact
 	// peer we just asked about" — which IS effectively the right
@@ -529,8 +305,8 @@ func (m *model) applyTraceroute(msg mdl.Traceroute) {
 		hopLabels := make([]string, 0, hops+2)
 		hopLabels = append(hopLabels, m.myCallsign())
 		for _, num := range msg.Route {
-			if idx, ok := m.NodesByNum[num]; ok && idx < len(m.nodes) {
-				hopLabels = append(hopLabels, m.nodes[idx].callsign)
+			if idx, ok := m.NodesByNum[num]; ok && idx < len(m.Nodes) {
+				hopLabels = append(hopLabels, m.Nodes[idx].Callsign)
 				continue
 			}
 			hopLabels = append(hopLabels, fmt.Sprintf("0x%x", num))
@@ -538,13 +314,8 @@ func (m *model) applyTraceroute(msg mdl.Traceroute) {
 		hopLabels = append(hopLabels, tgt)
 		lines = append(lines, "path:    "+strings.Join(hopLabels, " → "))
 	}
-	// Update cached telemetry so subsequent /tr in demo / offline
-	// fall-back mode shows the freshly-measured value instead of the
-	// stale zero. lastHops needs the live value even if it's 0
-	// (direct), so this assignment doesn't gate on > 0.
-	if idx, ok := m.NodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
-		m.nodes[idx].lastHops = hops
-	}
+	// Per-node LastHops refresh happens in Driver.ApplyTraceroute —
+	// we only render the report here.
 	m.systemBlock(fmt.Sprintf("traceroute %s", tgt), lines...)
 	m.flash = fmt.Sprintf(
 		"tr: %s — %d hop%s in %s",
@@ -584,16 +355,8 @@ func (m *model) applyPing(msg mdl.Ping) {
 		fmt.Sprintf("snr:     %s dB", msg.SNR),
 		fmt.Sprintf("rssi:    %s", msg.RSSI),
 	}
-	if idx, ok := m.NodesByNum[msg.FromNum]; ok && idx < len(m.nodes) {
-		m.nodes[idx].lastHops = msg.Hops
-		if msg.SNR != "" {
-			m.nodes[idx].lastSNR = msg.SNR
-		}
-		if msg.RSSI != "" {
-			m.nodes[idx].lastRSSI = msg.RSSI
-		}
-		m.nodes[idx].lastHeardAt = time.Now()
-	}
+	// Per-node telemetry refresh happens in Driver.ApplyPing —
+	// we only render the report + flash here.
 	m.systemBlock(fmt.Sprintf("ping %s", tgt), lines...)
 	m.flash = fmt.Sprintf(
 		"ping: %s — %d hop%s in %s",
@@ -603,73 +366,6 @@ func (m *model) applyPing(msg mdl.Ping) {
 		rtt.Round(100*time.Millisecond),
 	)
 	m.PendingPing = nil
-}
-
-// applyRouting flips the status of the local messageItem whose
-// packetID matches the Routing reply's request_id. NONE → "ack"
-// (delivery succeeded), anything else → "fail" (the errorName
-// hints at why: TIMEOUT, MAX_RETRANSMIT, NO_INTERFACE...).
-// Routing replies for packets we didn't originate silently drop —
-// request_id won't match any of our outbound rows.
-//
-// Persists the new status through saveMessage's UPSERT path so the
-// flip survives a restart. Without this, SQLite would still hold
-// "pending", expireStalePendingMessages would mark the row "fail"
-// after 5 minutes on next launch, and old messages that actually
-// delivered would surface as ✗ — misleading the user about what
-// went out.
-func (m *model) applyRouting(msg mdl.Routing) {
-	if msg.RequestID == 0 {
-		return
-	}
-	// Outbound /ping correlation. REPLY_APP is technically a "built-in
-	// module" but firmware ships with it disabled often enough that
-	// relying on the echo alone fails on a lot of radios. The Routing
-	// receipt always lands (it's how the firmware confirms delivery
-	// for any WantAck packet), so when an in-flight ping resolves
-	// here BEFORE applyPing sees a REPLY_APP echo, treat the ack as
-	// the success signal and surface a softer result block:
-	// delivered, but no echo — useful for the "is this peer reachable
-	// at all?" question even when /ping's primary echo path can't
-	// answer it.
-	if m.PendingPing != nil && m.PendingPing.PacketID == msg.RequestID {
-		tgt := m.PendingPing.TargetCall
-		rtt := time.Since(m.PendingPing.RequestedAt).Round(100 * time.Millisecond)
-		if msg.OK {
-			m.systemBlock(fmt.Sprintf("ping %s", tgt),
-				fmt.Sprintf("rtt:     %s (ack only — no echo)", rtt),
-				"note:    radio acknowledged delivery, but REPLY_APP echo",
-				"         did not return. Common when the target's REPLY_APP",
-				"         module is disabled — /tr still works in that case.",
-			)
-			m.flash = fmt.Sprintf("ping: %s — ack in %s (no echo)", tgt, rtt)
-		} else {
-			m.systemBlock(fmt.Sprintf("ping %s", tgt),
-				fmt.Sprintf("result:  delivery failed (%s)", msg.ErrorName),
-			)
-			m.flash = fmt.Sprintf("ping: %s — %s", tgt, msg.ErrorName)
-		}
-		m.PendingPing = nil
-		return
-	}
-	for i := range m.messages {
-		if m.messages[i].PacketID != msg.RequestID || !m.messages[i].Mine {
-			continue
-		}
-		if msg.OK {
-			m.messages[i].Status = mdl.StatusAck
-			m.flash = "ack received"
-		} else {
-			m.messages[i].Status = mdl.StatusFail
-			m.flash = "delivery failed: " + msg.ErrorName + "  (R to resend)"
-		}
-		if m.driver.Store != nil {
-			m.storagePersist(
-				m.driver.Store.SaveMessage(m.RadioID, m.CurrentChannel, m.messages[i].Message),
-			)
-		}
-		return
-	}
 }
 
 // resend takes a prior outbound messageItem, re-enqueues it over
@@ -682,10 +378,10 @@ func (m *model) applyRouting(msg mdl.Routing) {
 // rejected with an explicit flash rather than silently no-oping so
 // the user knows the keypress registered.
 func (m *model) resend(idx int) {
-	if idx < 0 || idx >= len(m.messages) {
+	if idx < 0 || idx >= len(m.Messages) {
 		return
 	}
-	msg := &m.messages[idx]
+	msg := &m.Messages[idx]
 	if !msg.Mine {
 		m.flash = "R: can only resend your own messages"
 		return
@@ -700,16 +396,24 @@ func (m *model) resend(idx int) {
 		m.flash = "R: nothing to resend on this row"
 		return
 	}
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "R: no radio connected — cannot resend"
 		return
 	}
-	pid, _ := m.driver.Pump.Send(mdl.SendText{
+	pid, _ := m.driver.Send(mdl.SendText{
 		Channel: int(m.currentChannelIndex()),
 		Text:    msg.Text,
 		ReplyID: msg.ReplyID,
 	})
 	msg.PacketID = pid
 	msg.Status = mdl.StatusPending
+	// Re-persist with the fresh PacketID so the startup stale-pending
+	// sweep on next launch sees the LATEST id, not the dead one we
+	// just retransmitted past. Without this, an unacked resend
+	// followed by a quit would expire on the original packet's
+	// packet_id row and leave the new attempt orphaned in SQLite.
+	if st := m.driver.StoreHandle(); st != nil {
+		m.storagePersist(st.SaveMessage(m.RadioID, m.CurrentChannel, msg.Message))
+	}
 	m.flash = fmt.Sprintf("↻ retransmit sent (pid=0x%08x) — awaiting ack", pid)
 }

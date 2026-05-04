@@ -587,8 +587,8 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		target := m.selectedSender()
 		if target != "" {
 			m.replyParent = 0
-			if m.selectedMsg >= 0 && m.selectedMsg < len(m.messages) {
-				m.replyParent = m.messages[m.selectedMsg].PacketID
+			if m.selectedMsg >= 0 && m.selectedMsg < len(m.Messages) {
+				m.replyParent = m.Messages[m.selectedMsg].PacketID
 			}
 			return m, m.prefillInput("/reply " + target + " ")
 		}
@@ -597,7 +597,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// envelope with a fresh packetID and flips the row back to
 		// "pending" so the user sees the retransmit in flight.
 		// Only valid on an own-row with status=="fail".
-		if m.focused == paneMessages && m.selectedMsg >= 0 && m.selectedMsg < len(m.messages) {
+		if m.focused == paneMessages && m.selectedMsg >= 0 && m.selectedMsg < len(m.Messages) {
 			m.resend(m.selectedMsg)
 		}
 	case "P":
@@ -606,15 +606,15 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// with the same remaining time budget it had when pinned.
 		// Only fires on notice rows — toggleNoticePin is a no-op on
 		// chat rows and permanent notices (expireAt == nil).
-		if m.focused != paneMessages || m.selectedMsg < 0 || m.selectedMsg >= len(m.messages) {
+		if m.focused != paneMessages || m.selectedMsg < 0 || m.selectedMsg >= len(m.Messages) {
 			break
 		}
-		target := m.messages[m.selectedMsg]
-		if target.expireAt == nil {
+		target := m.Messages[m.selectedMsg]
+		if target.ExpireAt == nil {
 			m.flash = "P: this row isn't pinnable (chat / permanent notice)"
 			break
 		}
-		willPin := !target.pinned
+		willPin := !target.Pinned
 		m.toggleNoticePin(m.selectedMsg)
 		if willPin {
 			m.flash = "📌 pinned — timer paused"
@@ -645,44 +645,36 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var persistNum uint32
 		var persistFav, persistMute bool
 		m.actOnSelectedNode(func(n *nodeItem) {
-			n.fav = !n.fav
-			persistNum = m.nodeNumOf(n.callsign)
-			persistFav = n.fav
-			persistMute = n.state == stateMuted
+			n.Fav = !n.Fav
+			persistNum = m.nodeNumOf(n.Callsign)
+			persistFav = n.Fav
+			persistMute = n.State == stateMuted
 			m.flash = fmt.Sprintf(
 				"%s %s",
-				n.callsign,
-				toggleFlash(n.fav, "favorited", "unfavorited"),
+				n.Callsign,
+				toggleFlash(n.Fav, "favorited", "unfavorited"),
 			)
 		})
 		if persistNum != 0 {
-			if m.driver.Store != nil {
-				m.storagePersist(
-					m.driver.Store.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute),
-				)
-			}
+			m.driver.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute)
 		}
 	case "m":
 		var persistNum uint32
 		var persistFav, persistMute bool
 		m.actOnSelectedNode(func(n *nodeItem) {
-			if n.state == stateMuted {
-				n.state = stateOnline
-				m.flash = fmt.Sprintf("%s unmuted", n.callsign)
+			if n.State == stateMuted {
+				n.State = stateOnline
+				m.flash = fmt.Sprintf("%s unmuted", n.Callsign)
 			} else {
-				n.state = stateMuted
-				m.flash = fmt.Sprintf("%s muted", n.callsign)
+				n.State = stateMuted
+				m.flash = fmt.Sprintf("%s muted", n.Callsign)
 			}
-			persistNum = m.nodeNumOf(n.callsign)
-			persistFav = n.fav
-			persistMute = n.state == stateMuted
+			persistNum = m.nodeNumOf(n.Callsign)
+			persistFav = n.Fav
+			persistMute = n.State == stateMuted
 		})
 		if persistNum != 0 {
-			if m.driver.Store != nil {
-				m.storagePersist(
-					m.driver.Store.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute),
-				)
-			}
+			m.driver.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute)
 		}
 	case "s":
 		if m.focused == paneNodes {
@@ -693,7 +685,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focused == paneNodes {
 			sorted := m.sortedNodes()
 			if m.selectedNd < len(sorted) {
-				m.nodeFilter = sorted[m.selectedNd].callsign
+				m.nodeFilter = sorted[m.selectedNd].Callsign
 				m.focused = paneMessages
 				m.selectedMsg = m.firstFilteredMsgIndex()
 				m.flash = fmt.Sprintf("filter: %s  (X to clear)", m.nodeFilter)
@@ -720,15 +712,15 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) selectedSender() string {
 	switch m.focused {
 	case paneMessages:
-		if m.selectedMsg < 0 || m.selectedMsg >= len(m.messages) {
+		if m.selectedMsg < 0 || m.selectedMsg >= len(m.Messages) {
 			return ""
 		}
-		msg := m.messages[m.selectedMsg]
+		msg := m.Messages[m.selectedMsg]
 		if msg.Mine || msg.From == "" {
 			return ""
 		}
 		// If the sender's callsign collides with another node in
-		// m.nodes, prefer its node num so /whois /tr /ping land
+		// m.Nodes, prefer its node num so /whois /tr /ping land
 		// exactly on the peer that sent THIS message, not another
 		// radio that happens to share the longname.
 		if msg.FromNum != 0 && m.isCallsignAmbiguous(msg.From) {
@@ -747,10 +739,10 @@ func (m model) selectedSender() string {
 		if !ok {
 			return ""
 		}
-		if sel.nodeNum != 0 && m.isCallsignAmbiguous(sel.callsign) {
-			return fmt.Sprintf("!%08x", sel.nodeNum)
+		if sel.NodeNum != 0 && m.isCallsignAmbiguous(sel.Callsign) {
+			return fmt.Sprintf("!%08x", sel.NodeNum)
 		}
-		return sel.callsign
+		return sel.Callsign
 	}
 	return ""
 }
@@ -796,7 +788,7 @@ func (m model) selectedNodeItem() (*nodeItem, bool) {
 	}
 }
 
-// isCallsignAmbiguous reports whether two or more nodes in m.nodes
+// isCallsignAmbiguous reports whether two or more nodes in m.Nodes
 // share the given callsign — triggers the !<hex> fallback used by
 // selectedSender so nav-key commands (w, t, p, r) route to the
 // exact selected radio rather than an arbitrary map-iteration pick.
@@ -805,8 +797,8 @@ func (m model) isCallsignAmbiguous(callsign string) bool {
 		return false
 	}
 	count := 0
-	for i := range m.nodes {
-		if m.nodes[i].callsign == callsign {
+	for i := range m.Nodes {
+		if m.Nodes[i].Callsign == callsign {
 			count++
 			if count > 1 {
 				return true
@@ -835,28 +827,28 @@ func (m *model) prefillInput(text string) tea.Cmd {
 // mode it just updates local state.
 
 func (m *model) switchChannelByIndex(i int) {
-	if i < 0 || i >= len(m.channels) {
+	if i < 0 || i >= len(m.Channels) {
 		return
 	}
-	m.CurrentChannel = m.channels[i].name
-	m.channels[i].unread = 0
+	m.CurrentChannel = m.Channels[i].Name
+	m.Channels[i].Unread = 0
 	m.selectedCh = i
-	m.flash = fmt.Sprintf("switched to %s", m.channels[i].name)
+	m.flash = fmt.Sprintf("switched to %s", m.Channels[i].Name)
 }
 
 // cycleChannel moves to the previous (-1) or next (+1) channel.
 func (m *model) cycleChannel(dir int) {
-	if len(m.channels) == 0 {
+	if len(m.Channels) == 0 {
 		return
 	}
 	cur := 0
-	for i, c := range m.channels {
-		if c.name == m.CurrentChannel {
+	for i, c := range m.Channels {
+		if c.Name == m.CurrentChannel {
 			cur = i
 			break
 		}
 	}
-	next := (cur + dir + len(m.channels)) % len(m.channels)
+	next := (cur + dir + len(m.Channels)) % len(m.Channels)
 	m.switchChannelByIndex(next)
 }
 
@@ -887,7 +879,7 @@ func (m *model) moveSelection(delta int) {
 		next := clamp(cur+delta, 0, len(sel)-1)
 		m.selectedCfg = sel[next]
 	case paneChannels:
-		m.selectedCh = clamp(m.selectedCh+delta, 0, len(m.channels)-1)
+		m.selectedCh = clamp(m.selectedCh+delta, 0, len(m.Channels)-1)
 	case paneMessages:
 		if m.nodeFilter != "" {
 			m.selectedMsg = m.nextFilteredMsgIndex(delta)
@@ -901,7 +893,7 @@ func (m *model) moveSelection(delta int) {
 		// the wrong slice lets the cursor wander past the last
 		// rendered row — user-visible as "j stops highlighting
 		// anything" for the middle of the list.
-		maxIdx := len(m.nodes) - 1
+		maxIdx := len(m.Nodes) - 1
 		switch m.overlay {
 		case overlayNearby:
 			if count := len(m.nearbyRoster()); count > 0 {
@@ -921,7 +913,7 @@ func (m *model) moveSelection(delta int) {
 // j lands on the first row of the next message or group; k lands on
 // the first row of the previous one. Continuation rows are skipped.
 func (m model) nextMsgIndexSkipGroups(delta int) int {
-	if len(m.messages) == 0 {
+	if len(m.Messages) == 0 {
 		return 0
 	}
 	cur := m.selectedMsg
@@ -932,24 +924,24 @@ func (m model) nextMsgIndexSkipGroups(delta int) int {
 	for k := 0; k < abs(delta); k++ {
 		next := cur + step
 		// Skip continuation rows of groups — land only on first rows.
-		for next >= 0 && next < len(m.messages) {
-			g := m.messages[next].group
+		for next >= 0 && next < len(m.Messages) {
+			g := m.Messages[next].Group
 			if g == 0 {
 				break // not grouped — always a valid landing row
 			}
 			// Grouped — landing valid only if it's the group's first row.
-			if next-step < 0 || next-step >= len(m.messages) ||
-				m.messages[next-step].group != g {
+			if next-step < 0 || next-step >= len(m.Messages) ||
+				m.Messages[next-step].Group != g {
 				break
 			}
 			next += step
 		}
-		if next < 0 || next >= len(m.messages) {
+		if next < 0 || next >= len(m.Messages) {
 			break
 		}
 		cur = next
 	}
-	return clamp(cur, 0, len(m.messages)-1)
+	return clamp(cur, 0, len(m.Messages)-1)
 }
 
 func abs(n int) int {
@@ -985,7 +977,7 @@ func (m *model) moveSelectionGrid(dx, dy int) {
 		cols = 1
 	}
 	delta := dx + dy*cols
-	m.selectedNd = clamp(m.selectedNd+delta, 0, len(m.nodes)-1)
+	m.selectedNd = clamp(m.selectedNd+delta, 0, len(m.Nodes)-1)
 }
 
 // userGridCols mirrors the layout math in renderNodesPane so
@@ -1012,7 +1004,7 @@ func (m model) userGridCols() int {
 // firstFilteredMsgIndex returns the index of the first message whose
 // sender matches the active node filter; falls back to 0 if none.
 func (m model) firstFilteredMsgIndex() int {
-	for i, msg := range m.messages {
+	for i, msg := range m.Messages {
 		if m.msgMatchesFilter(msg) {
 			return i
 		}
@@ -1025,7 +1017,7 @@ func (m model) firstFilteredMsgIndex() int {
 // skipping messages that don't match — so j/k jumps only through
 // the filtered set.
 func (m model) nextFilteredMsgIndex(delta int) int {
-	if len(m.messages) == 0 {
+	if len(m.Messages) == 0 {
 		return 0
 	}
 	i := m.selectedMsg
@@ -1033,12 +1025,12 @@ func (m model) nextFilteredMsgIndex(delta int) int {
 	if step == 0 {
 		step = 1
 	}
-	for k := 1; k <= len(m.messages); k++ {
+	for k := 1; k <= len(m.Messages); k++ {
 		j := i + step*k
-		if j < 0 || j >= len(m.messages) {
+		if j < 0 || j >= len(m.Messages) {
 			return i
 		}
-		if m.msgMatchesFilter(m.messages[j]) {
+		if m.msgMatchesFilter(m.Messages[j]) {
 			return j
 		}
 	}
@@ -1057,11 +1049,11 @@ func (m model) msgMatchesFilter(msg messageItem) bool {
 func (m *model) jumpSelection(to int) {
 	switch m.focused {
 	case paneChannels:
-		m.selectedCh = resolveJump(to, len(m.channels))
+		m.selectedCh = resolveJump(to, len(m.Channels))
 	case paneMessages:
-		m.selectedMsg = resolveJump(to, len(m.messages))
+		m.selectedMsg = resolveJump(to, len(m.Messages))
 	case paneNodes:
-		m.selectedNd = resolveJump(to, len(m.nodes))
+		m.selectedNd = resolveJump(to, len(m.Nodes))
 	}
 }
 
@@ -1149,17 +1141,17 @@ func (m *model) jumpToSearchHit(dir int) (bool, int) {
 	var cur *int
 	switch m.focused {
 	case paneChannels:
-		for _, c := range m.channels {
-			items = append(items, c.name)
+		for _, c := range m.Channels {
+			items = append(items, c.Name)
 		}
 		cur = &m.selectedCh
 	case paneNodes:
 		for _, n := range m.sortedNodes() {
-			items = append(items, n.callsign)
+			items = append(items, n.Callsign)
 		}
 		cur = &m.selectedNd
 	default:
-		for _, msg := range m.messages {
+		for _, msg := range m.Messages {
 			items = append(items, msg.From+" "+msg.Text)
 		}
 		cur = &m.selectedMsg

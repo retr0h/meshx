@@ -21,36 +21,22 @@
 package cmd
 
 import (
-	"github.com/retr0h/meshx/internal/tui"
+	"fmt"
+	"log/slog"
+
 	"github.com/spf13/cobra"
 )
 
-// tcpCmd is the parent for every TCP operation against a
-// meshtasticd instance or a WiFi-connected radio exposing the
-// native API on port 4403. Sibling of `usb` and `ble`.
-var tcpCmd = &cobra.Command{
-	Use:   "tcp",
-	Short: "TCP Meshtastic transport",
-	Long: `Commands for connecting to a Meshtastic radio or meshtasticd
-instance over TCP on the native Meshtastic port (4403 by default).`,
-}
-
-// tcpConnectCmd opens the TUI against a remote Meshtastic endpoint.
-// Required arg is the host or host:port string.
-var tcpConnectCmd = &cobra.Command{
-	Use:   "connect <host[:port]>",
-	Short: "Open the TUI over TCP",
-	Long: `Connect to a Meshtastic endpoint over TCP and open the TUI.
-
-  meshx tcp connect meshtasticd.local         # port defaults to 4403
-  meshx tcp connect 192.168.1.42:4403         # explicit port`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
-		return tui.RunRadio(args[0])
+var bleDisconnectCmd = &cobra.Command{
+	Use:   "disconnect",
+	Short: "Clear the auto-connect favorite",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		logger.With(slog.String("subsystem", "ble.disconnect")).Debug("running")
+		store, err := cliOpenBLEStore()
+		if err != nil {
+			return fmt.Errorf("open store: %w", err)
+		}
+		defer func() { _ = store.Close() }()
+		return store.SetBLEFavorite("")
 	},
-}
-
-func init() {
-	tcpCmd.AddCommand(tcpConnectCmd)
-	rootCmd.AddCommand(tcpCmd)
 }

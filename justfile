@@ -28,8 +28,14 @@ test:
     just just::fmt-check
     just go::test
 
+# Generate code
+generate:
+    just go::generate
+    # cp internal/controller/api/gen/api.yaml ui/src/sdk/gen/api.yaml
+
 # Format, lint before committing
 ready:
+    just generate
     just just::fmt
     just docs::fmt
     just go::fmt

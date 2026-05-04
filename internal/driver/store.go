@@ -34,7 +34,11 @@ import (
 // client (MR-5) can declare a smaller surface without bloating the
 // Driver's view of storage.
 //
-// Methods correspond 1:1 with *storage.Sqlite's exported methods.
+// Methods are the subset of *storage.Sqlite's API the Driver and
+// its callers (TUI Update arms, daemon sink) actually use. BLE
+// pairing storage isn't part of this surface — it's CLI / HTTP
+// admin territory and the driver-side seam should not pull it in.
+// See server.Store / cmd's BLE deps for that.
 type Store interface {
 	// identity
 	ResolveRadioByConnection(transport, addr string) (string, error)
@@ -53,13 +57,6 @@ type Store interface {
 	// settings
 	GetSetting(radioID, key string) (string, bool)
 	PutSetting(radioID, key, value string) error
-
-	// ble
-	SaveBLEDevice(d mdl.BLEDevice) error
-	LoadBLEDevices() ([]mdl.BLEDevice, error)
-	LookupBLEDevice(needle string) (*mdl.BLEDevice, error)
-	SetBLEFavorite(uuid string) error
-	ForgetBLEDevice(uuid string) error
 
 	// diagnostics
 	ConsumeBootNotes() []string

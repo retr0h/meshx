@@ -120,14 +120,16 @@ func renderAndCheck(c Component, box Box) string {
 	if len(lines) != box.Height {
 		panic(fmt.Sprintf(
 			"layout: %T returned %d lines, box wants %d (box=%+v)",
-			c, len(lines), box.Height, box))
+			c, len(lines), box.Height, box,
+		))
 	}
 	for i, l := range lines {
 		w := ansiCells(l)
 		if w != box.Width {
 			panic(fmt.Sprintf(
 				"layout: %T line %d width=%d, box wants %d (box=%+v)\nline=%q",
-				c, i, w, box.Width, box, ansi.Strip(l)))
+				c, i, w, box.Width, box, ansi.Strip(l),
+			))
 		}
 	}
 	return out

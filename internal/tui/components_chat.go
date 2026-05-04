@@ -204,8 +204,8 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		shortName = m.myShortName()
 	} else {
 		if idx, ok := m.NodesByNum[msg.FromNum]; ok &&
-			idx >= 0 && idx < len(m.nodes) {
-			shortName = m.nodes[idx].shortName
+			idx >= 0 && idx < len(m.Nodes) {
+			shortName = m.Nodes[idx].ShortName
 		}
 		if m.senderUnresolved(msg) {
 			fromRaw = "👻 " + fromRaw

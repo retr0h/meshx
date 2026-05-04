@@ -46,7 +46,7 @@ import "time"
 // cache, ToNum is unused but preserved for future DM detection.
 type Text struct {
 	Channel int
-	ToNum   uint32
+	ToNum   uint32 `format:"int64" minimum:"0"`
 	RSSI    string
 	Body    Message
 }
@@ -54,7 +54,7 @@ type Text struct {
 // MyInfo delivers MyNodeInfo — our own node number, used to resolve
 // self vs peer and to claim the radio identity in storage.
 type MyInfo struct {
-	NodeNum uint32
+	NodeNum uint32 `format:"int64" minimum:"0"`
 }
 
 // NodeInfo delivers one peer NodeInfo. Multiple arrive during the
@@ -63,7 +63,7 @@ type MyInfo struct {
 // projection lives in CachedNode (NodeDB-cache subset of the wire
 // fields).
 type NodeInfo struct {
-	NodeNum     uint32
+	NodeNum     uint32 `format:"int64" minimum:"0"`
 	LongName    string
 	ShortName   string
 	HwModel     string
@@ -100,8 +100,8 @@ type ChannelInfo struct {
 // pending ping; FromNum is the fallback when the firmware doesn't
 // echo request_id.
 type Ping struct {
-	RequestID uint32
-	FromNum   uint32
+	RequestID uint32 `format:"int64" minimum:"0"`
+	FromNum   uint32 `format:"int64" minimum:"0"`
 	Hops      int
 	SNR       string
 	RSSI      string
@@ -130,10 +130,10 @@ type ModuleBuzzer struct {
 // through (does NOT include source or dest per the firmware
 // convention).
 type Traceroute struct {
-	RequestID uint32
-	FromNum   uint32
-	ToNum     uint32
-	Route     []uint32
+	RequestID uint32   `format:"int64" minimum:"0"`
+	FromNum   uint32   `format:"int64" minimum:"0"`
+	ToNum     uint32   `format:"int64" minimum:"0"`
+	Route     []uint32 `format:"int64"`
 	At        time.Time
 }
 
@@ -145,7 +145,7 @@ type Traceroute struct {
 // summary; ErrorName is the human-readable string for the flash
 // message.
 type Routing struct {
-	RequestID uint32
+	RequestID uint32 `format:"int64" minimum:"0"`
 	Reason    RoutingError
 	ErrorName string
 	OK        bool
@@ -155,7 +155,7 @@ type Routing struct {
 // one-shot FromRadio.Metadata envelope.
 type Metadata struct {
 	FirmwareVersion string
-	DeviceStateVer  uint32
+	DeviceStateVer  uint32 `format:"int64" minimum:"0"`
 	HasWifi         bool
 	HasBluetooth    bool
 }
@@ -172,8 +172,8 @@ type LoraConfig struct {
 // — battery, voltage, channel utilization, TX airtime. Arrives
 // periodically (default every 30 min) from the radio.
 type DeviceMetrics struct {
-	FromNodeNum  uint32
-	BatteryLevel uint32  // 0-100; >100 = powered
+	FromNodeNum  uint32  `format:"int64" minimum:"0"`
+	BatteryLevel uint32  `format:"int64" minimum:"0"` // 0-100; >100 = powered
 	Voltage      float32 // volts
 	ChannelUtil  float32 // percent
 	AirUtilTx    float32 // percent
@@ -183,7 +183,7 @@ type DeviceMetrics struct {
 // temperature / humidity / pressure / gas. Reported by nodes with
 // an attached BME280 / SHT3x etc. sensor. Rare on most meshes.
 type EnvMetrics struct {
-	FromNodeNum uint32
+	FromNodeNum uint32  `format:"int64" minimum:"0"`
 	Temperature float32 // °C
 	Humidity    float32 // %
 	Pressure    float32 // hPa
@@ -200,7 +200,7 @@ type DeviceConfig struct {
 // POSITION_APP packet). Applied to the sender's nodeItem and
 // surfaced via /qth <call> or the top-bar grid square for self.
 type Position struct {
-	FromNodeNum uint32
+	FromNodeNum uint32  `format:"int64" minimum:"0"`
 	Latitude    float64 // degrees
 	Longitude   float64 // degrees
 	Altitude    int32   // meters

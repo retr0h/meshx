@@ -563,7 +563,8 @@ func (s *Sqlite) SaveMessage(radioID, channel string, msg model.Message) error {
 	// mirrors the partial index: system rows / local-only entries
 	// carry packet_id = 0 and the constraint doesn't apply to them,
 	// so those still append freely.
-	_, err := s.db.Exec(`
+	_, err := s.db.Exec(
+		`
         INSERT INTO messages
         (radio_id, channel, time, sender, text, mine, bang, status, hops, snr, packet_id, reply_id, from_num, to_num)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -571,7 +572,7 @@ func (s *Sqlite) SaveMessage(radioID, channel string, msg model.Message) error {
             status = excluded.status,
             hops   = excluded.hops,
             snr    = excluded.snr`,
-		radioID, channel, msg.Time, msg.From, msg.Text, mine, msg.Bang, msg.Status.String(),
+		radioID, channel, msg.Time, msg.From, msg.Text, mine, msg.Bang, string(msg.Status),
 		msg.Hops, msg.SNR, msg.PacketID, msg.ReplyID, msg.FromNum, msg.ToNum,
 	)
 	if err != nil {
@@ -629,7 +630,7 @@ func (s *Sqlite) LoadMessages(
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
-		msg.Status = model.ParseMessageStatus(statusStr)
+		msg.Status = model.MessageStatus(statusStr)
 		msg.Mine = mine != 0
 		out = append(out, msg)
 	}
@@ -657,7 +658,8 @@ func (s *Sqlite) SaveNode(radioID string, n model.CachedNode) error {
 	// which means TWO radios reporting the same peer share one row.
 	// Intentional for now: same Meshtastic peer => same identity
 	// regardless of which radio heard it.
-	_, err := s.db.Exec(`
+	_, err := s.db.Exec(
+		`
         INSERT INTO nodes (radio_id, node_num, long_name, short_name, hw_model, last_seen)
         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(node_num) DO UPDATE SET
@@ -729,7 +731,8 @@ func (s *Sqlite) SaveNodePrefs(
 	if muted {
 		mu = 1
 	}
-	_, err := s.db.Exec(`
+	_, err := s.db.Exec(
+		`
         INSERT INTO nodes (radio_id, node_num, favorite, muted)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(node_num) DO UPDATE SET
@@ -781,7 +784,8 @@ func (s *Sqlite) PutSetting(radioID, key, value string) error {
 	if radioID != "" {
 		rid = radioID
 	}
-	_, err := s.db.Exec(`
+	_, err := s.db.Exec(
+		`
         INSERT INTO settings (key, value, radio_id) VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET
             value    = excluded.value,
@@ -805,7 +809,8 @@ func (s *Sqlite) SaveBLEDevice(d model.BLEDevice) error {
 	if d.UUID == "" {
 		return fmt.Errorf("save ble device: uuid required")
 	}
-	_, err := s.db.Exec(`
+	_, err := s.db.Exec(
+		`
         INSERT INTO ble_devices (uuid, long_name, short_name, hw_model, paired_at)
         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(uuid) DO UPDATE SET

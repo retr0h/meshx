@@ -36,12 +36,12 @@ func (p channelsPane) Render(box Box) string {
 	m := p.m
 	header := paneHeaderCell("CHANNELS", m.focused == paneChannels)
 
-	lines := make([]string, 0, 2+len(m.channels))
+	lines := make([]string, 0, 2+len(m.Channels))
 	lines = append(lines, header, "")
-	for i, c := range m.channels {
+	for i, c := range m.Channels {
 		// Skip DISABLED slots — applyChannel keeps them in the slice
 		// for slot allocation but they're not real channels to display.
-		if c.role == roleDisabled {
+		if c.Role == roleDisabled {
 			continue
 		}
 		selected := i == m.selectedCh && m.focused == paneChannels
@@ -50,9 +50,9 @@ func (p channelsPane) Render(box Box) string {
 		if contentW < 1 {
 			contentW = 1
 		}
-		row := channelRowLine(c.name, c.private, c.unread, contentW)
+		row := channelRowLine(c.Name, c.Private, c.Unread, contentW)
 		lines = append(lines, wrapSelection(
-			row, selected, m.isStringSearchHit(c.name), inner,
+			row, selected, m.isStringSearchHit(c.Name), inner,
 		))
 	}
 	return renderBorderedPane(
@@ -72,10 +72,10 @@ type nodesPane struct{ m model }
 // the same peer state with identical chrome).
 func (p nodesPane) Render(box Box) string {
 	m := p.m
-	total := len(m.nodes)
+	total := len(m.Nodes)
 	online := 0
-	for i := range m.nodes {
-		if m.nodes[i].currentState() == stateOnline {
+	for i := range m.Nodes {
+		if m.Nodes[i].CurrentState() == stateOnline {
 			online++
 		}
 	}
@@ -120,12 +120,12 @@ func (p nodesPane) Render(box Box) string {
 			}
 			n := sorted[idx]
 			selected := idx == m.selectedNd && m.focused == paneNodes
-			isSelf := m.MyNodeNum != 0 && n.nodeNum == m.MyNodeNum
+			isSelf := m.MyNodeNum != 0 && n.NodeNum == m.MyNodeNum
 			cell := userCellLine(n, isSelf, selected, cellW)
 			// Search-hit highlight — only when not currently selected
 			// (selection wins). Same dim-green tint /nearby and the
 			// messages pane use, hoisted to searchHitRowBg.
-			if m.isStringSearchHit(n.callsign) && !selected {
+			if m.isStringSearchHit(n.Callsign) && !selected {
 				cell = lipgloss.NewStyle().
 					Background(lipgloss.Color(searchHitRowBg)).
 					Render(cell)
@@ -404,7 +404,7 @@ func (m model) configEntries() []configEntry {
 	// show "(querying)" so the user doesn't trust a default-true guess
 	// — same shape the rest of the panel uses for not-yet-known fields.
 	buzzerSaved := boolToOnOff(m.RadioBuzzerEnabled)
-	if !m.RadioBuzzerKnown && !m.isDemo() {
+	if !m.RadioBuzzerKnown {
 		buzzerSaved = "querying…"
 	}
 	out := []configEntry{
@@ -443,7 +443,7 @@ func (m model) configEntries() []configEntry {
 	}
 
 	if n := m.myNode(); n != nil {
-		add("hw", n.hwModel)
+		add("hw", n.HwModel)
 	}
 	add("firmware", m.RadioFirmware)
 	if m.CurrentChannel != "" {
@@ -460,7 +460,7 @@ func (m model) configEntries() []configEntry {
 		add("battery", fmt.Sprintf("%.2f V (%d%%)", m.BatteryVoltage, m.BatteryLevel))
 		add("chan use", fmt.Sprintf("%.1f%%", m.ChannelUtil))
 	}
-	add("peers", fmt.Sprintf("%d known", len(m.nodes)))
+	add("peers", fmt.Sprintf("%d known", len(m.Nodes)))
 	return out
 }
 
@@ -590,7 +590,8 @@ func (p configPane) Render(box Box) string {
 		if e.kind == cfgEntryReadOnly {
 			labelStyle = dim
 		}
-		row := fmt.Sprintf("%s %s  %s",
+		row := fmt.Sprintf(
+			"%s %s  %s",
 			marker,
 			labelStyle.Render(padCells(e.label, 14)),
 			styledVal,
@@ -626,23 +627,23 @@ func (p configPane) Render(box Box) string {
 	)
 }
 
-// sortedNodes returns a view of m.nodes with pinned (fav) nodes first,
+// sortedNodes returns a view of m.Nodes with pinned (fav) nodes first,
 // then sorted by the current sort mode. The returned slice is a copy
 // so we don't mutate storage order.
 func (m model) sortedNodes() []nodeItem {
-	out := make([]nodeItem, len(m.nodes))
-	copy(out, m.nodes)
+	out := make([]nodeItem, len(m.Nodes))
+	copy(out, m.Nodes)
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].fav != out[j].fav {
-			return out[i].fav // pinned first, always
+		if out[i].Fav != out[j].Fav {
+			return out[i].Fav // pinned first, always
 		}
 		switch m.nodeSort {
 		case sortByName:
-			return out[i].callsign < out[j].callsign
+			return out[i].Callsign < out[j].Callsign
 		case sortByState:
-			return stateWeight(out[i].state) < stateWeight(out[j].state)
+			return stateWeight(out[i].State) < stateWeight(out[j].State)
 		default: // sortByLastHeard
-			return out[i].heardRank < out[j].heardRank
+			return out[i].HeardRank < out[j].HeardRank
 		}
 	})
 	return out
@@ -777,7 +778,7 @@ func tailStartList(msgs []messageItem, rowsBudget int) int {
 	rows := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
 		cost := 1 + strings.Count(msgs[i].Text, "\n")
-		if msgs[i].acks != "" {
+		if msgs[i].Acks != "" {
 			cost++
 		}
 		if rows+cost > rowsBudget {
@@ -806,7 +807,7 @@ func messagesPaneRender(m model, width, height int) string {
 	header := paneHeaderCell(chanName, m.focused == paneMessages)
 	hint := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
-		Render(fmt.Sprintf("  (%d msgs)", len(m.messages)))
+		Render(fmt.Sprintf("  (%d msgs)", len(m.Messages)))
 
 	// Total content budget inside the bordered pane: height − 2
 	// (border) − 2 (Padding(1,1)). The pane fills exactly that many
@@ -828,13 +829,13 @@ func messagesPaneRender(m model, width, height int) string {
 	var lines []string
 	lines = append(lines, header+hint, "")
 
-	// irssi-style: always the dense one-row-per-message list.
+	// irssi-Style: always the dense one-row-per-message list.
 	// Default anchors on the tail (show latest rows). If the user
 	// has scrolled the selection above the natural tail via j/k or
 	// Ctrl+F / Ctrl+U, drop the viewport back so the selected row
 	// stays visible — otherwise nav feels broken because moving
 	// selectedMsg doesn't seem to move anything on screen.
-	naturalStart := tailStartList(m.messages, rowsFree)
+	naturalStart := tailStartList(m.Messages, rowsFree)
 	startIdx := naturalStart
 	scrollback := m.selectedMsg < naturalStart
 	if scrollback {
@@ -855,8 +856,8 @@ func messagesPaneRender(m model, width, height int) string {
 	selected := m.focused == paneMessages && m.mode == modeNav
 	var lastGroup uint64
 	var groupBg string
-	for i := startIdx; i < len(m.messages); i++ {
-		msg := m.messages[i]
+	for i := startIdx; i < len(m.Messages); i++ {
+		msg := m.Messages[i]
 		// /ignore filter — drop chat rows from peers the user has
 		// silenced. System rows (status=="system") and our own
 		// messages always render so the user can see what they
@@ -873,16 +874,16 @@ func messagesPaneRender(m model, width, height int) string {
 		// card instead of alternating stripes.
 		var bg string
 		switch {
-		case msg.group != 0 && msg.group == lastGroup:
+		case msg.Group != 0 && msg.Group == lastGroup:
 			bg = groupBg
-		case msg.group != 0:
+		case msg.Group != 0:
 			// System blocks (/whois, /config, /ping, /env, /info
 			// cards) always use the lighter zebra tint so the block
 			// reads consistently as one shaded card — never the
 			// near-black rowBgEven that would make a block look
 			// like terminal-bg depending on parity.
 			bg = rowBgOdd
-			lastGroup = msg.group
+			lastGroup = msg.Group
 			groupBg = bg
 		case msg.Status == mdl.StatusSystem || msg.Status == mdl.StatusNotice:
 			// Standalone `-!-` rows (storage notices, single-line
@@ -914,8 +915,8 @@ func messagesPaneRender(m model, width, height int) string {
 		// j/k lands the cursor on the header row, but visually the
 		// entire block shows as the current selection.
 		isSelected := i == m.selectedMsg && selected
-		if !isSelected && msg.group != 0 && selected {
-			if sel := m.messages[m.selectedMsg]; sel.group == msg.group {
+		if !isSelected && msg.Group != 0 && selected {
+			if sel := m.Messages[m.selectedMsg]; sel.Group == msg.Group {
 				isSelected = true
 			}
 		}
@@ -927,9 +928,9 @@ func messagesPaneRender(m model, width, height int) string {
 		// keeps the renderer oblivious to message-list indices.
 		pinFirst := false
 		pinLast := false
-		if msg.pinned {
-			pinFirst = msg.group == 0 || i == 0 || m.messages[i-1].group != msg.group
-			pinLast = msg.group == 0 || i+1 >= len(m.messages) || m.messages[i+1].group != msg.group
+		if msg.Pinned {
+			pinFirst = msg.Group == 0 || i == 0 || m.Messages[i-1].Group != msg.Group
+			pinLast = msg.Group == 0 || i+1 >= len(m.Messages) || m.Messages[i+1].Group != msg.Group
 		}
 		// messageRow.Render owns the dispatch (notice/system →
 		// noticeRowRender, regular chat → chatRowRender) AND forces

@@ -39,7 +39,6 @@ func (s statusBar) Render(box Box) string {
 	warn := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
 	ok := lipgloss.NewStyle().Foreground(lipgloss.Color(mhGreen)).Bold(true)
 	pink := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
-	demoTag := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
 	chrome := mhDrained
 
 	var segs []string
@@ -56,8 +55,8 @@ func (s statusBar) Render(box Box) string {
 	// Hardware + firmware.
 	n := m.myNode()
 	hw := "—"
-	if n != nil && n.hwModel != "" {
-		hw = n.hwModel
+	if n != nil && n.HwModel != "" {
+		hw = n.HwModel
 	}
 	fw := shortFirmware(m.RadioFirmware)
 	segs = append(segs, statusSegment(
@@ -121,7 +120,7 @@ func (s statusBar) Render(box Box) string {
 	}
 	segs = append(
 		segs,
-		statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.nodes))), chrome),
+		statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.Nodes))), chrome),
 	)
 
 	// meshX terminal-ding badge — 🔔 when /mute is off (BEL fires on
@@ -144,8 +143,6 @@ func (s statusBar) Render(box Box) string {
 	// Right-most segment: connection state.
 	var state string
 	switch {
-	case m.isDemo():
-		state = ok.Render("online") + "  " + demoTag.Render("[DEMO]")
 	case m.Connected:
 		state = ok.Render("● online")
 	default:
@@ -326,15 +323,15 @@ func (c channelTabsRow) Render(box Box) string {
 	// Left side: channel tabs (one per known channel; pre-sync
 	// placeholder when the radio's ChannelInfo packet hasn't landed).
 	var tabs []string
-	for i, ch := range m.channels {
+	for i, ch := range m.Channels {
 		// applyChannel keeps DISABLED slots in the slice so /channel
 		// new can find a free index — skip them for display so empty
 		// slots don't clutter the tab strip.
-		if ch.role == roleDisabled {
+		if ch.Role == roleDisabled {
 			continue
 		}
 		tabs = append(tabs, channelTabCell(
-			ch.name, i, ch.name == m.CurrentChannel, ch.private, ch.unread,
+			ch.Name, i, ch.Name == m.CurrentChannel, ch.Private, ch.Unread,
 		))
 	}
 	if len(tabs) == 0 {

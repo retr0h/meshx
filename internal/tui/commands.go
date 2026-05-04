@@ -44,9 +44,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/retr0h/meshx/internal/driver"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
-	"github.com/retr0h/meshx/internal/meshx/session"
 	"github.com/retr0h/meshx/internal/version"
 )
 
@@ -71,28 +71,22 @@ func (m *model) sendPlainMessage(text string) {
 // renders with the magenta `›` "mine" marker instead of the yellow
 // `*` bang flag.
 func (m *model) sendPlainReply(text string, replyToID uint32) {
-	var pid uint32
-	if m.driver.Pump != nil {
-		pid, _ = m.driver.Pump.Send(mdl.SendText{
-			Channel: int(m.currentChannelIndex()),
-			Text:    text,
-			ReplyID: replyToID,
-		})
-	}
-	item := messageItem{Message: mdl.Message{
-		Time: timeNowHHMM(), From: "me", Mine: true, Text: text,
-		Status: mdl.StatusPending, PacketID: pid,
+	channel := int(m.currentChannelIndex())
+	pid, _ := m.driver.Send(mdl.SendText{
+		Channel: channel,
+		Text:    text,
 		ReplyID: replyToID,
-		FromNum: m.MyNodeNum,
-		SentAt:  time.Now(),
-	}}
-	m.messages = append(m.messages, item)
-	m.selectedMsg = len(m.messages) - 1
-	m.flash = fmt.Sprintf("sent in %s", m.CurrentChannel)
-
-	if m.driver.Store != nil {
-		m.storagePersist(m.driver.Store.SaveMessage(m.RadioID, m.CurrentChannel, item.Message))
+	})
+	res := m.driver.RecordOutbound(driver.RecordOutboundOptions{
+		Channel:  channel,
+		Text:     text,
+		ReplyID:  replyToID,
+		PacketID: pid,
+	})
+	if res.Index >= 0 {
+		m.selectedMsg = res.Index
 	}
+	m.flash = fmt.Sprintf("sent in %s", m.CurrentChannel)
 }
 
 // setOwner validates the desired longname / shortname and sends an
@@ -103,12 +97,7 @@ func (m *model) sendPlainReply(text string, replyToID uint32) {
 // Called by /nick and /tag. Returns a tea.Cmd for consistency with
 // the dispatcher's expected shape; today it's always nil.
 func (m *model) setOwner(longName, shortName, which string) tea.Cmd {
-	// Demo mode has no real radio — just flash a hint.
-	if m.isDemo() {
-		m.flash = "/" + which + "name takes effect on a real radio (demo mode)"
-		return nil
-	}
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/" + which + "name needs a live radio connection"
 		return nil
 	}
@@ -150,7 +139,7 @@ func (m *model) setOwner(longName, shortName, which string) tea.Cmd {
 		// stays however the user configured it via the phone app.
 		_ = n
 	}
-	if _, ok := m.driver.Pump.Send(mdl.SetOwner{
+	if _, ok := m.driver.Send(mdl.SetOwner{
 		LongName:   longName,
 		ShortName:  shortName,
 		IsLicensed: isLicensed,
@@ -190,10 +179,10 @@ const meshtasticChannelSlots = 8
 // replace the primary.
 func (m *model) findFreeChannelSlot() int {
 	for i := 1; i < meshtasticChannelSlots; i++ {
-		if i >= len(m.channels) {
+		if i >= len(m.Channels) {
 			return i
 		}
-		if m.channels[i].role == roleDisabled || m.channels[i].role == "" {
+		if m.Channels[i].Role == roleDisabled || m.Channels[i].Role == "" {
 			return i
 		}
 	}
@@ -207,11 +196,11 @@ func (m *model) findFreeChannelSlot() int {
 // matches on bytes. Returns -1 if not found or DISABLED.
 func (m *model) findChannelByName(typed string) int {
 	want := bareChannelName(strings.TrimSpace(typed))
-	for i, c := range m.channels {
-		if c.role == roleDisabled {
+	for i, c := range m.Channels {
+		if c.Role == roleDisabled {
 			continue
 		}
-		if bareChannelName(c.name) == want {
+		if bareChannelName(c.Name) == want {
 			return i
 		}
 	}
@@ -230,7 +219,7 @@ func bareChannelName(s string) string {
 
 // channelShare round-trips a local channel back into a meshtastic://
 // URL and renders it as an ASCII QR for in-person scanning. The PSK
-// in m.channels[idx].psk was sourced from the radio's NodeDB dump
+// in m.Channels[idx].PSK was sourced from the radio's NodeDB dump
 // (see applyChannel) — never read from disk, never reads from disk.
 //
 // The QR is the safest hand-off path: the bytes go terminal →
@@ -240,11 +229,7 @@ func bareChannelName(s string) string {
 // scanning this can see the screen and only that person" reminder so
 // users don't routinely paste the URL into group chats.
 func (m *model) channelShare(typed string) tea.Cmd {
-	if m.isDemo() {
-		m.flash = "/channel share takes effect on a real radio (demo mode)"
-		return nil
-	}
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/channel share needs a live radio connection"
 		return nil
 	}
@@ -253,8 +238,8 @@ func (m *model) channelShare(typed string) tea.Cmd {
 		m.flash = fmt.Sprintf("/channel share: no channel matching %q", typed)
 		return nil
 	}
-	c := m.channels[idx]
-	if c.role == rolePrimary && len(c.psk) == 0 {
+	c := m.Channels[idx]
+	if c.Role == rolePrimary && len(c.PSK) == 0 {
 		// Sharing the default LongFast channel as a meshtastic:// URL
 		// is technically valid but useless — every Meshtastic radio is
 		// on it by default. Refuse rather than emit a QR no one needs
@@ -263,8 +248,8 @@ func (m *model) channelShare(typed string) tea.Cmd {
 		return nil
 	}
 	shareURL, err := pump.BuildChannelShareURL(mdl.ChannelInfo{
-		Name: bareChannelName(c.name),
-		PSK:  c.psk,
+		Name: bareChannelName(c.Name),
+		PSK:  c.PSK,
 	})
 	if err != nil {
 		m.flash = fmt.Sprintf("/channel share failed: %v", err)
@@ -275,24 +260,25 @@ func (m *model) channelShare(typed string) tea.Cmd {
 		m.flash = fmt.Sprintf("/channel share: qr render failed: %v", err)
 		return nil
 	}
-	header := fmt.Sprintf("/channel share — %s", c.name)
+	header := fmt.Sprintf("/channel share — %s", c.Name)
 	qrLines := strings.Split(qr, "\n")
 	lines := make([]string, 0, len(qrLines)+4)
-	lines = append(lines,
+	lines = append(
+		lines,
 		"scan with the Meshtastic app to join (in-person only — the PSK is in this QR)",
 		"",
 	)
 	lines = append(lines, qrLines...)
 	lines = append(lines, "", "url: "+shareURL)
 	m.systemBlock(header, lines...)
-	m.flash = fmt.Sprintf("share QR for %s — visible in log", c.name)
+	m.flash = fmt.Sprintf("share QR for %s — visible in log", c.Name)
 	return nil
 }
 
 // channelNew creates a fresh secondary channel with a randomly
 // generated 32-byte AES256 PSK and pushes it to the first free slot.
 // The PSK never lands on disk — meshX has no channels table; the
-// bytes round-trip through pump → channelItem.psk where they wait in
+// bytes round-trip through pump → channelItem.PSK where they wait in
 // RAM for /channel share to wrap them in a meshtastic:// URL.
 //
 // Name is enforced ≤ 11 bytes per the proto comment ("Less than 12
@@ -305,11 +291,7 @@ func (m *model) channelShare(typed string) tea.Cmd {
 // reading the raw PSK bytes aloud. Same convention SSH uses for host
 // key fingerprints.
 func (m *model) channelNew(name string) tea.Cmd {
-	if m.isDemo() {
-		m.flash = "/channel new takes effect on a real radio (demo mode)"
-		return nil
-	}
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/channel new needs a live radio connection"
 		return nil
 	}
@@ -351,7 +333,7 @@ func (m *model) channelNew(name string) tea.Cmd {
 		m.flash = fmt.Sprintf("/channel new: %v", err)
 		return nil
 	}
-	if _, ok := m.driver.Pump.Send(mdl.SetChannel{
+	if _, ok := m.driver.Send(mdl.SetChannel{
 		Slot: mdl.ChannelInfo{
 			Index:  slot,
 			Name:   name,
@@ -367,17 +349,17 @@ func (m *model) channelNew(name string) tea.Cmd {
 	// Optimistically populate so a second /channel new doesn't race
 	// the radio's ChannelInfo broadcast and pick the same slot.
 	display := "*" + name + "*"
-	m.channels[slot] = channelItem{
-		name:    display,
-		private: true,
-		index:   slot,
-		role:    roleSecondary,
-		psk:     psk,
+	m.Channels[slot] = channelItem{
+		Name:    display,
+		Private: true,
+		Index:   slot,
+		Role:    roleSecondary,
+		PSK:     psk,
 	}
 	fp := pskFingerprint(psk)
 	m.systemBlock(
 		fmt.Sprintf("/channel new — %s created at slot %d", display, slot),
-		"psk:         32 random bytes (AES256), RAM-only — never written to disk",
+		"PSK: 32 random bytes (AES256), RAM-only — never written to disk",
 		fmt.Sprintf("fingerprint: %s   ← read aloud to verify parity with the recipient", fp),
 		fmt.Sprintf("share:       /channel share %s", name),
 	)
@@ -420,11 +402,7 @@ func randUint32() (uint32, error) {
 // is fundamentally a local-state edit. If we ever ship /channel
 // backup, we can add a "deleted N channels" undo window.
 func (m *model) channelDel(typed string) tea.Cmd {
-	if m.isDemo() {
-		m.flash = "/channel del takes effect on a real radio (demo mode)"
-		return nil
-	}
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/channel del needs a live radio connection"
 		return nil
 	}
@@ -433,28 +411,28 @@ func (m *model) channelDel(typed string) tea.Cmd {
 		m.flash = fmt.Sprintf("/channel del: no channel matching %q", typed)
 		return nil
 	}
-	if m.channels[idx].role == rolePrimary {
+	if m.Channels[idx].Role == rolePrimary {
 		m.flash = "/channel del: cannot delete the primary channel — use /config to rename"
 		return nil
 	}
-	if _, ok := m.driver.Pump.Send(mdl.DeleteChannel{Index: idx}); !ok {
+	if _, ok := m.driver.Send(mdl.DeleteChannel{Index: idx}); !ok {
 		m.flash = "/channel del dropped — outbound buffer full"
 		return nil
 	}
-	deletedName := m.channels[idx].name
+	deletedName := m.Channels[idx].Name
 	// Optimistically clear the slot — the radio's ChannelInfo
 	// rebroadcast will reconfirm, but the UI shouldn't keep showing a
 	// channel the user just deleted while waiting for that round trip.
-	m.channels[idx] = channelItem{
-		index: idx,
-		role:  roleDisabled,
+	m.Channels[idx] = channelItem{
+		Index: idx,
+		Role:  roleDisabled,
 	}
 	if m.CurrentChannel == deletedName {
 		// User deleted the channel they were on. Snap back to the
 		// primary so the input bar has a valid target.
-		for _, c := range m.channels {
-			if c.role == rolePrimary {
-				m.CurrentChannel = c.name
+		for _, c := range m.Channels {
+			if c.Role == rolePrimary {
+				m.CurrentChannel = c.Name
 				break
 			}
 		}
@@ -472,11 +450,7 @@ func (m *model) channelDel(typed string) tea.Cmd {
 // into slot 0 (PRIMARY) so a malformed share link can't nuke the
 // user's primary channel.
 func (m *model) channelAdd(rawURL string) tea.Cmd {
-	if m.isDemo() {
-		m.flash = "/channel add takes effect on a real radio (demo mode)"
-		return nil
-	}
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/channel add needs a live radio connection"
 		return nil
 	}
@@ -514,7 +488,7 @@ func (m *model) channelAdd(rawURL string) tea.Cmd {
 		// Place the imported channel into the next free slot. The model
 		// already carries Role=Secondary, ID, PSK from the share URL.
 		s.Index = slot
-		if _, ok := m.driver.Pump.Send(mdl.SetChannel{Slot: s}); !ok {
+		if _, ok := m.driver.Send(mdl.SetChannel{Slot: s}); !ok {
 			summary = append(summary, fmt.Sprintf("fail: %q — outbound buffer full", name))
 			skipped++
 			continue
@@ -527,12 +501,12 @@ func (m *model) channelAdd(rawURL string) tea.Cmd {
 		if len(s.PSK) > 0 {
 			display = "*" + name + "*"
 		}
-		m.channels[slot] = channelItem{
-			name:    display,
-			private: len(s.PSK) > 0,
-			index:   slot,
-			role:    roleSecondary,
-			psk:     s.PSK,
+		m.Channels[slot] = channelItem{
+			Name:    display,
+			Private: len(s.PSK) > 0,
+			Index:   slot,
+			Role:    roleSecondary,
+			PSK:     s.PSK,
 		}
 		summary = append(summary, fmt.Sprintf("add:  %s → slot %d", display, slot))
 		added++
@@ -568,7 +542,7 @@ func pingTimeoutCmd(packetID uint32) tea.Cmd {
 // a 6-hop round trip on a slow LongFast mesh with retries — same
 // ballpark the official Meshtastic clients use. tracerouteTimeoutCmd
 // returns a tea.Cmd that fires tracerouteTimeoutMsg after the
-// deadline; the handler short-circuits if session.PendingTraceroute already
+// deadline; the handler short-circuits if driver.PendingTraceroute already
 // resolved or got replaced by a newer /tr.
 const tracerouteTimeoutSeconds = 30
 
@@ -620,11 +594,7 @@ func (m model) configDraftDirty() bool {
 // touching the wire — same caps setOwner enforces — so a bad longname
 // rejects in-panel without the radio seeing it.
 func (m *model) commitConfigDraft() int {
-	if m.isDemo() {
-		m.flash = "/config: save needs a real radio (demo mode)"
-		return 0
-	}
-	if m.driver.Pump == nil {
+	if m.driver.PumpHandle() == nil {
 		m.flash = "/config: save needs a live radio connection"
 		return 0
 	}
@@ -646,7 +616,7 @@ func (m *model) commitConfigDraft() int {
 	// fields; firmware overwrites the whole User record, so we round-
 	// trip both even if only one changed. Same path /nick uses.
 	if m.cfgDraft.longName != m.myCallsign() || m.cfgDraft.shortName != m.myShortName() {
-		if _, ok := m.driver.Pump.Send(mdl.SetOwner{
+		if _, ok := m.driver.Send(mdl.SetOwner{
 			LongName:  m.cfgDraft.longName,
 			ShortName: m.cfgDraft.shortName,
 		}); !ok {
@@ -657,7 +627,7 @@ func (m *model) commitConfigDraft() int {
 	}
 	// Radio buzzer — separate AdminMessage path (SetModuleConfig).
 	if m.cfgDraft.buzzer != m.RadioBuzzerEnabled {
-		if _, ok := m.driver.Pump.Send(mdl.SetBuzzer{
+		if _, ok := m.driver.Send(mdl.SetBuzzer{
 			Enabled:  m.cfgDraft.buzzer,
 			Snapshot: m.RadioBuzzerSnapshot,
 		}); !ok {
@@ -669,9 +639,7 @@ func (m *model) commitConfigDraft() int {
 		if !m.cfgDraft.buzzer {
 			v = "off"
 		}
-		if m.driver.Store != nil {
-			m.storagePersist(m.driver.Store.PutSetting(m.RadioID, "radio_buzzer", v))
-		}
+		m.driver.PutSetting(m.RadioID, "radio_buzzer", v)
 		changes++
 	}
 	if changes == 0 {
@@ -715,13 +683,10 @@ func buildVersionLines(m *model) []string {
 		lines = append(lines, fmt.Sprintf("by:       %s", v.BuiltBy))
 	}
 	lines = append(lines, fmt.Sprintf("go:       %s", v.GoVersion))
-	switch {
-	case m.RadioFirmware != "":
-		lines = append(lines, fmt.Sprintf("firmware: %s", m.RadioFirmware))
-	case m.isDemo():
-		lines = append(lines, "firmware: (demo)")
-	default:
-		lines = append(lines, "firmware: (waiting on Metadata packet)")
+	if m.RadioFirmware != "" {
+		lines = append(lines, fmt.Sprintf("Firmware: %s", m.RadioFirmware))
+	} else {
+		lines = append(lines, "Firmware: (waiting on Metadata packet)")
 	}
 	return lines
 }
@@ -740,8 +705,8 @@ func plural(n int) string {
 // channel index used on the wire. Defaults to 0 (PRIMARY) when the
 // channel name isn't in our list.
 func (m model) currentChannelIndex() uint32 {
-	for i, c := range m.channels {
-		if c.name == m.CurrentChannel {
+	for i, c := range m.Channels {
+		if c.Name == m.CurrentChannel {
 			return uint32(i)
 		}
 	}
@@ -759,10 +724,10 @@ func (m *model) actOnSelectedNode(fn func(*nodeItem)) {
 	if m.selectedNd < 0 || m.selectedNd >= len(sorted) {
 		return
 	}
-	target := sorted[m.selectedNd].callsign
-	for i := range m.nodes {
-		if m.nodes[i].callsign == target {
-			fn(&m.nodes[i])
+	target := sorted[m.selectedNd].Callsign
+	for i := range m.Nodes {
+		if m.Nodes[i].Callsign == target {
+			fn(&m.Nodes[i])
 			return
 		}
 	}
@@ -804,11 +769,11 @@ func (m *model) activate() tea.Cmd {
 		// already prevents the cursor from parking here, but guard.
 		return nil
 	case paneChannels:
-		if m.selectedCh < len(m.channels) {
-			c := m.channels[m.selectedCh]
-			m.CurrentChannel = c.name
-			m.channels[m.selectedCh].unread = 0
-			m.flash = fmt.Sprintf("switched to %s", c.name)
+		if m.selectedCh < len(m.Channels) {
+			c := m.Channels[m.selectedCh]
+			m.CurrentChannel = c.Name
+			m.Channels[m.selectedCh].Unread = 0
+			m.flash = fmt.Sprintf("switched to %s", c.Name)
 			// Land on the input bar in the new channel — same as
 			// /join. Without this the user is stuck in nav mode on
 			// the (now-closed) channels overlay and has to ESC to
@@ -823,22 +788,22 @@ func (m *model) activate() tea.Cmd {
 		sorted := m.sortedNodes()
 		if m.selectedNd < len(sorted) {
 			n := sorted[m.selectedNd]
-			hw := n.hwModel
+			hw := n.HwModel
 			if hw == "" {
 				hw = "?"
 			}
-			fw := n.firmware
+			fw := n.Firmware
 			if fw == "" {
 				fw = "?"
 			}
 			m.flash = fmt.Sprintf(
 				"%s  ·  %s  ·  fw %s  ·  last heard %s  ·  %s",
-				n.callsign, hw, fw, n.currentLastHeard(), n.currentState(),
+				n.Callsign, hw, fw, nodeLastHeard(&n), n.CurrentState(),
 			)
 		}
 	case paneMessages:
-		if m.selectedMsg < len(m.messages) {
-			msg := m.messages[m.selectedMsg]
+		if m.selectedMsg < len(m.Messages) {
+			msg := m.Messages[m.selectedMsg]
 			switch {
 			case msg.Status == mdl.StatusSystem:
 				m.flash = "system message — no metadata"
@@ -898,7 +863,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "/pin: nothing pinnable in the log"
 			return nil
 		}
-		pinned := !m.messages[idx].pinned
+		pinned := !m.Messages[idx].Pinned
 		m.toggleNoticePin(idx)
 		if pinned {
 			m.flash = "notice pinned — timer paused"
@@ -906,11 +871,10 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "notice unpinned — timer resumed"
 		}
 
-	// ── Ham-radio bang shortcuts ──────────────────────────────────
-	// These are quick-command shorthands that compose and send the
-	// underlying !bang message. Geeky, fast, and keeps the protocol
-	// payload visible as normal message text so every other
-	// Meshtastic client sees it as plain chat.
+	// Ham-radio bang shortcuts — quick-command shorthands that compose
+	// and send the underlying !bang message. Keeps the protocol payload
+	// visible as normal message text so every other Meshtastic client
+	// sees it as plain chat.
 
 	case "cq":
 		// Ham-customary "via <rig/app>" suffix on the beacon so
@@ -1029,7 +993,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		n := m.lookupNode(target)
 		env, ok := m.PeerEnv[nodeNum]
 		if !ok {
-			m.systemLine(fmt.Sprintf("env: %s has no environmental telemetry on file", n.callsign))
+			m.systemLine(fmt.Sprintf("env: %s has no environmental telemetry on file", n.Callsign))
 			m.systemLine("     (only peers with temp/humidity/pressure sensors broadcast this)")
 			return nil
 		}
@@ -1047,9 +1011,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			lines = append(lines, fmt.Sprintf("gas:      %.0f Ω", env.Gas))
 		}
 		lines = append(lines, fmt.Sprintf("age:      %s ago", humanDuration(time.Since(env.At))))
-		m.systemBlock(fmt.Sprintf("env %s", n.callsign), lines...)
+		m.systemBlock(fmt.Sprintf("env %s", n.Callsign), lines...)
 
-	// ── Extra ham/Meshtastic slang ────────────────────────────────
 	case "qrz":
 		// "Who is calling me?" — broadcast a prompt for identification.
 		m.sendBang("/qrz", "QRZ? who's calling?")
@@ -1124,8 +1087,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// Meshtastic-specific — summarize what the mesh looks like
 		// from our vantage: number of nodes we can hear, by state.
 		online, muted, offline := 0, 0, 0
-		for i := range m.nodes {
-			switch m.nodes[i].currentState() {
+		for i := range m.Nodes {
+			switch m.Nodes[i].CurrentState() {
 			case stateOnline:
 				online++
 			case stateMuted:
@@ -1150,7 +1113,6 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.sendBangReply("/k "+target, "K — over, go ahead", m.replyTargetFor(target))
 		m.flash = fmt.Sprintf("!k %s — over to you", target)
 
-	// ── IRC-style operational commands ────────────────────────────
 	case "tr":
 		target := rest
 		if target == "" {
@@ -1165,27 +1127,25 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.systemLine(fmt.Sprintf("tr: node %s unknown", target))
 			return nil
 		}
-		// Fast paths first — no live wire traffic possible in demo
-		// mode or when the pump isn't up yet, so fall back to cached
-		// telemetry with a clear "no live path" tag instead of
-		// silently no-opping.
-		if m.isDemo() || m.driver.Pump == nil {
+		// No live wire traffic possible when the pump isn't up yet;
+		// fall back to cached telemetry with a clear "no live path" tag.
+		if m.driver.PumpHandle() == nil {
 			m.systemBlock(
-				fmt.Sprintf("traceroute %s", n.callsign),
-				fmt.Sprintf("hops:   %d (cached)", n.lastHops),
+				fmt.Sprintf("traceroute %s", n.Callsign),
+				fmt.Sprintf("hops:   %d (cached)", n.LastHops),
 				fmt.Sprintf("signal: %s", signalReport(n)),
 				"note:   live traceroute needs a real radio connection",
 			)
 			return nil
 		}
 		// Self-traceroute is meaningless — firmware drops it.
-		if n.nodeNum != 0 && n.nodeNum == m.MyNodeNum {
+		if n.NodeNum != 0 && n.NodeNum == m.MyNodeNum {
 			m.systemLine("tr: that's you — /info for your own config")
 			return nil
 		}
 		// One traceroute in flight at a time. Issuing a second /tr
 		// while the first hasn't resolved would orphan the old
-		// session.PendingTraceroute (the new packetID overwrites the field
+		// driver.PendingTraceroute (the new packetID overwrites the field
 		// and the original timeout tick never finds a match). Refuse
 		// loud rather than silently lose the prior request.
 		if m.PendingTraceroute != nil {
@@ -1195,24 +1155,24 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			)
 			return nil
 		}
-		pid, ok := m.driver.Pump.Send(mdl.SendTraceroute{TargetNum: n.nodeNum})
+		pid, ok := m.driver.Send(mdl.SendTraceroute{TargetNum: n.NodeNum})
 		if !ok {
 			m.flash = "tr: dropped — outbound buffer full"
 			return nil
 		}
-		m.PendingTraceroute = &session.PendingTraceroute{
+		m.PendingTraceroute = &driver.PendingTraceroute{
 			PacketID:    pid,
-			TargetNum:   n.nodeNum,
-			TargetCall:  n.callsign,
+			TargetNum:   n.NodeNum,
+			TargetCall:  n.Callsign,
 			RequestedAt: time.Now(),
 		}
 		m.flash = fmt.Sprintf(
 			"tr: tracing %s (waiting up to %ds)",
-			n.callsign, tracerouteTimeoutSeconds,
+			n.Callsign, tracerouteTimeoutSeconds,
 		)
 		m.systemLine(fmt.Sprintf(
 			"traceroute %s — request sent (id 0x%x), awaiting reply",
-			n.callsign, pid,
+			n.Callsign, pid,
 		))
 		return tracerouteTimeoutCmd(pid)
 	case "ping":
@@ -1233,29 +1193,28 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// won't echo a packet back to its own node). Refuse with a
 		// note rather than emitting a request that will silently
 		// timeout.
-		if n.nodeNum != 0 && n.nodeNum == m.MyNodeNum {
+		if n.NodeNum != 0 && n.NodeNum == m.MyNodeNum {
 			m.systemLine("ping: that's you — /whois for your own config")
 			return nil
 		}
-		// Demo / offline fall back to cached telemetry — same shape
-		// /tr uses. Tag the result so the user knows the radio
-		// wasn't actually queried.
-		if m.isDemo() || m.driver.Pump == nil {
+		// Offline fall back to cached telemetry.
+		if m.driver.PumpHandle() == nil {
 			lines := []string{
-				fmt.Sprintf("last heard: %s ago (cached)", n.currentLastHeard()),
+				fmt.Sprintf("last heard: %s ago (cached)", nodeLastHeard(n)),
 				fmt.Sprintf("signal:     %s", signalReport(n)),
 				"note:       live ping needs a real radio connection",
 			}
 			if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
 				if pos, ok := m.PeerPositions[nodeNum]; ok && m.MyGrid != "" {
 					if km := haversineKm(m.MyLatitude, m.MyLongitude, pos.Latitude, pos.Longitude); km > 0 {
-						lines = append(lines,
+						lines = append(
+							lines,
 							fmt.Sprintf("distance:   %.1f km", km),
 						)
 					}
 				}
 			}
-			m.systemBlock(fmt.Sprintf("ping %s", n.callsign), lines...)
+			m.systemBlock(fmt.Sprintf("ping %s", n.Callsign), lines...)
 			return nil
 		}
 		// One ping in flight at a time. Same shape as pendingTraceroute.
@@ -1266,24 +1225,24 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			)
 			return nil
 		}
-		pid, ok := m.driver.Pump.Send(mdl.SendPing{TargetNum: n.nodeNum})
+		pid, ok := m.driver.Send(mdl.SendPing{TargetNum: n.NodeNum})
 		if !ok {
 			m.flash = "ping: dropped — outbound buffer full"
 			return nil
 		}
-		m.PendingPing = &session.PendingPing{
+		m.PendingPing = &driver.PendingPing{
 			PacketID:    pid,
-			TargetNum:   n.nodeNum,
-			TargetCall:  n.callsign,
+			TargetNum:   n.NodeNum,
+			TargetCall:  n.Callsign,
 			RequestedAt: time.Now(),
 		}
 		m.flash = fmt.Sprintf(
 			"ping: pinging %s (waiting up to %ds)",
-			n.callsign, pingTimeoutSeconds,
+			n.Callsign, pingTimeoutSeconds,
 		)
 		m.systemLine(fmt.Sprintf(
 			"ping %s — request sent (id 0x%x), awaiting echo",
-			n.callsign, pid,
+			n.Callsign, pid,
 		))
 		return pingTimeoutCmd(pid)
 	case "w", "whois":
@@ -1300,18 +1259,16 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.systemLine(fmt.Sprintf("whois: no record of %s", target))
 			return nil
 		}
-		hw := n.hwModel
+		hw := n.HwModel
 		if hw == "" {
 			hw = "unknown hw"
 		}
-		fw := n.firmware
+		fw := n.Firmware
 		nodeNum := m.nodeNumOf(target)
 		isSelf := nodeNum != 0 && nodeNum == m.MyNodeNum
 		// For our own node, fw lives on m.RadioFirmware (from
 		// FromRadio.Metadata), not on the nodeItem — MyNodeInfo
-		// doesn't carry firmware. Same story for battery /
-		// channel-util telemetry, which arrives via DeviceMetrics
-		// and is stored on the model root for self only.
+		// doesn't carry firmware.
 		if isSelf && fw == "" {
 			fw = m.RadioFirmware
 		}
@@ -1319,32 +1276,20 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			fw = "?"
 		}
 
-		// Ghost peer — we have their node num from text packets but
-		// have never received their NodeInfo, so the longname is just
-		// the placeholder hex form and hw / fw / position are all
-		// unknown. Surface that up front rather than pretending a
-		// partial whois is a whole one. Detection now goes through
-		// the live unresolved flag (since the callsign string for a
-		// ghost is the same "node 0x..." form a fully resolved peer
-		// could also legitimately have).
-		ghost := n.unresolved
+		ghost := n.Unresolved
 
 		var lines []string
-		// Identity block — long, short, hex — at the top of every
-		// whois so the user can correlate however the peer was
-		// referred to in chat. For resolved peers the long name is
-		// whatever they advertised; for ghosts it's the hex placeholder
-		// (we deliberately don't synthesize "Meshtastic <hex>").
-		lines = append(lines, fmt.Sprintf("name:   %s", n.callsign))
-		if n.shortName != "" {
-			lines = append(lines, fmt.Sprintf("short:  %s", n.shortName))
+		lines = append(lines, fmt.Sprintf("Name: %s", n.Callsign))
+		if n.ShortName != "" {
+			lines = append(lines, fmt.Sprintf("short:  %s", n.ShortName))
 		}
 		if nodeNum != 0 {
 			lines = append(lines, fmt.Sprintf("id:     0x%x", nodeNum))
 		}
 		lines = append(lines, "")
 		if ghost {
-			lines = append(lines,
+			lines = append(
+				lines,
 				"👻 no NodeInfo received for this peer",
 				"  we've heard text packets from them but never their",
 				"  User broadcast, so longname / hw / fw / position are",
@@ -1353,17 +1298,15 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 				"",
 			)
 		}
-		lines = append(lines,
+		lines = append(
+			lines,
 			fmt.Sprintf("hw:     %s", hw),
 			fmt.Sprintf("fw:     %s", fw),
-			fmt.Sprintf("heard:  %s ago", n.currentLastHeard()),
-			fmt.Sprintf("state:  %s", n.currentState()),
+			fmt.Sprintf("heard:  %s ago", nodeLastHeard(n)),
+			fmt.Sprintf("State: %s", n.CurrentState()),
 			fmt.Sprintf("signal: %s", signalReport(n)),
 			fmt.Sprintf("hops:   %s", whoisHops(n, isSelf)),
 		)
-		// Battery + channel-util are only tracked model-wide for
-		// self today. For peers we'd need a per-peer DeviceMetrics
-		// cache (TODO). Surface what we have.
 		if isSelf && m.HasTelemetry {
 			pct := "—"
 			switch {
@@ -1392,8 +1335,6 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 					),
 					fmt.Sprintf("fix age: %s ago", humanDuration(time.Since(pos.At))),
 				)
-				// Distance from us if we also have a fix — same
-				// great-circle helper /ping uses.
 				if !isSelf && m.MyLatitude != 0 && m.MyLongitude != 0 {
 					if km := haversineKm(m.MyLatitude, m.MyLongitude, pos.Latitude, pos.Longitude); km > 0 {
 						lines = append(lines, fmt.Sprintf("dist:   %.1f km from you", km))
@@ -1402,7 +1343,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			}
 		}
 		lines = append(lines, "end of /whois")
-		m.systemBlock(fmt.Sprintf("whois %s", n.callsign), lines...)
+		m.systemBlock(fmt.Sprintf("whois %s", n.Callsign), lines...)
 	case "r", "reply":
 		if rest == "" {
 			target := m.selectedSender()
@@ -1475,8 +1416,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			return nil
 		}
 		// Join by matching name; if not found, flash.
-		for i, c := range m.channels {
-			if c.name == rest || strings.TrimPrefix(c.name, "#") == rest {
+		for i, c := range m.Channels {
+			if c.Name == rest || strings.TrimPrefix(c.Name, "#") == rest {
 				m.switchChannelByIndex(i)
 				return nil
 			}
@@ -1604,7 +1545,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// /dingtest, the cause is your terminal's audible + visual
 		// bell preferences (Terminal.app / iTerm Profile → Audible
 		// Bell + Visual Bell) — not a meshX bug.
-		m.systemBlock("/dingtest",
+		m.systemBlock(
+			"/dingtest",
 			"emit:    BEL queued via tea.Cmd",
 			"hint:    if no audible/visual bell, check",
 			"         Terminal/iTerm Profile → Audible Bell + Visual Bell.",
@@ -1639,7 +1581,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		qrLines := strings.Split(qr, "\n")
 		lines := make([]string, 0, len(qrLines)+4)
-		lines = append(lines,
+		lines = append(
+			lines,
 			fmt.Sprintf("payload: %s", payload),
 			fmt.Sprintf("size:    %d bytes", len(payload)),
 			"note:    scans to plain text — does NOT add a channel",
@@ -1663,9 +1606,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// ding_muted is a meshx-CLIENT preference (terminal beep), not
 		// a per-radio knob — pass "" for radioID so it lives once
 		// globally rather than once per radio in the settings table.
-		if m.driver.Store != nil {
-			m.storagePersist(m.driver.Store.PutSetting("", "ding_muted", v))
-		}
+		m.driver.PutSetting("", "ding_muted", v)
 		if m.DingMuted {
 			m.flash = "/mute on — terminal ding silenced"
 			m.systemLine("ding muted — terminal won't beep on incoming text")
@@ -1715,9 +1656,9 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		if m.Ignored == nil {
 			m.Ignored = make(map[string]bool)
 		}
-		m.Ignored[strings.ToLower(n.callsign)] = true
-		m.flash = fmt.Sprintf("ignoring %s — messages hidden until /unignore", n.callsign)
-		m.systemLine(fmt.Sprintf("ignore: %s — chat messages will be hidden", n.callsign))
+		m.Ignored[strings.ToLower(n.Callsign)] = true
+		m.flash = fmt.Sprintf("ignoring %s — messages hidden until /unignore", n.Callsign)
+		m.systemLine(fmt.Sprintf("ignore: %s — chat messages will be hidden", n.Callsign))
 	case "unignore":
 		target := rest
 		if target == "" {
@@ -1740,29 +1681,21 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = fmt.Sprintf("unignore: no node matches %s", target)
 			return nil
 		}
-		key := strings.ToLower(n.callsign)
+		key := strings.ToLower(n.Callsign)
 		if !m.Ignored[key] {
-			m.flash = fmt.Sprintf("unignore: %s wasn't on the list", n.callsign)
+			m.flash = fmt.Sprintf("unignore: %s wasn't on the list", n.Callsign)
 			return nil
 		}
 		delete(m.Ignored, key)
-		m.flash = fmt.Sprintf("unignoring %s — messages will show again", n.callsign)
-		m.systemLine(fmt.Sprintf("unignore: %s — chat messages restored", n.callsign))
+		m.flash = fmt.Sprintf("unignoring %s — messages will show again", n.Callsign)
+		m.systemLine(fmt.Sprintf("unignore: %s — chat messages restored", n.Callsign))
 	case "reboot":
-		// Sends AdminMessage_RebootSeconds(5) to our own radio. Some
-		// firmware needs a reboot for module-config writes to take
-		// effect; also a top-level "my radio is wedged" recovery.
-		// 5 seconds gives the radio time to flush queued ACKs +
-		// persist NodeDB before the restart.
-		if m.isDemo() {
-			m.flash = "/reboot: needs a real radio (demo mode)"
-			return nil
-		}
-		if m.driver.Pump == nil {
+		// Sends AdminMessage_RebootSeconds(5) to our own radio.
+		if m.driver.PumpHandle() == nil {
 			m.flash = "/reboot: needs a live radio connection"
 			return nil
 		}
-		if _, ok := m.driver.Pump.Send(mdl.Reboot{Seconds: 5}); !ok {
+		if _, ok := m.driver.Send(mdl.Reboot{Seconds: 5}); !ok {
 			m.flash = "/reboot: dropped — outbound buffer full"
 			return nil
 		}
@@ -1783,11 +1716,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			),
 		}
 		if n := m.myNode(); n != nil {
-			lines = append(lines, fmt.Sprintf("hw:       %s  fw=%s", n.hwModel, m.RadioFirmware))
+			lines = append(lines, fmt.Sprintf("hw:       %s  fw=%s", n.HwModel, m.RadioFirmware))
 		}
 		var resolved, ghosts int
-		for _, n := range m.nodes {
-			if strings.HasPrefix(n.callsign, "node 0x") {
+		for _, n := range m.Nodes {
+			if strings.HasPrefix(n.Callsign, "node 0x") {
 				ghosts++
 			} else {
 				resolved++
@@ -1797,11 +1730,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			lines,
 			fmt.Sprintf(
 				"peers:    %d total  (%d named, %d placeholder)",
-				len(m.nodes),
+				len(m.Nodes),
 				resolved,
 				ghosts,
 			),
-			fmt.Sprintf("channels: %d", len(m.channels)),
+			fmt.Sprintf("channels: %d", len(m.Channels)),
 			fmt.Sprintf("connected: %t  handshake_complete=%t", m.Connected, m.Connected),
 		)
 		if m.RadioRegion != "" {
@@ -1816,9 +1749,9 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			}
 			lines = append(lines, header)
 			n := 0
-			for _, node := range m.nodes {
-				if strings.HasPrefix(node.callsign, "node 0x") {
-					lines = append(lines, "  "+node.callsign)
+			for _, node := range m.Nodes {
+				if strings.HasPrefix(node.Callsign, "node 0x") {
+					lines = append(lines, "  "+node.Callsign)
 					n++
 					if n >= maxList {
 						break
@@ -1834,19 +1767,19 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// cache is stale, or after the radio just resolved a peer
 		// you want surfaced without waiting for the next organic
 		// NODEINFO_APP broadcast.
-		if m.driver.Pump == nil {
+		if m.driver.PumpHandle() == nil {
 			m.flash = "/sync needs a live radio connection (demo mode)"
 			return nil
 		}
-		if _, ok := m.driver.Pump.Send(mdl.RequestSync{}); !ok {
+		if _, ok := m.driver.Send(mdl.RequestSync{}); !ok {
 			m.flash = "/sync dropped — outbound buffer full"
 			return nil
 		}
 		// Snapshot current ghost count so we can report the delta
 		// when the matching ConfigComplete lands.
 		ghosts := 0
-		for _, n := range m.nodes {
-			if strings.HasPrefix(n.callsign, "node 0x") {
+		for _, n := range m.Nodes {
+			if strings.HasPrefix(n.Callsign, "node 0x") {
 				ghosts++
 			}
 		}
@@ -1858,7 +1791,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		} else {
 			m.SyncPendingGhosts = ghosts
 		}
-		m.systemBlock("sync",
+		m.systemBlock(
+			"sync",
 			"requested NodeDB re-dump",
 			fmt.Sprintf("baseline: %d unresolved peers", ghosts),
 			"watching for incoming NodeInfo — any placeholder that resolves",
@@ -1897,7 +1831,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		//                          insensitive lookup, same loose
 		//                          match /whois uses.
 		// Closes any overlay, lands in nav mode on the located row.
-		if len(m.messages) == 0 {
+		if len(m.Messages) == 0 {
 			m.flash = "/lastlog: log is empty"
 			return nil
 		}
@@ -1906,16 +1840,16 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.input.Blur()
 		idx := -1
 		if rest == "" {
-			idx = len(m.messages) - 1
+			idx = len(m.Messages) - 1
 		} else {
 			needle := strings.ToLower(strings.TrimSpace(rest))
 			// First pass: prefer matches in the from column — that's
 			// what "the last message FROM gleep" means semantically.
-			for i := len(m.messages) - 1; i >= 0; i-- {
-				if m.messages[i].Status == mdl.StatusSystem {
+			for i := len(m.Messages) - 1; i >= 0; i-- {
+				if m.Messages[i].Status == mdl.StatusSystem {
 					continue
 				}
-				if strings.Contains(strings.ToLower(m.messages[i].From), needle) {
+				if strings.Contains(strings.ToLower(m.Messages[i].From), needle) {
 					idx = i
 					break
 				}
@@ -1923,11 +1857,11 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			// Second pass: body match if no sender hit. Lets users
 			// /lastlog "morning" find the last message containing it.
 			if idx < 0 {
-				for i := len(m.messages) - 1; i >= 0; i-- {
-					if m.messages[i].Status == mdl.StatusSystem {
+				for i := len(m.Messages) - 1; i >= 0; i-- {
+					if m.Messages[i].Status == mdl.StatusSystem {
 						continue
 					}
-					if strings.Contains(strings.ToLower(m.messages[i].Text), needle) {
+					if strings.Contains(strings.ToLower(m.Messages[i].Text), needle) {
 						idx = i
 						break
 					}
@@ -1941,7 +1875,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		m.selectedMsg = idx
 		m.mode = modeNav
-		hit := m.messages[idx]
+		hit := m.Messages[idx]
 		m.flash = fmt.Sprintf("lastlog: %s — %s", hit.Time, hit.From)
 	case "search":
 		if rest == "" {
@@ -1979,7 +1913,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.searchQuery = ""
 		}
 	case "clear":
-		m.messages = nil
+		m.Messages = nil
 		m.selectedMsg = 0
 		m.flash = "scrollback cleared"
 
@@ -2008,39 +1942,23 @@ func (m *model) sendBang(bang, body string) {
 // the same replyID so the renderer can draw a quoted-parent line
 // above the reply.
 func (m *model) sendBangReply(bang, body string, replyToID uint32) {
-	status := mdl.StatusAck
-	var pid uint32
-	if !m.isDemo() {
-		status = mdl.StatusPending // flipped by mdl.Routing handler
-	}
-	if m.driver.Pump != nil {
-		pid, _ = m.driver.Pump.Send(mdl.SendText{
-			Channel: int(m.currentChannelIndex()),
-			Text:    body,
-			ReplyID: replyToID,
-		})
-	}
-	item := messageItem{Message: mdl.Message{
-		Time:     timeNowHHMM(),
-		From:     "me",
-		Mine:     true,
-		Bang:     bang,
+	channel := int(m.currentChannelIndex())
+	pid, _ := m.driver.Send(mdl.SendText{
+		Channel: channel,
+		Text:    body,
+		ReplyID: replyToID,
+	})
+	res := m.driver.RecordOutbound(driver.RecordOutboundOptions{
+		Channel:  channel,
 		Text:     body,
-		Status:   status,
+		Bang:     bang,
 		ReplyID:  replyToID,
 		PacketID: pid,
-		FromNum:  m.MyNodeNum,
-		SentAt:   time.Now(),
-	}}
-	m.messages = append(m.messages, item)
-	m.selectedMsg = len(m.messages) - 1
-	m.focused = paneMessages
-
-	// Persist the outgoing so the log survives restart. Skipped in
-	// demo mode (m.db is always nil there).
-	if m.driver.Store != nil {
-		m.storagePersist(m.driver.Store.SaveMessage(m.RadioID, m.CurrentChannel, item.Message))
+	})
+	if res.Index >= 0 {
+		m.selectedMsg = res.Index
 	}
+	m.focused = paneMessages
 }
 
 // replyTargetFor returns the packetID of the most recent message
@@ -2053,8 +1971,8 @@ func (m *model) replyTargetFor(call string) uint32 {
 		return 0
 	}
 	target := strings.ToLower(strings.TrimSpace(call))
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		msg := m.messages[i]
+	for i := len(m.Messages) - 1; i >= 0; i-- {
+		msg := m.Messages[i]
 		if msg.Mine || msg.Status == mdl.StatusSystem || msg.PacketID == 0 {
 			continue
 		}

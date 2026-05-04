@@ -109,25 +109,23 @@ func tabCompletionFlashCell(matches []matchItem, active int) string {
 }
 
 // splashTaglineCell renders the BitchX-style tagline that hangs
-// under the splash banner: `░▒▓█▓▒░ Meshtastic messenger  ·  as
-// <callsign> ░▒▓█▓▒░` — or just `░▒▓█▓▒░ Meshtastic messenger
-// ░▒▓█▓▒░` when callsign is empty (fresh boot, no cached self).
+// under the splash banner:
+// `░▒▓█▓▒░ Meshtastic messenger  ·  by retr0h ░▒▓█▓▒░`.
 // Sparks bracket the brand in mesh-green, product name in cyan,
-// connector in dim drained, callsign in magenta.
-func splashTaglineCell(callsign string) string {
+// connector in dim drained, author credit in magenta. The callsign
+// argument is unused today (kept on the signature so call sites
+// don't churn) — the running-as info already lives in the top
+// status bar and doesn't need to duplicate here.
+func splashTaglineCell(_ string) string {
 	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
 	magenta := lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta))
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	spark := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(meshGreen)).
 		Render("░▒▓█▓▒░")
-	if callsign == "" {
-		return spark + " " + cyan.Render("Meshtastic") +
-			dim.Render(" messenger") + " " + spark
-	}
 	return spark + " " +
-		cyan.Render("Meshtastic") + dim.Render(" messenger  ·  as ") +
-		magenta.Render(callsign) + " " + spark
+		cyan.Render("Meshtastic") + dim.Render(" messenger  ·  by ") +
+		magenta.Render("retr0h") + " " + spark
 }
 
 // gutterWidth is the left margin reserved for the selection
@@ -306,7 +304,7 @@ type nodePresentation struct {
 // renders a peer cell stays in lockstep — same sigil for "online"
 // everywhere, no drift across overlays.
 func nodePresentationFor(n nodeItem, isSelf, isSelected bool) nodePresentation {
-	state := n.currentState()
+	state := n.CurrentState()
 	p := nodePresentation{
 		Sigil:        " ",
 		SigilColor:   mhDrained,
@@ -330,7 +328,7 @@ func nodePresentationFor(n nodeItem, isSelf, isSelected bool) nodePresentation {
 		p.SigilColor = mhDrained
 		p.NameColor = mhDrained
 	}
-	if n.fav {
+	if n.Fav {
 		p.Sigil = "+"
 		p.SigilColor = mhYellow
 		p.NameColor = mhYellow
@@ -367,16 +365,16 @@ func peerRowLine(
 ) string {
 	pres := nodePresentationFor(n, isSelf, isSelected)
 	bg := lipgloss.NewStyle().Background(lipgloss.Color(rowBg))
-	state := n.currentState()
+	state := n.CurrentState()
 	sigil := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(pres.SigilColor)).
 		Background(lipgloss.Color(rowBg)).
-		Bold(state == stateOnline || n.fav || isSelf).
+		Bold(state == stateOnline || n.Fav || isSelf).
 		Render(pres.Sigil)
 	name := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(pres.NameColor)).
 		Background(lipgloss.Color(rowBg)).
-		Render(padOrTruncate(n.callsign, 22))
+		Render(padOrTruncate(n.Callsign, 22))
 	dim := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
 		Background(lipgloss.Color(rowBg))
@@ -527,9 +525,9 @@ func userCellLine(n nodeItem, isSelf, isSelected bool, cellW int) string {
 	if pres.Bold {
 		nameStyle = nameStyle.Bold(true)
 	}
-	display := n.callsign
-	if n.shortName != "" {
-		display = n.shortName + " " + n.callsign
+	display := n.Callsign
+	if n.ShortName != "" {
+		display = n.ShortName + " " + n.Callsign
 	}
 	cells := []Cell{
 		{Content: bracket.Render("["), Width: 1},

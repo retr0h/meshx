@@ -20,19 +20,21 @@
 
 package cmd
 
-import (
-	"fmt"
-	"time"
+import "github.com/spf13/cobra"
 
-	"github.com/retr0h/meshx/internal/meshx/transport"
-	"github.com/retr0h/meshx/internal/tui"
-	"github.com/spf13/cobra"
-)
-
-// usbCmd is the parent for every USB-serial operation: scanning,
-// identifying, and opening a TUI session against a specific device.
-// Mirrors `ble` and `tcp` so the CLI tree reads consistently —
-// transport family at the top, verb underneath.
+// usbCmd is the parent for every USB-serial one-shot operation:
+// scanning, identifying, and opening a TUI session against a
+// specific device. Mirrors `ble` so the CLI tree reads consistently.
+//
+// These subcommands are CLI-local — they directly enumerate and
+// probe USB-serial ports through cliUSBScanner. No daemon is
+// required, no HTTP is involved. The daemon's /transports/usb/*
+// routes exist for remote admin (a future web UI inspecting USB
+// state on a headless box).
+//
+// Each subcommand lives in its own usb_<verb>.go file; this file is
+// just the parent + the init wiring. usb_probe.go is the diagnostic
+// deep-dump tool sibling.
 var usbCmd = &cobra.Command{
 	Use:   "usb",
 	Short: "USB-serial Meshtastic transport",
@@ -41,39 +43,9 @@ Meshtastic radios over a USB-serial cable (the default transport
 for a desk-mounted or data-cable-tethered radio).`,
 }
 
-// usbConnectCmd opens the TUI against a specific serial device.
-// No arg = auto-detect (same heuristic bare `meshx` uses), one arg
-// = explicit device path.
-var usbConnectCmd = &cobra.Command{
-	Use:   "connect [device]",
-	Short: "Open the TUI over USB serial",
-	Long: `Connect to a Meshtastic radio over USB serial and open the TUI.
-
-  meshx usb connect                    # auto-detect the only radio on USB
-  meshx usb connect /dev/cu.usbserial… # explicit device path (macOS)
-  meshx usb connect /dev/ttyUSB0       # explicit device path (Linux)`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: func(_ *cobra.Command, args []string) error {
-		dest := ""
-		if len(args) == 1 {
-			dest = args[0]
-		}
-		if dest == "" {
-			auto, err := transport.AutoDetectMeshtastic(1500 * time.Millisecond)
-			if err != nil {
-				return fmt.Errorf(
-					"usb auto-detect: %w — try `meshx usb probe` to see candidates",
-					err,
-				)
-			}
-			dest = auto
-		}
-		return tui.RunRadio(dest)
-	},
-}
-
 func init() {
+	usbCmd.AddCommand(usbScanCmd)
 	usbCmd.AddCommand(usbConnectCmd)
-	usbCmd.AddCommand(probeCmd) // moved from the top level — see probe.go
+	usbCmd.AddCommand(probeCmd)
 	rootCmd.AddCommand(usbCmd)
 }

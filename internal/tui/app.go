@@ -33,6 +33,7 @@ import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
 	"github.com/retr0h/meshx/internal/meshx/storage"
+	"github.com/retr0h/meshx/internal/sdk"
 )
 
 // model uses the canonical item types from model/. Local aliases
@@ -299,6 +300,13 @@ type model struct {
 	// the session runs in-memory.
 	driver radioDriver
 
+	// remoteMode is true when the model is talking to a remote daemon
+	// over HTTP+SSE rather than owning the radio in-process. Init()
+	// branches on this — local mode fires openPumpMsg to spawn the
+	// transport pump; remote mode skips it because the daemon owns
+	// the pump and feeds events back via SSE.
+	remoteMode bool
+
 	// initialFocusCmd captures the tea.Cmd returned by
 	// textinput.Focus() in newModel — the bubbles cursor blink
 	// chain is driven by a cmd-per-tick loop, and the FIRST cmd
@@ -394,6 +402,70 @@ func RunRadio(dest string) error {
 
 	_, err := program.Run()
 	return err
+}
+
+// RunRadioRemote launches the TUI against a remote daemon. The daemon
+// owns the radio (pump, storage, persistence); the TUI consumes its
+// HTTP+SSE API. State is seeded from /radios/{id} + /channels +
+// /nodes + /messages, then the SSE stream injects mdl.X events into
+// the model's Update loop where the existing apply* handlers run.
+//
+// No Pump.Send happens client-side — outbound mdl.SendText goes
+// through Remote.Send which POSTs to /radios/{id}/messages. No store
+// either — StoreHandle returns nil and the apply* handlers' nil-check
+// pattern (already present for demo mode) becomes a no-op.
+func RunRadioRemote(serverURL, radioID string) error {
+	r, err := sdk.NewRemote(serverURL, radioID)
+	if err != nil {
+		return err
+	}
+	defer r.Stop()
+
+	m := newRemoteModel(r)
+	slot := &programSlot{}
+	m.programSlot = slot
+	program := tea.NewProgram(m, tea.WithAltScreen())
+	slot.p = program
+	defer func() { slot.p = nil }()
+
+	// Wire SSE into the running tea program. program.Send is the
+	// thread-safe way to inject messages from a goroutine into the
+	// model's Update loop. tea.Program.Send takes a tea.Msg (which is
+	// any), so the func(any) shape on Remote stays bubbletea-free.
+	r.Start(func(msg any) { program.Send(msg) })
+
+	_, err = program.Run()
+	return err
+}
+
+// newRemoteModel builds the model for remote-client mode. Mirrors
+// newModel's textinput + splash setup but skips storage open / replay
+// / NodeDB hydration (the daemon owns persistence; State arrives
+// pre-populated via Remote.seed).
+func newRemoteModel(r *sdk.Remote) model {
+	in := textinput.New()
+	in.Prompt = ""
+	in.CharLimit = 0
+	in.Placeholder = "type a message, or /help for commands"
+	in.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(mhFG))
+	in.Cursor.Style = lipgloss.NewStyle().
+		Background(lipgloss.Color(mhPink)).
+		Foreground(lipgloss.Color(mhCyan)).
+		Bold(true)
+	focusCmd := in.Focus()
+
+	return model{
+		State:           r.Session(),
+		driver:          r,
+		remoteMode:      true,
+		mode:            modeInput,
+		focused:         paneMessages,
+		splash:          pickSplash(),
+		input:           in,
+		searchInput:     func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
+		cfgEditInput:    func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 36; return s }(),
+		initialFocusCmd: focusCmd,
+	}
 }
 
 // programSlot is a hand-off type that lets the model surface the
@@ -731,8 +803,10 @@ func (m model) Init() tea.Cmd {
 	// program. Deferring to Init (rather than RunRadio) guarantees
 	// tea's main loop is up before the pump's first p.Send() — no
 	// deadlock. The tea.Cmd returns an openPumpMsg which we handle
-	// in Update by doing the actual Dial+spawn.
-	if m.ConnectDest != "" {
+	// in Update by doing the actual Dial+spawn. Skipped in remote
+	// mode — the daemon owns the pump there, we receive events over
+	// SSE instead.
+	if !m.remoteMode && m.ConnectDest != "" {
 		cmds = append(cmds, func() tea.Msg {
 			return openPumpMsg{dest: m.ConnectDest}
 		})

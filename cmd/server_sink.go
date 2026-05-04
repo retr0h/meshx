@@ -99,8 +99,20 @@ func (s *daemonSink) Send(msg any) {
 			ReadyAt: time.Now().Add(ev.After),
 			Err:     ev.Err,
 		}
+		errStr := ""
+		if ev.Err != nil {
+			errStr = ev.Err.Error()
+		}
+		s.log.Warn("transport reconnecting",
+			slog.Int("attempt", ev.Attempt),
+			slog.Duration("retry_in", ev.After),
+			slog.String("error", errStr),
+		)
 	case mdl.Disconnected:
 		s.drv.State.Connected = false
+		s.log.Info("transport disconnected")
+	case mdl.TransportError:
+		s.log.Error("transport error", slog.Any("error", ev.Err))
 	default:
 		// Other event variants (Traceroute, Ping, ModuleBuzzer, …)
 		// are TUI-initiated correlations — daemon ignores them for

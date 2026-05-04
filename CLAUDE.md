@@ -179,6 +179,18 @@ only by the `cmd/` tree.
 - `lmittmann/tint` — colored slog handler for the global logger
 - `spf13/viper` — config + env var binding
 
+## Deployment modes
+
+Three modes from one binary:
+
+1. **Local** (default) — `meshx ble connect <name>` runs radio + TUI in one process.
+2. **Headless** — `meshx server start` owns the radio over HTTP+SSE; no TUI.
+3. **Remote** (planned) — `meshx ble connect --server http://host:4404 <id>` runs TUI against a remote daemon.
+
+The seam is `internal/tui/driver.go::radioDriver`. `*driver.Driver` satisfies it locally; `*sdk.RemoteDriver` (planned) satisfies it over HTTP+SSE by projecting events onto a local `*driver.State` via the same apply path. The TUI doesn't know which it's holding.
+
+Remote mode has two independent reconnect loops: radio↔daemon (pump backoff 1s→30s) and TUI↔daemon (SSE client re-fetches snapshot + re-subscribes on network blips). Kill the TUI for 20 minutes — daemon keeps retrying the radio and persisting traffic; relaunching reflects the full gap.
+
 ## Daemon, logging, config
 
 Bare `meshx` does **not** auto-connect — it prints help. Pick a transport

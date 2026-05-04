@@ -224,6 +224,26 @@ package-level vars to fake the host. The transport adapters
 which means **`meshx ble scan`, `meshx usb scan`, etc. don't need a daemon to be
 running** — they're direct OS interrogations.
 
+## Deployment modes
+
+Three modes share one binary:
+
+1. **Local** — `meshx ble connect <name>` / `meshx usb connect` runs radio + TUI
+   in one process.
+2. **Headless** — `meshx server start` owns the radio behind HTTP+SSE; no TUI.
+3. **Remote** (planned) — `meshx ble connect --server http://host:4404 <id>`
+   runs the TUI against a remote daemon.
+
+The dual-mode seam is `internal/tui/driver.go::radioDriver`. `*driver.Driver`
+satisfies it for local mode; `*sdk.RemoteDriver` (planned) satisfies it over
+HTTP+SSE — it holds a `*gen.Client` for outbound calls and consumes
+`/radios/{id}/events` to project events onto a local `*driver.State`. The TUI's
+Update path doesn't branch on mode.
+
+Remote mode has two independent reconnect loops: radio↔daemon (pump backoff on
+the daemon side) and TUI↔daemon (SSE re-subscribe + snapshot re-fetch on
+network blips). The daemon keeps the radio session alive across TUI restarts.
+
 ## Daemon, logging, config
 
 `meshx server start` runs the HTTP+SSE daemon. Default bind is `127.0.0.1:4404`

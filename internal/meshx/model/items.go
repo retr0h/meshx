@@ -43,7 +43,7 @@ type ChannelItem struct {
 type NodeItem struct {
 	Callsign    string    `json:"callsign"      doc:"long-form callsign as set on the radio"`
 	ShortName   string    `json:"short_name"    doc:"4-char badge"`
-	NodeNum     uint32    `json:"node_num"      doc:"radio identity, derived from MAC"`
+	NodeNum     uint32    `json:"node_num"      doc:"radio identity, derived from MAC"           format:"int64" minimum:"0"`
 	Unresolved  bool      `json:"unresolved"    doc:"identity is a synthesized placeholder; no NodeInfo yet"`
 	State       NodeState `json:"state"         doc:"online | offline | failed | muted | (empty for unknown)"`
 	Fav         bool      `json:"fav"           doc:"user marked this peer with *"`

@@ -128,6 +128,73 @@ components:
         - role
         - has_psk
       type: object
+    ConfigComplete:
+      additionalProperties: false
+      type: object
+    DeviceConfig:
+      additionalProperties: false
+      properties:
+        Role:
+          type: string
+      required:
+        - Role
+      type: object
+    DeviceMetrics:
+      additionalProperties: false
+      properties:
+        AirUtilTx:
+          format: float
+          type: number
+        BatteryLevel:
+          format: int64
+          minimum: 0
+          type: integer
+        ChannelUtil:
+          format: float
+          type: number
+        FromNodeNum:
+          format: int64
+          minimum: 0
+          type: integer
+        Voltage:
+          format: float
+          type: number
+      required:
+        - FromNodeNum
+        - BatteryLevel
+        - Voltage
+        - ChannelUtil
+        - AirUtilTx
+      type: object
+    Disconnected:
+      additionalProperties: false
+      type: object
+    EnvMetrics:
+      additionalProperties: false
+      properties:
+        FromNodeNum:
+          format: int64
+          minimum: 0
+          type: integer
+        Gas:
+          format: float
+          type: number
+        Humidity:
+          format: float
+          type: number
+        Pressure:
+          format: float
+          type: number
+        Temperature:
+          format: float
+          type: number
+      required:
+        - FromNodeNum
+        - Temperature
+        - Humidity
+        - Pressure
+        - Gas
+      type: object
     ErrorDetail:
       additionalProperties: false
       properties:
@@ -280,6 +347,21 @@ components:
       required:
         - radios
       type: object
+    LoraConfig:
+      additionalProperties: false
+      properties:
+        ModemPreset:
+          type: string
+        Region:
+          type: string
+        TxPowerDBm:
+          format: int32
+          type: integer
+      required:
+        - TxPowerDBm
+        - Region
+        - ModemPreset
+      type: object
     Message:
       additionalProperties: false
       properties:
@@ -294,7 +376,7 @@ components:
           type: string
         from_num:
           description: sender node num
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         hops:
@@ -306,12 +388,12 @@ components:
           type: boolean
         packet_id:
           description: MeshPacket.id; 0 for system / demo rows
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         reply_id:
           description: PacketID this message answers
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         sent_at:
@@ -332,7 +414,7 @@ components:
           type: string
         to_num:
           description: addressee node num; 0xFFFFFFFF = broadcast
-          format: int32
+          format: int64
           minimum: 0
           type: integer
       required:
@@ -368,7 +450,7 @@ components:
           type: string
         from_num:
           description: sender node num
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         group:
@@ -385,7 +467,7 @@ components:
           type: boolean
         packet_id:
           description: MeshPacket.id; 0 for system / demo rows
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         pinned:
@@ -393,7 +475,7 @@ components:
           type: boolean
         reply_id:
           description: PacketID this message answers
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         sent_at:
@@ -414,7 +496,7 @@ components:
           type: string
         to_num:
           description: addressee node num; 0xFFFFFFFF = broadcast
-          format: int32
+          format: int64
           minimum: 0
           type: integer
       required:
@@ -428,6 +510,35 @@ components:
         - from_num
         - to_num
         - sent_at
+      type: object
+    Metadata:
+      additionalProperties: false
+      properties:
+        DeviceStateVer:
+          format: int64
+          minimum: 0
+          type: integer
+        FirmwareVersion:
+          type: string
+        HasBluetooth:
+          type: boolean
+        HasWifi:
+          type: boolean
+      required:
+        - FirmwareVersion
+        - DeviceStateVer
+        - HasWifi
+        - HasBluetooth
+      type: object
+    MyInfo:
+      additionalProperties: false
+      properties:
+        NodeNum:
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+        - NodeNum
       type: object
     NodeInfo:
       additionalProperties: false
@@ -443,7 +554,7 @@ components:
         LongName:
           type: string
         NodeNum:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         RSSI:
@@ -500,7 +611,7 @@ components:
           type: string
         node_num:
           description: radio identity, derived from MAC
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         short_name:
@@ -551,7 +662,7 @@ components:
           format: date-time
           type: string
         FromNum:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         Hops:
@@ -560,7 +671,7 @@ components:
         RSSI:
           type: string
         RequestID:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         SNR:
@@ -583,7 +694,7 @@ components:
           format: date-time
           type: string
         FromNodeNum:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         Latitude:
@@ -622,6 +733,21 @@ components:
         - connected
         - connect_dest
       type: object
+    Reconnecting:
+      additionalProperties: false
+      properties:
+        After:
+          format: int64
+          type: integer
+        Attempt:
+          format: int64
+          type: integer
+        Err: {}
+      required:
+        - Attempt
+        - After
+        - Err
+      type: object
     Routing:
       additionalProperties: false
       properties:
@@ -632,7 +758,7 @@ components:
         Reason:
           type: string
         RequestID:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
       required:
@@ -821,7 +947,7 @@ components:
         RSSI:
           type: string
         ToNum:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
       required:
@@ -837,22 +963,22 @@ components:
           format: date-time
           type: string
         FromNum:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         RequestID:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         Route:
           items:
-            format: int32
+            format: int64
             minimum: 0
             type: integer
           nullable: true
           type: array
         ToNum:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
       required:
@@ -861,6 +987,13 @@ components:
         - ToNum
         - Route
         - At
+      type: object
+    TransportError:
+      additionalProperties: false
+      properties:
+        Err: {}
+      required:
+        - Err
       type: object
     USBSighting:
       additionalProperties: false
@@ -1031,6 +1164,150 @@ paths:
                       type: object
                     - properties:
                         data:
+                          $ref: "#/components/schemas/ConfigComplete"
+                        event:
+                          const: config_complete
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event config_complete
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/DeviceConfig"
+                        event:
+                          const: device_config
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event device_config
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/DeviceMetrics"
+                        event:
+                          const: device_metrics
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event device_metrics
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/Disconnected"
+                        event:
+                          const: disconnected
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event disconnected
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/EnvMetrics"
+                        event:
+                          const: env_metrics
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event env_metrics
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/LoraConfig"
+                        event:
+                          const: lora_config
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event lora_config
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/Metadata"
+                        event:
+                          const: metadata
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event metadata
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/MyInfo"
+                        event:
+                          const: my_info
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event my_info
+                      type: object
+                    - properties:
+                        data:
                           $ref: "#/components/schemas/NodeInfo"
                         event:
                           const: node_info
@@ -1085,6 +1362,24 @@ paths:
                       type: object
                     - properties:
                         data:
+                          $ref: "#/components/schemas/Reconnecting"
+                        event:
+                          const: reconnecting
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event reconnecting
+                      type: object
+                    - properties:
+                        data:
                           $ref: "#/components/schemas/Routing"
                         event:
                           const: routing
@@ -1136,6 +1431,24 @@ paths:
                         - data
                         - event
                       title: Event traceroute
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/TransportError"
+                        event:
+                          const: transport_error
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event transport_error
                       type: object
                 title: Server Sent Events
                 type: array

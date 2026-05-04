@@ -89,6 +89,35 @@ type ChannelItem struct {
 	Unread int64 `json:"unread"`
 }
 
+// ConfigComplete defines model for ConfigComplete.
+type ConfigComplete = map[string]interface{}
+
+// DeviceConfig defines model for DeviceConfig.
+type DeviceConfig struct {
+	Role string `json:"Role"`
+}
+
+// DeviceMetrics defines model for DeviceMetrics.
+type DeviceMetrics struct {
+	AirUtilTx    float32 `json:"AirUtilTx"`
+	BatteryLevel int64   `json:"BatteryLevel"`
+	ChannelUtil  float32 `json:"ChannelUtil"`
+	FromNodeNum  int64   `json:"FromNodeNum"`
+	Voltage      float32 `json:"Voltage"`
+}
+
+// Disconnected defines model for Disconnected.
+type Disconnected = map[string]interface{}
+
+// EnvMetrics defines model for EnvMetrics.
+type EnvMetrics struct {
+	FromNodeNum int64   `json:"FromNodeNum"`
+	Gas         float32 `json:"Gas"`
+	Humidity    float32 `json:"Humidity"`
+	Pressure    float32 `json:"Pressure"`
+	Temperature float32 `json:"Temperature"`
+}
+
 // ErrorDetail defines model for ErrorDetail.
 type ErrorDetail struct {
 	// Location Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'
@@ -169,6 +198,13 @@ type ListRadiosOutputBody struct {
 	Radios *[]RadioSummary `json:"radios"`
 }
 
+// LoraConfig defines model for LoraConfig.
+type LoraConfig struct {
+	ModemPreset string `json:"ModemPreset"`
+	Region      string `json:"Region"`
+	TxPowerDBm  int32  `json:"TxPowerDBm"`
+}
+
 // Message defines model for Message.
 type Message struct {
 	// Bang leading verb for ham-bang messages
@@ -181,7 +217,7 @@ type Message struct {
 	From string `json:"from"`
 
 	// FromNum sender node num
-	FromNum int32 `json:"from_num"`
+	FromNum int64 `json:"from_num"`
 
 	// Hops mesh hop count; 0 = direct
 	Hops int64 `json:"hops"`
@@ -190,10 +226,10 @@ type Message struct {
 	Mine bool `json:"mine"`
 
 	// PacketId MeshPacket.id; 0 for system / demo rows
-	PacketId int32 `json:"packet_id"`
+	PacketId int64 `json:"packet_id"`
 
 	// ReplyId PacketID this message answers
-	ReplyId *int32 `json:"reply_id,omitempty"`
+	ReplyId *int64 `json:"reply_id,omitempty"`
 
 	// SentAt absolute time of receive / persist
 	SentAt time.Time `json:"sent_at"`
@@ -211,7 +247,7 @@ type Message struct {
 	Time string `json:"time"`
 
 	// ToNum addressee node num; 0xFFFFFFFF = broadcast
-	ToNum int32 `json:"to_num"`
+	ToNum int64 `json:"to_num"`
 }
 
 // MessageItem defines model for MessageItem.
@@ -232,7 +268,7 @@ type MessageItem struct {
 	From string `json:"from"`
 
 	// FromNum sender node num
-	FromNum int32 `json:"from_num"`
+	FromNum int64 `json:"from_num"`
 
 	// Group binds rows as one logical block for multi-line replies
 	Group *int64 `json:"group,omitempty"`
@@ -244,13 +280,13 @@ type MessageItem struct {
 	Mine bool `json:"mine"`
 
 	// PacketId MeshPacket.id; 0 for system / demo rows
-	PacketId int32 `json:"packet_id"`
+	PacketId int64 `json:"packet_id"`
 
 	// Pinned user paused this row's TTL
 	Pinned *bool `json:"pinned,omitempty"`
 
 	// ReplyId PacketID this message answers
-	ReplyId *int32 `json:"reply_id,omitempty"`
+	ReplyId *int64 `json:"reply_id,omitempty"`
 
 	// SentAt absolute time of receive / persist
 	SentAt time.Time `json:"sent_at"`
@@ -268,7 +304,20 @@ type MessageItem struct {
 	Time string `json:"time"`
 
 	// ToNum addressee node num; 0xFFFFFFFF = broadcast
-	ToNum int32 `json:"to_num"`
+	ToNum int64 `json:"to_num"`
+}
+
+// Metadata defines model for Metadata.
+type Metadata struct {
+	DeviceStateVer  int64  `json:"DeviceStateVer"`
+	FirmwareVersion string `json:"FirmwareVersion"`
+	HasBluetooth    bool   `json:"HasBluetooth"`
+	HasWifi         bool   `json:"HasWifi"`
+}
+
+// MyInfo defines model for MyInfo.
+type MyInfo struct {
+	NodeNum int64 `json:"NodeNum"`
 }
 
 // NodeInfo defines model for NodeInfo.
@@ -277,7 +326,7 @@ type NodeInfo struct {
 	HwModel     string    `json:"HwModel"`
 	LastHeardAt time.Time `json:"LastHeardAt"`
 	LongName    string    `json:"LongName"`
-	NodeNum     int32     `json:"NodeNum"`
+	NodeNum     int64     `json:"NodeNum"`
 	RSSI        string    `json:"RSSI"`
 	SNR         string    `json:"SNR"`
 	ShortName   string    `json:"ShortName"`
@@ -316,7 +365,7 @@ type NodeItem struct {
 	LastSnr string `json:"last_snr"`
 
 	// NodeNum radio identity, derived from MAC
-	NodeNum int32 `json:"node_num"`
+	NodeNum int64 `json:"node_num"`
 
 	// ShortName 4-char badge
 	ShortName string `json:"short_name"`
@@ -340,10 +389,10 @@ type PairBLEInputBody struct {
 // Ping defines model for Ping.
 type Ping struct {
 	At        time.Time `json:"At"`
-	FromNum   int32     `json:"FromNum"`
+	FromNum   int64     `json:"FromNum"`
 	Hops      int64     `json:"Hops"`
 	RSSI      string    `json:"RSSI"`
-	RequestID int32     `json:"RequestID"`
+	RequestID int64     `json:"RequestID"`
 	SNR       string    `json:"SNR"`
 }
 
@@ -351,7 +400,7 @@ type Ping struct {
 type Position struct {
 	Altitude    int32     `json:"Altitude"`
 	At          time.Time `json:"At"`
-	FromNodeNum int32     `json:"FromNodeNum"`
+	FromNodeNum int64     `json:"FromNodeNum"`
 	Latitude    float64   `json:"Latitude"`
 	Longitude   float64   `json:"Longitude"`
 }
@@ -371,12 +420,19 @@ type RadioSummary struct {
 	RadioId string `json:"radio_id"`
 }
 
+// Reconnecting defines model for Reconnecting.
+type Reconnecting struct {
+	After   int64       `json:"After"`
+	Attempt int64       `json:"Attempt"`
+	Err     interface{} `json:"Err"`
+}
+
 // Routing defines model for Routing.
 type Routing struct {
 	ErrorName string `json:"ErrorName"`
 	OK        bool   `json:"OK"`
 	Reason    string `json:"Reason"`
-	RequestID int32  `json:"RequestID"`
+	RequestID int64  `json:"RequestID"`
 }
 
 // ScanBLEInputBody defines model for ScanBLEInputBody.
@@ -466,16 +522,21 @@ type Text struct {
 	Body    Message `json:"Body"`
 	Channel int64   `json:"Channel"`
 	RSSI    string  `json:"RSSI"`
-	ToNum   int32   `json:"ToNum"`
+	ToNum   int64   `json:"ToNum"`
 }
 
 // Traceroute defines model for Traceroute.
 type Traceroute struct {
 	At        time.Time `json:"At"`
-	FromNum   int32     `json:"FromNum"`
-	RequestID int32     `json:"RequestID"`
-	Route     *[]int32  `json:"Route"`
-	ToNum     int32     `json:"ToNum"`
+	FromNum   int64     `json:"FromNum"`
+	RequestID int64     `json:"RequestID"`
+	Route     *[]int64  `json:"Route"`
+	ToNum     int64     `json:"ToNum"`
+}
+
+// TransportError defines model for TransportError.
+type TransportError struct {
+	Err interface{} `json:"Err"`
 }
 
 // USBSighting defines model for USBSighting.

@@ -88,7 +88,16 @@ func (s *daemonSink) Send(msg any) {
 	case mdl.Routing:
 		s.drv.ApplyRouting(ev)
 	case mdl.ConfigComplete:
-		s.drv.ApplyConfigComplete()
+		wasDisconnected := s.drv.ApplyConfigComplete()
+		if wasDisconnected {
+			s.log.Info("radio connected",
+				slog.String("radio_id", s.drv.State.RadioID),
+				slog.Int("nodes", len(s.drv.State.Nodes)),
+				slog.Int("channels", len(s.drv.State.Channels)),
+				slog.Int("messages", len(s.drv.State.Messages)),
+				slog.String("firmware", s.drv.State.RadioFirmware),
+			)
+		}
 	case mdl.Reconnecting:
 		// Reflect the pump's retry banner onto State so SSE clients
 		// see the dialing/retry status. Direct field write — no

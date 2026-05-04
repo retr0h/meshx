@@ -148,6 +148,7 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		// and publish over SSE. The Registry rekey on identity claim
 		// (pending:... → 0xNNNNNNNN) is handled inside the sink so
 		// /radios reflects the canonical id the moment MyInfo lands.
+		log.Info("dialing radio", slog.String("dest", radio))
 		sink := &daemonSink{drv: drv, registry: radios, log: log}
 		var p driver.Pump = pump.New(radio, sink)
 		drv.AttachPump(p)

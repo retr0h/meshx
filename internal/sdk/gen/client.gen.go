@@ -58,6 +58,16 @@ type BLESighting struct {
 	Uuid string `json:"uuid"`
 }
 
+// ChannelInfo defines model for ChannelInfo.
+type ChannelInfo struct {
+	HasPSK bool   `json:"HasPSK"`
+	ID     int32  `json:"ID"`
+	Index  int64  `json:"Index"`
+	Name   string `json:"Name"`
+	PSK    string `json:"PSK"`
+	Role   string `json:"Role"`
+}
+
 // ChannelItem defines model for ChannelItem.
 type ChannelItem struct {
 	// HasPsk true when this slot is encrypted (computed from PSK presence)
@@ -115,13 +125,6 @@ type ErrorModel struct {
 	Type *string `json:"type,omitempty"`
 }
 
-// EventsOutputBody defines model for EventsOutputBody.
-type EventsOutputBody struct {
-	// Schema A URL to the JSON Schema for this object.
-	Schema *string `json:"$schema,omitempty"`
-	Status string  `json:"status"`
-}
-
 // HealthOutputBody defines model for HealthOutputBody.
 type HealthOutputBody struct {
 	// Schema A URL to the JSON Schema for this object.
@@ -164,6 +167,51 @@ type ListRadiosOutputBody struct {
 	// Schema A URL to the JSON Schema for this object.
 	Schema *string         `json:"$schema,omitempty"`
 	Radios *[]RadioSummary `json:"radios"`
+}
+
+// Message defines model for Message.
+type Message struct {
+	// Bang leading verb for ham-bang messages
+	Bang *string `json:"bang,omitempty"`
+
+	// Corrupted sanitization replaced/dropped bytes
+	Corrupted *bool `json:"corrupted,omitempty"`
+
+	// From sender callsign at receive time
+	From string `json:"from"`
+
+	// FromNum sender node num
+	FromNum int32 `json:"from_num"`
+
+	// Hops mesh hop count; 0 = direct
+	Hops int64 `json:"hops"`
+
+	// Mine true when local user composed this row
+	Mine bool `json:"mine"`
+
+	// PacketId MeshPacket.id; 0 for system / demo rows
+	PacketId int32 `json:"packet_id"`
+
+	// ReplyId PacketID this message answers
+	ReplyId *int32 `json:"reply_id,omitempty"`
+
+	// SentAt absolute time of receive / persist
+	SentAt time.Time `json:"sent_at"`
+
+	// Snr signal-to-noise ratio at receive
+	Snr *string `json:"snr,omitempty"`
+
+	// Status ok | ack | pending | fail | system | notice
+	Status int64 `json:"status"`
+
+	// Text message body, post-sanitization
+	Text string `json:"text"`
+
+	// Time display timestamp like '09:47'
+	Time string `json:"time"`
+
+	// ToNum addressee node num; 0xFFFFFFFF = broadcast
+	ToNum int32 `json:"to_num"`
 }
 
 // MessageItem defines model for MessageItem.
@@ -223,6 +271,18 @@ type MessageItem struct {
 	ToNum int32 `json:"to_num"`
 }
 
+// NodeInfo defines model for NodeInfo.
+type NodeInfo struct {
+	Hops        int64     `json:"Hops"`
+	HwModel     string    `json:"HwModel"`
+	LastHeardAt time.Time `json:"LastHeardAt"`
+	LongName    string    `json:"LongName"`
+	NodeNum     int32     `json:"NodeNum"`
+	RSSI        string    `json:"RSSI"`
+	SNR         string    `json:"SNR"`
+	ShortName   string    `json:"ShortName"`
+}
+
 // NodeItem defines model for NodeItem.
 type NodeItem struct {
 	// Callsign long-form callsign as set on the radio
@@ -277,6 +337,25 @@ type PairBLEInputBody struct {
 	Uuid string `json:"uuid"`
 }
 
+// Ping defines model for Ping.
+type Ping struct {
+	At        time.Time `json:"At"`
+	FromNum   int32     `json:"FromNum"`
+	Hops      int64     `json:"Hops"`
+	RSSI      string    `json:"RSSI"`
+	RequestID int32     `json:"RequestID"`
+	SNR       string    `json:"SNR"`
+}
+
+// Position defines model for Position.
+type Position struct {
+	Altitude    int32     `json:"Altitude"`
+	At          time.Time `json:"At"`
+	FromNodeNum int32     `json:"FromNodeNum"`
+	Latitude    float64   `json:"Latitude"`
+	Longitude   float64   `json:"Longitude"`
+}
+
 // RadioSummary defines model for RadioSummary.
 type RadioSummary struct {
 	// ConnectDest transport target string (/dev/cu.*, host:port, ble:<uuid>)
@@ -290,6 +369,14 @@ type RadioSummary struct {
 
 	// RadioId canonical radio identifier — 0x<hex node_num> post-handshake, pending:<transport>:<addr> beforehand
 	RadioId string `json:"radio_id"`
+}
+
+// Routing defines model for Routing.
+type Routing struct {
+	ErrorName string `json:"ErrorName"`
+	OK        bool   `json:"OK"`
+	Reason    string `json:"Reason"`
+	RequestID int32  `json:"RequestID"`
 }
 
 // ScanBLEInputBody defines model for ScanBLEInputBody.
@@ -372,6 +459,23 @@ type SessionSnapshot struct {
 	RadioModem     *string  `json:"radio_modem,omitempty"`
 	RadioRegion    *string  `json:"radio_region,omitempty"`
 	RadioRole      *string  `json:"radio_role,omitempty"`
+}
+
+// Text defines model for Text.
+type Text struct {
+	Body    Message `json:"Body"`
+	Channel int64   `json:"Channel"`
+	RSSI    string  `json:"RSSI"`
+	ToNum   int32   `json:"ToNum"`
+}
+
+// Traceroute defines model for Traceroute.
+type Traceroute struct {
+	At        time.Time `json:"At"`
+	FromNum   int32     `json:"FromNum"`
+	RequestID int32     `json:"RequestID"`
+	Route     *[]int32  `json:"Route"`
+	ToNum     int32     `json:"ToNum"`
 }
 
 // USBSighting defines model for USBSighting.
@@ -1606,7 +1710,6 @@ func (r ListChannelsResponse) ContentType() string {
 type EventsStreamResponse struct {
 	Body                          []byte
 	HTTPResponse                  *http.Response
-	JSON200                       *EventsOutputBody
 	ApplicationproblemJSONDefault *ErrorModel
 }
 
@@ -2303,13 +2406,6 @@ func ParseEventsStreamResponse(rsp *http.Response) (*EventsStreamResponse, error
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest EventsOutputBody
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
 		var dest ErrorModel
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {

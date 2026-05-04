@@ -307,25 +307,10 @@ func (s *Server) handleSendMessage(
 	return out, nil
 }
 
+// eventsInput is the SSE registration's typed input shape — Huma's
+// sse.Register reads the path tag to populate the spec's parameters
+// block. There's no body / response shape here; sse.Register provides
+// the streaming response itself.
 type eventsInput struct {
 	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
-}
-
-// eventsOutput is a placeholder for SSE — Huma's streaming SSE
-// support uses huma.SSE for the registration shape, which the
-// driver-side broadcast hookup will adopt once apply* handlers emit
-// the canonical event union onto a per-driver channel.
-type eventsOutput struct {
-	Body struct {
-		Status string `json:"status"`
-	}
-}
-
-func (s *Server) handleEvents(_ context.Context, in *eventsInput) (*eventsOutput, error) {
-	if _, err := s.resolveRadio(in.RadioID); err != nil {
-		return nil, err
-	}
-	return nil, huma.Error501NotImplemented(
-		"SSE event stream not yet wired — driver-side broadcast lands with apply* relocation",
-	)
 }

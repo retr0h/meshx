@@ -21,6 +21,8 @@
 package server
 
 import (
+	"context"
+
 	"github.com/retr0h/meshx/internal/driver"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
@@ -54,4 +56,11 @@ type Driver interface {
 	// fire-and-forget) and ok=false when the pump is nil (no radio
 	// attached) or its outbound buffer is full.
 	Send(cmd mdl.Command) (uint32, bool)
+
+	// Subscribe returns a buffered channel of every Event the driver
+	// publishes (one Event per inbound radio packet, applied to State
+	// before the publish). Closes when ctx cancels — caller is
+	// responsible for ctx lifecycle, the driver detaches the channel
+	// and closes it on cancel. Used by the SSE handler.
+	Subscribe(ctx context.Context) <-chan driver.Event
 }

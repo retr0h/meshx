@@ -70,6 +70,33 @@ components:
         - local_name
         - rssi
       type: object
+    ChannelInfo:
+      additionalProperties: false
+      properties:
+        HasPSK:
+          type: boolean
+        ID:
+          format: int32
+          minimum: 0
+          type: integer
+        Index:
+          format: int64
+          type: integer
+        Name:
+          type: string
+        PSK:
+          format: base64
+          type: string
+        Role:
+          type: string
+      required:
+        - Index
+        - Name
+        - Role
+        - ID
+        - HasPSK
+        - PSK
+      type: object
     ChannelItem:
       additionalProperties: false
       properties:
@@ -152,20 +179,6 @@ components:
           example: https://example.com/errors/example
           format: uri
           type: string
-      type: object
-    EventsOutputBody:
-      additionalProperties: false
-      properties:
-        $schema:
-          description: A URL to the JSON Schema for this object.
-          example: https://example.com/schemas/EventsOutputBody.json
-          format: uri
-          readOnly: true
-          type: string
-        status:
-          type: string
-      required:
-        - status
       type: object
     HealthOutputBody:
       additionalProperties: false
@@ -267,6 +280,74 @@ components:
       required:
         - radios
       type: object
+    Message:
+      additionalProperties: false
+      properties:
+        bang:
+          description: leading verb for ham-bang messages
+          type: string
+        corrupted:
+          description: sanitization replaced/dropped bytes
+          type: boolean
+        from:
+          description: sender callsign at receive time
+          type: string
+        from_num:
+          description: sender node num
+          format: int32
+          minimum: 0
+          type: integer
+        hops:
+          description: mesh hop count; 0 = direct
+          format: int64
+          type: integer
+        mine:
+          description: true when local user composed this row
+          type: boolean
+        packet_id:
+          description: MeshPacket.id; 0 for system / demo rows
+          format: int32
+          minimum: 0
+          type: integer
+        reply_id:
+          description: PacketID this message answers
+          format: int32
+          minimum: 0
+          type: integer
+        sent_at:
+          description: absolute time of receive / persist
+          format: date-time
+          type: string
+        snr:
+          description: signal-to-noise ratio at receive
+          type: string
+        status:
+          description: ok | ack | pending | fail | system | notice
+          format: int64
+          type: integer
+        text:
+          description: message body, post-sanitization
+          type: string
+        time:
+          description: display timestamp like '09:47'
+          type: string
+        to_num:
+          description: addressee node num; 0xFFFFFFFF = broadcast
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - time
+        - from
+        - text
+        - mine
+        - status
+        - hops
+        - packet_id
+        - from_num
+        - to_num
+        - sent_at
+      type: object
     MessageItem:
       additionalProperties: false
       properties:
@@ -349,6 +430,39 @@ components:
         - from_num
         - to_num
         - sent_at
+      type: object
+    NodeInfo:
+      additionalProperties: false
+      properties:
+        Hops:
+          format: int64
+          type: integer
+        HwModel:
+          type: string
+        LastHeardAt:
+          format: date-time
+          type: string
+        LongName:
+          type: string
+        NodeNum:
+          format: int32
+          minimum: 0
+          type: integer
+        RSSI:
+          type: string
+        SNR:
+          type: string
+        ShortName:
+          type: string
+      required:
+        - NodeNum
+        - LongName
+        - ShortName
+        - HwModel
+        - SNR
+        - RSSI
+        - Hops
+        - LastHeardAt
       type: object
     NodeItem:
       additionalProperties: false
@@ -433,6 +547,61 @@ components:
       required:
         - uuid
       type: object
+    Ping:
+      additionalProperties: false
+      properties:
+        At:
+          format: date-time
+          type: string
+        FromNum:
+          format: int32
+          minimum: 0
+          type: integer
+        Hops:
+          format: int64
+          type: integer
+        RSSI:
+          type: string
+        RequestID:
+          format: int32
+          minimum: 0
+          type: integer
+        SNR:
+          type: string
+      required:
+        - RequestID
+        - FromNum
+        - Hops
+        - SNR
+        - RSSI
+        - At
+      type: object
+    Position:
+      additionalProperties: false
+      properties:
+        Altitude:
+          format: int32
+          type: integer
+        At:
+          format: date-time
+          type: string
+        FromNodeNum:
+          format: int32
+          minimum: 0
+          type: integer
+        Latitude:
+          format: double
+          type: number
+        Longitude:
+          format: double
+          type: number
+      required:
+        - FromNodeNum
+        - Latitude
+        - Longitude
+        - Altitude
+        - At
+      type: object
     RadioSummary:
       additionalProperties: false
       properties:
@@ -455,6 +624,25 @@ components:
         - my_node_num
         - connected
         - connect_dest
+      type: object
+    Routing:
+      additionalProperties: false
+      properties:
+        ErrorName:
+          type: string
+        OK:
+          type: boolean
+        Reason:
+          type: string
+        RequestID:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - RequestID
+        - Reason
+        - ErrorName
+        - OK
       type: object
     ScanBLEInputBody:
       additionalProperties: false
@@ -625,6 +813,58 @@ components:
         - current_channel
         - connect_dest
       type: object
+    Text:
+      additionalProperties: false
+      properties:
+        Body:
+          $ref: "#/components/schemas/Message"
+        Channel:
+          format: int64
+          type: integer
+        RSSI:
+          type: string
+        ToNum:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - Channel
+        - ToNum
+        - RSSI
+        - Body
+      type: object
+    Traceroute:
+      additionalProperties: false
+      properties:
+        At:
+          format: date-time
+          type: string
+        FromNum:
+          format: int32
+          minimum: 0
+          type: integer
+        RequestID:
+          format: int32
+          minimum: 0
+          type: integer
+        Route:
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          nullable: true
+          type: array
+        ToNum:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - RequestID
+        - FromNum
+        - ToNum
+        - Route
+        - At
+      type: object
     USBSighting:
       additionalProperties: false
       properties:
@@ -756,7 +996,7 @@ paths:
         - channels
   /radios/{radio_id}/events:
     get:
-      description: Live SSE stream of mesh activity for the named radio — node updates, incoming text, ack receipts, reconnect status. Clients consume this for real-time UI updates.
+      description: Live SSE stream of mesh activity for the named radio — text packets, node-info beacons, channel changes, position fixes, routing acks, traceroute / ping replies. Clients consume this for real-time UI updates.
       operationId: events-stream
       parameters:
         - description: canonical radio identifier — see GET /radios
@@ -769,9 +1009,139 @@ paths:
       responses:
         "200":
           content:
-            application/json:
+            text/event-stream:
               schema:
-                $ref: "#/components/schemas/EventsOutputBody"
+                description: Each oneOf object in the array represents one possible Server Sent Events (SSE) message, serialized as UTF-8 text according to the SSE specification.
+                items:
+                  oneOf:
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/ChannelInfo"
+                        event:
+                          const: channel_info
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event channel_info
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/NodeInfo"
+                        event:
+                          const: node_info
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event node_info
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/Ping"
+                        event:
+                          const: ping
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event ping
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/Position"
+                        event:
+                          const: position
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event position
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/Routing"
+                        event:
+                          const: routing
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event routing
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/Text"
+                        event:
+                          const: text
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event text
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/Traceroute"
+                        event:
+                          const: traceroute
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event traceroute
+                      type: object
+                title: Server Sent Events
+                type: array
           description: OK
         default:
           content:

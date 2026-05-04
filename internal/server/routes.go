@@ -24,6 +24,7 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/sse"
 )
 
 // registerRoutes wires every endpoint Huma should serve. Route
@@ -106,14 +107,14 @@ func (s *Server) registerRoutes() {
 		Tags:        []string{"messages"},
 	}, s.handleSendMessage)
 
-	huma.Register(s.api, huma.Operation{
+	sse.Register(s.api, huma.Operation{
 		OperationID: "events-stream",
 		Method:      http.MethodGet,
 		Path:        "/radios/{radio_id}/events",
 		Summary:     "Server-sent events stream for one radio",
-		Description: "Live SSE stream of mesh activity for the named radio — node updates, incoming text, ack receipts, reconnect status. Clients consume this for real-time UI updates.",
+		Description: "Live SSE stream of mesh activity for the named radio — text packets, node-info beacons, channel changes, position fixes, routing acks, traceroute / ping replies. Clients consume this for real-time UI updates.",
 		Tags:        []string{"events"},
-	}, s.handleEvents)
+	}, eventsTypeMap, s.handleEvents)
 
 	huma.Register(s.api, huma.Operation{
 		OperationID: "list-ble-devices",

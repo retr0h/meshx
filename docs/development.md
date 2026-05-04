@@ -269,6 +269,20 @@ generates 8-byte hex; echoes header, stashes on context, retrievable via
 status, duration, request_id, remote, user-agent — Error level for 5xx, Warn for
 4xx, Info otherwise).
 
+## Server architecture
+
+A request flows: Huma router → middleware stack (panic / request-id / log) →
+`internal/server/handlers.go` → `resolveRadio({radio_id})` → `Registry.Get(id)`
+→ `Driver` (the consumer interface in `internal/server/driver.go`, satisfied by
+`*driver.Driver`). Handlers project model types (`mdl.ChannelItem`,
+`mdl.NodeItem`, `mdl.MessageItem`) directly into responses — no DTO duplication,
+the JSON shape on the wire IS the model shape. Multi-radio is the `Registry`
+multiplex (`radio_id → Driver`, RWMutex-guarded); routes are radio-scoped under
+`/radios/{radio_id}/...` and transport admin under `/transports/{ble,usb}/...`.
+The SSE stream (`/radios/{id}/events`) sits on `Driver.Subscribe(ctx)` and
+dispatches per-event-kind via `eventsTypeMap` so each variant gets the right
+`event:` line on the wire.
+
 ## OpenAPI client SDK
 
 The daemon emits its OpenAPI spec at `/openapi.{json,yaml}` (3.1) and a
@@ -293,6 +307,14 @@ consumers can build without invoking codegen.
 per operation as the HTTP response wrapper. Avoid `*Response` schema names in
 `internal/server/handlers.go` — that's why the send-message body is
 `SendMessageResult`, not `SendMessageResponse`.
+
+`internal/sdk/` is the consumer-facing surface. `gen/` is the generated typed
+HTTP client for every route Huma registers. `remote.go` (planned) is the
+hand-written companion that wraps `gen.Client` plus an SSE consumer behind the
+`tui.radioDriver` interface — so `meshx ble connect --server <url>` runs the TUI
+against a remote daemon with no branching in the model code. SSE isn't generated
+by oapi-codegen, so the event reader is hand-rolled against the
+`/radios/{id}/events` stream.
 
 ## Dependencies
 

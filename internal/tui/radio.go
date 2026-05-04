@@ -405,5 +405,13 @@ func (m *model) resend(idx int) {
 	})
 	msg.PacketID = pid
 	msg.Status = mdl.StatusPending
+	// Re-persist with the fresh PacketID so the startup stale-pending
+	// sweep on next launch sees the LATEST id, not the dead one we
+	// just retransmitted past. Without this, an unacked resend
+	// followed by a quit would expire on the original packet's
+	// packet_id row and leave the new attempt orphaned in SQLite.
+	if st := m.driver.StoreHandle(); st != nil {
+		m.storagePersist(st.SaveMessage(m.RadioID, m.CurrentChannel, msg.Message))
+	}
 	m.flash = fmt.Sprintf("↻ retransmit sent (pid=0x%08x) — awaiting ack", pid)
 }

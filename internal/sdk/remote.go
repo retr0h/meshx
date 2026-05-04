@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/retr0h/meshx/internal/driver"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
@@ -189,7 +190,14 @@ func (r *Remote) Send(cmd mdl.Command) (uint32, bool) {
 			rid := int32(c.ReplyID)
 			body.ReplyId = &rid
 		}
-		resp, err := r.client.SendMessageWithResponse(context.Background(), r.radioID, body)
+		// Bound the outbound POST so an unreachable daemon doesn't
+		// freeze the TUI's Update loop. 5 seconds matches the radio
+		// pump's WantAck retry window — longer than the daemon's
+		// happy-path round-trip, short enough that a connection
+		// failure surfaces as a flash within one or two ticks.
+		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
+		defer cancel()
+		resp, err := r.client.SendMessageWithResponse(ctx, r.radioID, body)
 		if err != nil || resp.JSON200 == nil {
 			return 0, false
 		}
@@ -198,6 +206,10 @@ func (r *Remote) Send(cmd mdl.Command) (uint32, bool) {
 		return 0, false
 	}
 }
+
+// sendTimeout caps every outbound HTTP call from Remote so a slow
+// or unreachable daemon can't stall the TUI's Update loop.
+const sendTimeout = 5 * time.Second
 
 // runSSE is the long-lived consumer. Opens a streaming GET against
 // /radios/{id}/events, parses the text/event-stream framing

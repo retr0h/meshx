@@ -44,6 +44,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
@@ -96,8 +97,15 @@ func reconnectBackoff(attempt int) time.Duration {
 
 // Pump is the running transport ↔ Sink bridge.
 type Pump struct {
-	client Transport
-	sink   Sink
+	// clientMu guards every read and write of `client`. The run
+	// goroutine swaps it across reconnects; Stop reads it from the
+	// caller's goroutine to close the live transport. Without a lock
+	// these races trip `go test -race` and could in pathological
+	// timing close a client another goroutine is mid-Read on.
+	clientMu sync.Mutex
+	client   Transport
+
+	sink Sink
 
 	// Destination string from the original Dial — re-used by the
 	// reconnect loop. Stash it so the pump doesn't need to plumb the
@@ -115,6 +123,24 @@ type Pump struct {
 
 	// Cancellation for the running goroutines.
 	cancel context.CancelFunc
+}
+
+// setClient swaps the live transport under the mutex. Returns the
+// previous client so callers (the reconnect loop) can close it
+// outside the lock.
+func (p *Pump) setClient(c Transport) Transport {
+	p.clientMu.Lock()
+	defer p.clientMu.Unlock()
+	prev := p.client
+	p.client = c
+	return prev
+}
+
+// getClient reads the live transport under the mutex.
+func (p *Pump) getClient() Transport {
+	p.clientMu.Lock()
+	defer p.clientMu.Unlock()
+	return p.client
 }
 
 // New spins up a pump goroutine and returns the handle immediately.
@@ -147,15 +173,13 @@ func New(dest string, sink Sink) *Pump {
 }
 
 // Stop cancels the run loop and closes any live client. Safe to call
-// repeatedly; safe to call before the first dial completes.
+// repeatedly; safe to call before the first dial completes. Reads
+// the client through getClient so a concurrent reconnect-loop swap
+// doesn't race the Close call.
 func (p *Pump) Stop() {
 	p.cancel()
-	// p.client is nil between New and the first successful dial, so a
-	// Ctrl+X during the initial BLE scan would panic here without the
-	// guard. The run loop owns subsequent client mutations and will
-	// observe ctx cancellation on its next iteration to clean up.
-	if p.client != nil {
-		_ = p.client.Close()
+	if c := p.getClient(); c != nil {
+		_ = c.Close()
 	}
 }
 
@@ -208,18 +232,18 @@ func (p *Pump) run(ctx context.Context) {
 		// Re-dial if we're between sessions. First time through, the
 		// client is nil (set by New) so we always dial here.
 		var sessErr error
-		if p.client == nil {
+		if p.getClient() == nil {
 			dbgf("re-dial attempt %d", attempt+1)
 			client, derr := transport.Dial(p.dest)
 			if derr != nil {
 				dbgf("re-dial failed: %v", derr)
 				sessErr = derr
 			} else {
-				p.client = client
+				p.setClient(client)
 			}
 		}
 
-		if sessErr == nil && p.client != nil {
+		if sessErr == nil && p.getClient() != nil {
 			established, err := p.runSession(ctx, dbgf)
 			if ctx.Err() != nil {
 				dbgf("ctx done after session — exiting")
@@ -231,8 +255,9 @@ func (p *Pump) run(ctx context.Context) {
 			if established {
 				attempt = 0
 			}
-			_ = p.client.Close()
-			p.client = nil
+			if prev := p.setClient(nil); prev != nil {
+				_ = prev.Close()
+			}
 
 			if err == nil {
 				// Clean disconnect — radio rebooted or got unplugged.
@@ -283,9 +308,13 @@ func (p *Pump) runSession(
 	sessCtx, sessCancel := context.WithCancel(ctx)
 	defer sessCancel()
 
+	// Snapshot the live client once at session start. The reconnect
+	// loop won't swap it mid-session (it only swaps when runSession
+	// returns), so a single getClient is enough.
+	client := p.getClient()
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- p.client.Run(sessCtx, inbound, p.outbound)
+		runErr <- client.Run(sessCtx, inbound, p.outbound)
 	}()
 	dbgf("transport.Run goroutine started")
 

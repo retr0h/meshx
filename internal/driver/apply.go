@@ -543,6 +543,29 @@ func timeHHMM(t time.Time) string {
 	return t.Format("15:04")
 }
 
+// ApplyReconnecting reflects the pump's retry banner onto State and
+// publishes the event so SSE subscribers (remote TUIs, monitoring
+// dashboards) see the dialing/retry status in lockstep with the
+// daemon's own State. Without publishing, a remote TUI watching the
+// daemon would only learn the radio dropped when text packets stop
+// arriving.
+func (d *Driver) ApplyReconnecting(ev mdl.Reconnecting) {
+	defer d.Publish(Event{Kind: EventReconnecting, Data: ev})
+	d.State.Reconnect = &ReconnectState{
+		Attempt: ev.Attempt,
+		ReadyAt: time.Now().Add(ev.After),
+		Err:     ev.Err,
+	}
+}
+
+// ApplyDisconnected flips Connected = false and publishes. The
+// reconnect banner is left intact; ApplyReconnecting owns its
+// lifecycle (clear happens on the next ApplyConfigComplete).
+func (d *Driver) ApplyDisconnected(ev mdl.Disconnected) {
+	defer d.Publish(Event{Kind: EventDisconnected, Data: ev})
+	d.State.Connected = false
+}
+
 // ApplyConfigComplete marks the handshake as complete — Connected
 // flips true, the reconnect banner clears. Returns whether this was
 // the first ConfigComplete (TUI uses it to decide whether to emit

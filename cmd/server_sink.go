@@ -22,7 +22,6 @@ package cmd
 
 import (
 	"log/slog"
-	"time"
 
 	"github.com/retr0h/meshx/internal/driver"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
@@ -103,15 +102,7 @@ func (s *daemonSink) Send(msg any) {
 			)
 		}
 	case mdl.Reconnecting:
-		// Reflect the pump's retry banner onto State so SSE clients
-		// see the dialing/retry status. Direct field write — no
-		// Apply* method since this is purely transport-status, not
-		// radio-emitted.
-		s.drv.State.Reconnect = &driver.ReconnectState{
-			Attempt: ev.Attempt,
-			ReadyAt: time.Now().Add(ev.After),
-			Err:     ev.Err,
-		}
+		s.drv.ApplyReconnecting(ev)
 		errStr := ""
 		if ev.Err != nil {
 			errStr = ev.Err.Error()
@@ -122,14 +113,13 @@ func (s *daemonSink) Send(msg any) {
 			slog.String("error", errStr),
 		)
 	case mdl.Disconnected:
-		s.drv.State.Connected = false
+		s.drv.ApplyDisconnected(ev)
 		s.log.Info("transport disconnected")
 	case mdl.TransportError:
 		s.log.Error("transport error", slog.Any("error", ev.Err))
 	default:
-		// Other event variants (Traceroute, Ping, ModuleBuzzer, …)
-		// are TUI-initiated correlations — daemon ignores them for
-		// now. Future work: surface as SSE events for remote-TUI
-		// /tr and /ping flows.
+		// Unknown event variant — translation layer added a new kind
+		// the sink doesn't route yet. Drop silently; no observable
+		// failure mode beyond the missing State mutation.
 	}
 }

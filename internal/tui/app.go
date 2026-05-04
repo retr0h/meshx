@@ -421,7 +421,7 @@ func RunRadioRemote(serverURL, radioID string) error {
 	}
 	defer r.Stop()
 
-	m := newRemoteModel(r)
+	m := newRemoteModel(r, serverURL)
 	slot := &programSlot{}
 	m.programSlot = slot
 	program := tea.NewProgram(m, tea.WithAltScreen())
@@ -442,7 +442,7 @@ func RunRadioRemote(serverURL, radioID string) error {
 // newModel's textinput + splash setup but skips storage open / replay
 // / NodeDB hydration (the daemon owns persistence; State arrives
 // pre-populated via Remote.seed).
-func newRemoteModel(r *sdk.Remote) model {
+func newRemoteModel(r *sdk.Remote, serverURL string) model {
 	in := textinput.New()
 	in.Prompt = ""
 	in.CharLimit = 0
@@ -454,18 +454,34 @@ func newRemoteModel(r *sdk.Remote) model {
 		Bold(true)
 	focusCmd := in.Focus()
 
-	return model{
+	chosenSplash := pickSplash()
+	m := model{
 		State:           r.Session(),
 		driver:          r,
 		remoteMode:      true,
 		mode:            modeInput,
 		focused:         paneMessages,
-		splash:          pickSplash(),
+		splash:          chosenSplash,
 		input:           in,
 		searchInput:     func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 80; return s }(),
 		cfgEditInput:    func() textinput.Model { s := textinput.New(); s.Prompt = ""; s.CharLimit = 36; return s }(),
 		initialFocusCmd: focusCmd,
 	}
+
+	// Surface the remote-mode endpoint as the first-line system row
+	// so the user has a visible cue this isn't a local session — same
+	// shape as local mode's "storage:" / "nodes:" notices.
+	m.systemLine("remote: connected to " + serverURL)
+	if n := len(m.Messages); n > 0 {
+		m.systemLine(fmt.Sprintf("remote: replayed %d messages from daemon", n))
+	}
+	if n := len(m.Nodes); n > 0 {
+		m.systemLine(fmt.Sprintf("remote: %d known peers from daemon", n))
+	}
+	// Splash card last so the BitchX banner sits at the bottom of the
+	// log on launch — same convention as local mode.
+	m.noticeCard(splashAsNotices(chosenSplash, m.myCallsign())...)
+	return m
 }
 
 // teaProgramSink wraps *tea.Program to satisfy pump.Sink. tea.Msg is

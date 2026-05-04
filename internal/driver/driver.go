@@ -81,6 +81,27 @@ func (d *Driver) storeError(err error) {
 	d.OnStoreError(err)
 }
 
+// PutSetting persists a key/value setting through the Store and
+// surfaces the failure (if any) via OnStoreError. radioID="" is the
+// global-scope namespace (per-app prefs like "ding_muted"); a
+// radio_id keys per-radio prefs. No-op when Store is nil.
+func (d *Driver) PutSetting(radioID, key, value string) {
+	if d.Store == nil {
+		return
+	}
+	d.storeError(d.Store.PutSetting(radioID, key, value))
+}
+
+// SaveNodePrefs persists a peer's favorite / muted toggle through
+// the Store and surfaces the failure via OnStoreError. No-op when
+// Store is nil.
+func (d *Driver) SaveNodePrefs(radioID string, nodeNum uint32, favorite, muted bool) {
+	if d.Store == nil {
+		return
+	}
+	d.storeError(d.Store.SaveNodePrefs(radioID, nodeNum, favorite, muted))
+}
+
 // AlertStorageError is the canonical OnStoreError implementation
 // — appends a permanent "-!- storage: ..." system row to
 // State.Messages on the FIRST failure of a session, drops every

@@ -77,16 +77,19 @@ func (n *NodeItem) CurrentState() NodeState {
 }
 
 // MessageItem embeds Message (the wire/persisted shape) and adds
-// runtime overlay fields. Style is renderer-only (any so this
-// package stays free of rendering deps) and PinnedRemaining is a
-// TUI-only timer; both are redacted from the API.
+// runtime overlay fields. Group / ExpireAt / Pinned / PinnedRemaining
+// / Style are TUI-only state — daemon and remote clients have no
+// use for them, so all five are redacted from the wire shape via
+// `json:"-"`. Style is `any` because the noticeStyle type lives in
+// the TUI package; encoding it as a typed slot here would invert
+// the package dependency.
 type MessageItem struct {
 	Message
 
 	Acks            string        `json:"acks,omitempty"      doc:"child line ('↳ 3 acks — ...') under outgoing messages"`
-	Group           uint64        `json:"group,omitempty"     doc:"binds rows as one logical block for multi-line replies"`
+	Group           uint64        `json:"-"`
 	Style           any           `json:"-"`
-	ExpireAt        *time.Time    `json:"expire_at,omitempty" doc:"reap deadline for TTL-expiring notices"`
-	Pinned          bool          `json:"pinned,omitempty"    doc:"user paused this row's TTL"`
+	ExpireAt        *time.Time    `json:"-"`
+	Pinned          bool          `json:"-"`
 	PinnedRemaining time.Duration `json:"-"`
 }

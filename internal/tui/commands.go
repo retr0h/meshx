@@ -638,9 +638,7 @@ func (m *model) commitConfigDraft() int {
 		if !m.cfgDraft.buzzer {
 			v = "off"
 		}
-		if st := m.driver.StoreHandle(); st != nil {
-			m.storagePersist(st.PutSetting(m.RadioID, "radio_buzzer", v))
-		}
+		m.driver.PutSetting(m.RadioID, "radio_buzzer", v)
 		changes++
 	}
 	if changes == 0 {
@@ -1602,9 +1600,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// ding_muted is a meshx-CLIENT preference (terminal beep), not
 		// a per-radio knob — pass "" for radioID so it lives once
 		// globally rather than once per radio in the settings table.
-		if st := m.driver.StoreHandle(); st != nil {
-			m.storagePersist(st.PutSetting("", "ding_muted", v))
-		}
+		m.driver.PutSetting("", "ding_muted", v)
 		if m.DingMuted {
 			m.flash = "/mute on — terminal ding silenced"
 			m.systemLine("ding muted — terminal won't beep on incoming text")

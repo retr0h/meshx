@@ -96,4 +96,14 @@ type radioDriver interface {
 	// SSE clients see the outbound row in lockstep with the daemon's
 	// State.Messages append.
 	RecordOutbound(opts driver.RecordOutboundOptions) driver.ApplyTextResult
+
+	// PutSetting persists a key/value pref through the Store. Failures
+	// surface via the driver's OnStoreError callback (default
+	// AlertStorageError appends a permanent system row). Used for
+	// /mute (ding_muted) and /config buzzer toggles.
+	PutSetting(radioID, key, value string)
+
+	// SaveNodePrefs persists a peer's favorite / muted toggle through
+	// the Store. Failures surface via OnStoreError.
+	SaveNodePrefs(radioID string, nodeNum uint32, favorite, muted bool)
 }

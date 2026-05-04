@@ -656,11 +656,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			)
 		})
 		if persistNum != 0 {
-			if st := m.driver.StoreHandle(); st != nil {
-				m.storagePersist(
-					st.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute),
-				)
-			}
+			m.driver.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute)
 		}
 	case "m":
 		var persistNum uint32
@@ -678,11 +674,7 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			persistMute = n.State == stateMuted
 		})
 		if persistNum != 0 {
-			if st := m.driver.StoreHandle(); st != nil {
-				m.storagePersist(
-					st.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute),
-				)
-			}
+			m.driver.SaveNodePrefs(m.RadioID, persistNum, persistFav, persistMute)
 		}
 	case "s":
 		if m.focused == paneNodes {

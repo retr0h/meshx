@@ -933,9 +933,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.RadioBuzzerEnabled {
 			v = "on"
 		}
-		if st := m.driver.StoreHandle(); st != nil {
-			m.storagePersist(st.PutSetting(m.RadioID, "radio_buzzer", v))
-		}
+		m.driver.PutSetting(m.RadioID, "radio_buzzer", v)
 		return m, nil
 
 	case tracerouteTimeoutMsg:

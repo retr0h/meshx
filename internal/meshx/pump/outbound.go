@@ -29,7 +29,7 @@ package pump
 import (
 	"errors"
 	"fmt"
-	mathrand "math/rand"
+	"math/rand/v2"
 
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 	"google.golang.org/protobuf/proto"
@@ -93,7 +93,7 @@ func (p *Pump) Send(cmd model.Command) (uint32, bool) {
 		return 0, p.enqueue(envelope)
 
 	case model.RequestSync:
-		nonce := mathrand.Uint32()
+		nonce := rand.Uint32()
 		if nonce == 0 {
 			nonce = 1
 		}
@@ -136,7 +136,7 @@ func (p *Pump) enqueue(envelope *pb.ToRadio) bool {
 // "unassigned") so we re-roll on the unlikely collision.
 func randPacketID() uint32 {
 	for {
-		pid := mathrand.Uint32()
+		pid := rand.Uint32()
 		if pid != 0 {
 			return pid
 		}

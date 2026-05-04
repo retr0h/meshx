@@ -88,10 +88,10 @@ type Message struct {
 	Status    MessageStatus `json:"status"              doc:"ok | ack | pending | fail | system | notice"`
 	Hops      int           `json:"hops"                doc:"mesh hop count; 0 = direct"`
 	SNR       string        `json:"snr,omitempty"       doc:"signal-to-noise ratio at receive"`
-	PacketID  uint32        `json:"packet_id"           doc:"MeshPacket.id; 0 for system / demo rows"            format:"int64" minimum:"0"`
-	ReplyID   uint32        `json:"reply_id,omitempty"  doc:"PacketID this message answers"                      format:"int64" minimum:"0"`
-	FromNum   uint32        `json:"from_num"            doc:"sender node num"                                    format:"int64" minimum:"0"`
-	ToNum     uint32        `json:"to_num"              doc:"addressee node num; 0xFFFFFFFF = broadcast"         format:"int64" minimum:"0"`
+	PacketID  uint32        `json:"packet_id"           doc:"MeshPacket.id; 0 for system / demo rows"     format:"int64" minimum:"0"`
+	ReplyID   uint32        `json:"reply_id,omitempty"  doc:"PacketID this message answers"               format:"int64" minimum:"0"`
+	FromNum   uint32        `json:"from_num"            doc:"sender node num"                             format:"int64" minimum:"0"`
+	ToNum     uint32        `json:"to_num"              doc:"addressee node num; 0xFFFFFFFF = broadcast"  format:"int64" minimum:"0"`
 	SentAt    time.Time     `json:"sent_at"             doc:"absolute time of receive / persist"`
 	Corrupted bool          `json:"corrupted,omitempty" doc:"sanitization replaced/dropped bytes"`
 }

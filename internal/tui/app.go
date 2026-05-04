@@ -22,7 +22,6 @@ package tui
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -646,28 +645,24 @@ func hydrateLocalSession(drv *driver.Driver, dest string) []string {
 	var store driver.Store = sqliteStore
 	drv.AttachStore(store)
 
-	// Bind this session to a radio identity before any storage call
-	// references radioID. ResolveRadioByConnection returns the
-	// canonical "0xNNNNNNNN" for radios we've handshaken with before;
-	// otherwise a "pending:<transport>:<addr>" placeholder that the
-	// mdl.MyInfo handler swaps out via ClaimRadioIdentity post-
-	// handshake.
-	transport, addr := storage.ParseRadioDest(dest)
-	if rid, err := store.ResolveRadioByConnection(transport, addr); err == nil {
-		drv.State.RadioID = rid
-		// Pre-populate MyNodeNum from the canonical radio_id
-		// ("0xNNNNNNNN") so splash + status bar render the user's
-		// own callsign immediately on launch instead of "as —" until
-		// MyInfo arrives. mdl.MyInfo handler still re-confirms via
-		// ClaimRadioIdentity once handshake completes.
-		if n, err := strconv.ParseUint(strings.TrimPrefix(rid, "0x"), 16, 32); err == nil {
-			drv.State.MyNodeNum = uint32(n)
-		}
-	}
+	// Identity + NodeDB + history + ghost-peer + last-heard backfill
+	// all flow through Driver.HydrateFromStore so the daemon and the
+	// local TUI use one implementation. Sanitization is the only
+	// TUI-side concern that rides along — daemon stores raw bytes,
+	// TUI scrubs on read so historic rows from before the sanitizer
+	// landed pick up the ⚠ marker.
+	res := drv.HydrateFromStore(driver.HydrationOptions{
+		Dest:                     dest,
+		SanitizeText:             sanitizeMessageText,
+		ResolveRadioByConnection: store.ResolveRadioByConnection,
+		ParseRadioDest:           storage.ParseRadioDest,
+	})
 
 	// Persisted prefs hydration — /mute (terminal ding, global) and
 	// /config's per-radio buzzer state. Both default "on"; missing
-	// rows leave the model defaults intact.
+	// rows leave the model defaults intact. Lives in the TUI rather
+	// than HydrateFromStore because these are presentation prefs the
+	// daemon doesn't need to read.
 	if v, ok := store.GetSetting("", "ding_muted"); ok {
 		drv.State.DingMuted = v == "on"
 	}
@@ -675,106 +670,19 @@ func hydrateLocalSession(drv *driver.Driver, dest string) []string {
 		drv.State.RadioBuzzerEnabled = v != "off"
 	}
 
-	// NodeDB cache — every peer we've ever resolved a real User for
-	// is loaded FIRST so ghost replay below can skip them and live
-	// telemetry has a row to upsert against. mdl.NodeItemFromCached
-	// is the shared projection both this hydration and the daemon's
-	// equivalent in cmd/server_start.go consume.
-	if cached, err := store.LoadNodes(drv.State.RadioID); err == nil {
-		for _, n := range cached {
-			state := mdl.StateOffline
-			if n.Muted {
-				state = mdl.StateMuted
-			}
-			drv.State.NodesByNum[n.NodeNum] = len(drv.State.Nodes)
-			drv.State.Nodes = append(drv.State.Nodes, mdl.NodeItemFromCached(n, state))
-		}
-	}
-
-	// Stale-pending sweep BEFORE replay so any outbound row stuck
-	// "pending" past the cutoff renders as ✗ and `R` resends.
-	expired, _ := store.ExpireStalePendingMessages(drv.State.RadioID, 5*time.Minute)
-
-	if pastModels, err := store.LoadMessages(drv.State.RadioID, "", 500); err == nil {
-		baseIdx := len(drv.State.Messages)
-		past := make([]mdl.MessageItem, 0, len(pastModels))
-		for _, mm := range pastModels {
-			// sanitizeMessageText runs on read so historic rows
-			// written before sanitization landed pick up the ⚠
-			// marker + dim styling on next launch.
-			mm.Text, mm.Corrupted = sanitizeMessageText(mm.Text)
-			past = append(past, mdl.MessageItem{Message: mm})
-		}
-		drv.State.Messages = append(drv.State.Messages, past...)
-		// Seed MessagesByPacketID so applyText can dedupe radio
-		// RAM-queue replays. PacketID==0 entries (system rows) skip.
-		for i, msg := range past {
-			if msg.PacketID == 0 {
-				continue
-			}
-			drv.State.MessagesByPacketID[msg.PacketID] = baseIdx + i
-		}
-		// Ghost-peer replay — historical senders not in NodesByNum
-		// get a synthesized firmware-default entry so /whois /cqr
-		// /rs /ping target them by shortname/hex without waiting
-		// for a fresh live packet.
-		for _, msg := range past {
-			if msg.FromNum == 0 {
-				continue
-			}
-			if _, ok := drv.State.NodesByNum[msg.FromNum]; ok {
-				continue
-			}
-			long, short := mdl.DefaultCallsign(msg.FromNum)
-			drv.State.Nodes = append(drv.State.Nodes, mdl.NodeItem{
-				Callsign:   long,
-				ShortName:  short,
-				NodeNum:    msg.FromNum,
-				Unresolved: true,
-				State:      mdl.StateOffline,
-				LastHeard:  msg.Time,
-				LastSNR:    msg.SNR,
-				LastHops:   msg.Hops,
-			})
-			drv.State.NodesByNum[msg.FromNum] = len(drv.State.Nodes) - 1
-		}
-	}
-
-	// Backfill last-heard from message history so a peer whose
-	// NodeInfo we have but whose chat row is more recent shows the
-	// freshest activity timestamp.
-	touched := map[uint32]struct{}{}
-	for _, past := range drv.State.Messages {
-		if past.FromNum == 0 || past.SentAt.IsZero() {
-			continue
-		}
-		idx, ok := drv.State.NodesByNum[past.FromNum]
-		if !ok {
-			continue
-		}
-		if past.SentAt.After(drv.State.Nodes[idx].LastHeardAt) {
-			drv.State.Nodes[idx].LastHeardAt = past.SentAt
-			drv.State.Nodes[idx].LastHops = past.Hops
-			if past.SNR != "" {
-				drv.State.Nodes[idx].LastSNR = past.SNR
-			}
-			touched[past.FromNum] = struct{}{}
-		}
-	}
-	backfilled := len(touched)
-
-	for _, n := range store.ConsumeBootNotes() {
+	for _, n := range res.BootNotes {
 		notices = append(notices, "storage: "+n)
 	}
-	if backfilled > 0 {
+	if res.LastHeardBackfilled > 0 {
 		notices = append(notices, fmt.Sprintf(
-			"nodes: backfilled %d peer recency from message history", backfilled,
+			"nodes: backfilled %d peer recency from message history",
+			res.LastHeardBackfilled,
 		))
 	}
-	if expired > 0 {
+	if res.StalePendingExpired > 0 {
 		notices = append(notices, fmt.Sprintf(
 			"messages: %d stale pending row(s) marked as failed — press R to resend",
-			expired,
+			res.StalePendingExpired,
 		))
 	}
 	return notices

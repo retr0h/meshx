@@ -31,7 +31,6 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/retr0h/meshx/internal/driver"
-	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
 	"github.com/retr0h/meshx/internal/meshx/storage"
 	"github.com/retr0h/meshx/internal/server"
@@ -111,21 +110,6 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 	store, scanner, pairer, usbScan := serverDepsWithStore(concreteStore)
 
 	if radio != "" {
-		// Resolve the canonical radio_id from the SQLite cache when
-		// we've handshaken with this radio before — that way the
-		// /radios listing surfaces "0xNNNNNNNN" immediately instead
-		// of "pending:..." until MyInfo arrives. Falls back to the
-		// pending placeholder otherwise (the ApplyMyInfo path
-		// rewrites it atomically once handshake completes).
-		transport, addr := storage.ParseRadioDest(radio)
-		radioID := "pending:" + radio
-		if concreteStore != nil {
-			if rid, err := concreteStore.ResolveRadioByConnection(transport, addr); err == nil &&
-				rid != "" {
-				radioID = rid
-			}
-		}
-
 		// driver.Store is satisfied by *storage.Sqlite. nil is OK —
 		// driver.New + every Apply* method nil-checks before calling
 		// store methods, so a no-storage daemon still drives State
@@ -136,46 +120,36 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		}
 		drv := driver.New(nil, nil, drvStore)
 		drv.State.ConnectDest = radio
-		drv.State.RadioID = radioID
+		drv.State.RadioID = "pending:" + radio
 
-		// Replay persisted history from SQLite so /messages and
-		// /nodes return non-empty results to remote clients
-		// immediately — same pattern the local TUI's newModel uses.
-		// Errors surface as warnings; an empty State is acceptable
-		// (clients still see live traffic once the radio handshakes).
+		// Replay persisted history (identity + NodeDB + messages +
+		// ghost-peer + last-heard backfill + stale-pending sweep)
+		// through the same Driver.HydrateFromStore the local TUI
+		// uses. Sanitize is nil — daemon stores raw bytes; remote
+		// clients see whatever the radio actually sent.
+		var hyd driver.HydrationResult
 		if concreteStore != nil {
-			if past, err := concreteStore.LoadMessages(radioID, "", 500); err == nil {
-				for _, mm := range past {
-					item := mdl.MessageItem{Message: mm}
-					drv.State.Messages = append(drv.State.Messages, item)
-					if mm.PacketID > 0 {
-						drv.State.MessagesByPacketID[mm.PacketID] = len(drv.State.Messages) - 1
-					}
-				}
-			} else {
-				log.Warn("storage replay (messages) failed", slog.Any("error", err))
-			}
-			if cached, err := concreteStore.LoadNodes(radioID); err == nil {
-				for _, n := range cached {
-					state := mdl.StateOffline
-					if n.Muted {
-						state = mdl.StateMuted
-					}
-					drv.State.NodesByNum[n.NodeNum] = len(drv.State.Nodes)
-					drv.State.Nodes = append(drv.State.Nodes, mdl.NodeItemFromCached(n, state))
-				}
-			} else {
-				log.Warn("storage replay (nodes) failed", slog.Any("error", err))
-			}
+			hyd = drv.HydrateFromStore(driver.HydrationOptions{
+				Dest:                     radio,
+				ResolveRadioByConnection: concreteStore.ResolveRadioByConnection,
+				ParseRadioDest:           storage.ParseRadioDest,
+			})
 		}
+		radioID := drv.State.RadioID
 
 		radios.Add(radioID, drv)
 		log.Info("radio registered",
 			slog.String("radio_id", radioID),
 			slog.String("dest", radio),
-			slog.Int("history_messages", len(drv.State.Messages)),
-			slog.Int("history_nodes", len(drv.State.Nodes)),
+			slog.Int("history_messages", hyd.MessagesLoaded),
+			slog.Int("history_nodes", hyd.NodesLoaded),
+			slog.Int("ghost_peers", hyd.GhostsCreated),
+			slog.Int("backfilled", hyd.LastHeardBackfilled),
+			slog.Int("stale_pending_expired", hyd.StalePendingExpired),
 		)
+		for _, n := range hyd.BootNotes {
+			log.Info("storage", slog.String("note", n))
+		}
 
 		// Spawn the pump — same backoff + reconnect engine the local
 		// TUI uses, but the sink dispatches every translated event to

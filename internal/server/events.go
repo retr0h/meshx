@@ -40,13 +40,23 @@ import (
 // JSON) can swap in without changing call sites — just update the map
 // to register a single envelope type.
 var eventsTypeMap = map[string]any{
-	driver.EventText:        mdl.Text{},
-	driver.EventNodeInfo:    mdl.NodeInfo{},
-	driver.EventChannelInfo: mdl.ChannelInfo{},
-	driver.EventPosition:    mdl.Position{},
-	driver.EventRouting:     mdl.Routing{},
-	driver.EventTraceroute:  mdl.Traceroute{},
-	driver.EventPing:        mdl.Ping{},
+	driver.EventText:           mdl.Text{},
+	driver.EventNodeInfo:       mdl.NodeInfo{},
+	driver.EventChannelInfo:    mdl.ChannelInfo{},
+	driver.EventPosition:       mdl.Position{},
+	driver.EventRouting:        mdl.Routing{},
+	driver.EventTraceroute:     mdl.Traceroute{},
+	driver.EventPing:           mdl.Ping{},
+	driver.EventMyInfo:         mdl.MyInfo{},
+	driver.EventMetadata:       mdl.Metadata{},
+	driver.EventDeviceMetrics:  mdl.DeviceMetrics{},
+	driver.EventEnvMetrics:     mdl.EnvMetrics{},
+	driver.EventLoRaConfig:     mdl.LoraConfig{},
+	driver.EventDeviceConfig:   mdl.DeviceConfig{},
+	driver.EventConfigComplete: mdl.ConfigComplete{},
+	driver.EventReconnecting:   mdl.Reconnecting{},
+	driver.EventDisconnected:   mdl.Disconnected{},
+	driver.EventTransportError: mdl.TransportError{},
 }
 
 // handleEvents subscribes to the resolved Driver's event stream and

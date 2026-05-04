@@ -468,6 +468,18 @@ func newRemoteModel(r *sdk.Remote) model {
 	}
 }
 
+// teaProgramSink wraps *tea.Program to satisfy pump.Sink. tea.Msg is
+// `any` and Send's bodies are identical, but Go's structural typing
+// requires exact signature match — Send(tea.Msg) and Send(any) are
+// distinct method sets even though the parameter types collapse to
+// the same interface{}.
+type teaProgramSink struct{ p *tea.Program }
+
+// Send forwards an event into the running tea program. Called from
+// the pump goroutine; tea.Program.Send is documented as goroutine-
+// safe (it pushes onto an internal channel the runtime drains).
+func (s teaProgramSink) Send(msg any) { s.p.Send(msg) }
+
 // programSlot is a hand-off type that lets the model surface the
 // running *tea.Program to Update without resorting to package-level
 // state. RunRadio creates one, hands its address to the model before
@@ -905,8 +917,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Concrete *pump.Pump cast to the Pump interface at the
 		// construction site (osapi-io). The compile-time assertion
 		// here catches any drift the moment the interface gains a
-		// method *pump.Pump doesn't implement.
-		var p driver.Pump = pump.New(msg.dest, m.programSlot.p)
+		// method *pump.Pump doesn't implement. The Sink wrapper
+		// adapts *tea.Program (whose Send takes tea.Msg) to
+		// pump.Sink (whose Send takes any) — same underlying type,
+		// different signature, so Go's structural typing needs the
+		// trampoline.
+		var p driver.Pump = pump.New(msg.dest, teaProgramSink{p: m.programSlot.p})
 		m.driver.AttachPump(p)
 		return m, nil
 

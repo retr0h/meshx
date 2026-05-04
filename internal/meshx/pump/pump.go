@@ -46,12 +46,22 @@ import (
 	"os"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 
 	"github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/transport"
 )
+
+// Sink is the consumer of every event the pump emits — translated
+// FromRadio packets (mdl.Text, mdl.NodeInfo, …), reconnect status
+// (mdl.Reconnecting, mdl.Disconnected), and transport errors. One
+// method, Send(any), so both bubbletea (tea.Program.Send takes
+// tea.Msg = any) and the daemon's apply-dispatch shim satisfy it
+// structurally without an adapter. The pump treats every value as
+// opaque — Send IS the publish boundary.
+type Sink interface {
+	Send(msg any)
+}
 
 // Reconnect policy: truncated exponential backoff with no jitter,
 // retried indefinitely. Schedule is 1s,2s,4s,8s,16s,30s,30s,30s,…
@@ -84,10 +94,10 @@ func reconnectBackoff(attempt int) time.Duration {
 	return d
 }
 
-// Pump is the running transport ↔ tea bridge.
+// Pump is the running transport ↔ Sink bridge.
 type Pump struct {
-	client  Transport
-	program *tea.Program
+	client Transport
+	sink   Sink
 
 	// Destination string from the original Dial — re-used by the
 	// reconnect loop. Stash it so the pump doesn't need to plumb the
@@ -109,10 +119,15 @@ type Pump struct {
 
 // New spins up a pump goroutine and returns the handle immediately.
 // Dialing happens inside the goroutine — that way an 8-second BLE
-// scan at startup doesn't block the tea Update loop, and a doomed
-// dest (radio off, bad UUID) flows through the same indefinite-retry
-// path as a mid-session drop. Call p.Stop() to tear down.
-func New(dest string, program *tea.Program) *Pump {
+// scan at startup doesn't block the consumer's main loop, and a
+// doomed dest (radio off, bad UUID) flows through the same
+// indefinite-retry path as a mid-session drop. Call p.Stop() to
+// tear down.
+//
+// sink is the destination for every translated event — bubbletea's
+// *tea.Program (whose Send takes tea.Msg = any) satisfies Sink
+// structurally; the daemon hands a Driver-backed dispatch shim.
+func New(dest string, sink Sink) *Pump {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	p := &Pump{
@@ -120,7 +135,7 @@ func New(dest string, program *tea.Program) *Pump {
 		// == nil" branch performs the first dial. That keeps initial
 		// connect and reconnect on the same code path.
 		client:   nil,
-		program:  program,
+		sink:     sink,
 		dest:     dest,
 		outbound: make(chan *pb.ToRadio, 16),
 		cancel:   cancel,
@@ -224,7 +239,7 @@ func (p *Pump) run(ctx context.Context) {
 				// Don't auto-redial; the user probably did this on
 				// purpose and the pump goroutine should exit.
 				dbgf("clean disconnect — not retrying")
-				p.program.Send(model.Disconnected{})
+				p.sink.Send(model.Disconnected{})
 				return
 			}
 			sessErr = err
@@ -236,7 +251,7 @@ func (p *Pump) run(ctx context.Context) {
 		attempt++
 		backoff := reconnectBackoff(attempt)
 		dbgf("retry %d in %s after: %v", attempt, backoff, sessErr)
-		p.program.Send(model.Reconnecting{
+		p.sink.Send(model.Reconnecting{
 			Attempt: attempt,
 			After:   backoff,
 			Err:     sessErr,
@@ -306,8 +321,8 @@ func (p *Pump) runSession(
 				continue
 			}
 			for _, tm := range tms {
-				dbgf("[%d] sending %T to tea", totalIn, tm)
-				p.program.Send(tm)
+				dbgf("[%d] sending %T to sink", totalIn, tm)
+				p.sink.Send(tm)
 			}
 		}
 	}

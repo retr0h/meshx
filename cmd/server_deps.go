@@ -41,11 +41,19 @@ import (
 // through this — those subcommands call the transport + storage
 // packages directly through their own narrow consumer interfaces.
 // This function exists only for `meshx server start`.
-func serverDeps(
-	cmd *cobra.Command,
-	log *slog.Logger,
+// serverDepsWithStore lets the caller
+// pre-open the concrete *storage.Sqlite when it needs both the
+// narrow server.Store surface AND the wider driver.Store surface
+// (the daemon's pump path needs ClaimRadioIdentity / SaveMessage,
+// which aren't part of server.Store). server_start.go uses this so
+// it doesn't open the SQLite handle twice.
+func serverDepsWithStore(
+	s *storage.Sqlite,
 ) (server.Store, server.BLEScanner, server.BLEPairer, server.USBScanner) {
-	store := openStore(cmd, log)
+	var store server.Store
+	if s != nil {
+		store = s
+	}
 	return store, daemonBLEScanner{}, daemonBLEPairer{}, daemonUSBScanner{}
 }
 

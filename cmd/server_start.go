@@ -31,6 +31,8 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/retr0h/meshx/internal/driver"
+	"github.com/retr0h/meshx/internal/meshx/pump"
+	"github.com/retr0h/meshx/internal/meshx/storage"
 	"github.com/retr0h/meshx/internal/server"
 )
 
@@ -98,19 +100,60 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 
 	radios := server.NewRegistry()
 
+	// Open the concrete *storage.Sqlite once; it satisfies both
+	// server.Store (HTTP read paths) and driver.Store (apply* +
+	// identity claim). serverDeps lifts it through the narrower
+	// server.Store interface for the daemon's Config; we hand the
+	// concrete value to driver.New so ApplyMyInfo can claim
+	// identity and ApplyText can persist messages.
+	concreteStore := openStore(cmd, log)
+	store, scanner, pairer, usbScan := serverDepsWithStore(concreteStore)
+
 	if radio != "" {
-		drv := driver.New(nil, nil, nil)
-		pendingID := "pending:" + radio
+		// Resolve the canonical radio_id from the SQLite cache when
+		// we've handshaken with this radio before — that way the
+		// /radios listing surfaces "0xNNNNNNNN" immediately instead
+		// of "pending:..." until MyInfo arrives. Falls back to the
+		// pending placeholder otherwise (the ApplyMyInfo path
+		// rewrites it atomically once handshake completes).
+		transport, addr := storage.ParseRadioDest(radio)
+		radioID := "pending:" + radio
+		if concreteStore != nil {
+			if rid, err := concreteStore.ResolveRadioByConnection(transport, addr); err == nil &&
+				rid != "" {
+				radioID = rid
+			}
+		}
+
+		// driver.Store is satisfied by *storage.Sqlite. nil is OK —
+		// driver.New + every Apply* method nil-checks before calling
+		// store methods, so a no-storage daemon still drives State
+		// (just without persistence + identity claim).
+		var drvStore driver.Store
+		if concreteStore != nil {
+			drvStore = concreteStore
+		}
+		drv := driver.New(nil, nil, drvStore)
 		drv.State.ConnectDest = radio
-		drv.State.RadioID = pendingID
-		radios.Add(pendingID, drv)
-		log.Info("radio registered (transport attach pending)",
-			slog.String("radio_id", pendingID),
+		drv.State.RadioID = radioID
+		radios.Add(radioID, drv)
+		log.Info("radio registered",
+			slog.String("radio_id", radioID),
 			slog.String("dest", radio),
 		)
+
+		// Spawn the pump — same backoff + reconnect engine the local
+		// TUI uses, but the sink dispatches every translated event to
+		// driver.Apply* methods that mutate State, persist via Store,
+		// and publish over SSE. The Registry rekey on identity claim
+		// (pending:... → 0xNNNNNNNN) is handled inside the sink so
+		// /radios reflects the canonical id the moment MyInfo lands.
+		sink := &daemonSink{drv: drv, registry: radios, log: log}
+		var p driver.Pump = pump.New(radio, sink)
+		drv.AttachPump(p)
+		defer drv.Stop()
 	}
 
-	store, scanner, pairer, usbScan := serverDeps(cmd, log)
 	var srv daemonRunner = server.New(server.Config{
 		Radios:     radios,
 		Store:      store,

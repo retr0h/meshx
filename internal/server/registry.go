@@ -87,6 +87,24 @@ func (r *Registry) Get(radioID string) (Driver, bool) {
 	return d, ok
 }
 
+// Rekey atomically replaces an old radio_id with a new one, pointing
+// at the same Driver. Used by the daemon when ApplyMyInfo claims the
+// canonical "0xNNNNNNNN" identity and the original key was a pending
+// placeholder. Idempotent — if oldID isn't registered, Add(newID, d)
+// is the entire effect; if oldID == newID, no-op.
+func (r *Registry) Rekey(oldID, newID string, d Driver) {
+	if r == nil || d == nil || newID == "" || oldID == newID {
+		if r != nil && d != nil && newID != "" {
+			r.Add(newID, d)
+		}
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.drivers, oldID)
+	r.drivers[newID] = d
+}
+
 // IDs returns all registered radio ids, sorted is NOT guaranteed —
 // handlers that need stable order should sort the returned slice.
 // Returned slice is a copy; safe to iterate without holding the

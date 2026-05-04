@@ -323,13 +323,6 @@ components:
           type: string
         status:
           description: ok | ack | pending | fail | system | notice
-          enum:
-            - ""
-            - ack
-            - pending
-            - fail
-            - system
-            - notice
           type: string
         text:
           description: message body, post-sanitization
@@ -412,13 +405,6 @@ components:
           type: string
         status:
           description: ok | ack | pending | fail | system | notice
-          enum:
-            - ""
-            - ack
-            - pending
-            - fail
-            - system
-            - notice
           type: string
         text:
           description: message body, post-sanitization
@@ -522,8 +508,7 @@ components:
           type: string
         state:
           description: online | offline | failed | muted | (empty for unknown)
-          format: int64
-          type: integer
+          type: string
         unresolved:
           description: identity is a synthesized placeholder; no NodeInfo yet
           type: boolean

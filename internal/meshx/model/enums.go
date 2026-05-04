@@ -99,78 +99,35 @@ const (
 )
 
 // NodeState is the displayed state of a peer in the nodes pane —
-// online / offline / failed / muted. Lives in model/ because the
-// daemon emits it over HTTP+SSE to remote clients (it's part of the
-// API surface), even though it's never persisted in SQLite. The
-// canonical derivation (LastHeardAt → Online/Offline, with Muted as
-// a sticky override) lives on the server side; clients just render
-// whatever the API returns.
-type NodeState int
+// online / offline / failed / muted. String-typed so the wire / Go /
+// switch-arm forms are all the same value (canonical Go enum
+// pattern). Generated clients in every language emit a proper typed
+// enum from the OpenAPI schema. Lives in model/ because the daemon
+// emits it over HTTP+SSE to remote clients (part of the API surface)
+// even though it's never persisted to SQLite. The canonical
+// derivation (LastHeardAt → Online/Offline, with Muted as a sticky
+// override) lives on the server side; clients render whatever the
+// API returns.
+type NodeState string
 
 const (
 	// StateUnknown — never heard from this peer (LastHeardAt zero, no
-	// fixture seed). Stringifies to "" so display printf("%s") gets
-	// nothing visible for a never-heard peer instead of a literal
-	// "unknown" leaking into the UI.
-	StateUnknown NodeState = iota
+	// fixture seed). Empty string so display printf("%s") gets nothing
+	// visible for a never-heard peer instead of a literal "unknown"
+	// leaking into the UI.
+	StateUnknown NodeState = ""
 	// StateOnline — heard from in the last 15 minutes.
-	StateOnline
+	StateOnline NodeState = "online"
 	// StateOffline — known peer we haven't heard from recently.
-	StateOffline
+	StateOffline NodeState = "offline"
 	// StateFailed — peer we've actively failed to reach (currently
 	// only set by /tr / /ping timeout flows).
-	StateFailed
+	StateFailed NodeState = "failed"
 	// StateMuted — user-sticky preference (the `m` nav key flips
 	// this). Always wins over the LastHeardAt-derived states; persists
 	// across restarts via the nodes.muted column.
-	StateMuted
+	StateMuted NodeState = "muted"
 )
-
-// String returns the human/wire form. StateUnknown → "" by design.
-func (s NodeState) String() string {
-	switch s {
-	case StateOnline:
-		return "online"
-	case StateOffline:
-		return "offline"
-	case StateFailed:
-		return "failed"
-	case StateMuted:
-		return "muted"
-	default:
-		return ""
-	}
-}
-
-// MarshalJSON emits the string form so HTTP API responses carry
-// "online" / "offline" rather than opaque integer values. Generated
-// clients pattern-match on the string. The returned bytes always
-// stay valid JSON: empty-string for StateUnknown becomes "" not null.
-func (s NodeState) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + s.String() + `"`), nil
-}
-
-// UnmarshalJSON is the inverse — needed for clients of this type
-// that round-trip JSON back into a NodeState.
-func (s *NodeState) UnmarshalJSON(data []byte) error {
-	v := string(data)
-	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
-		v = v[1 : len(v)-1]
-	}
-	switch v {
-	case "online":
-		*s = StateOnline
-	case "offline":
-		*s = StateOffline
-	case "failed":
-		*s = StateFailed
-	case "muted":
-		*s = StateMuted
-	default:
-		*s = StateUnknown
-	}
-	return nil
-}
 
 // RoutingError is Routing.error_reason — the firmware's verdict on
 // an outbound packet. RoutingNone means delivered.

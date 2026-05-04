@@ -17,66 +17,6 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
-// Defines values for MessageStatus.
-const (
-	MessageStatusAck     MessageStatus = "ack"
-	MessageStatusEmpty   MessageStatus = ""
-	MessageStatusFail    MessageStatus = "fail"
-	MessageStatusNotice  MessageStatus = "notice"
-	MessageStatusPending MessageStatus = "pending"
-	MessageStatusSystem  MessageStatus = "system"
-)
-
-// Valid indicates whether the value is a known member of the MessageStatus enum.
-func (e MessageStatus) Valid() bool {
-	switch e {
-	case MessageStatusAck:
-		return true
-	case MessageStatusEmpty:
-		return true
-	case MessageStatusFail:
-		return true
-	case MessageStatusNotice:
-		return true
-	case MessageStatusPending:
-		return true
-	case MessageStatusSystem:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for MessageItemStatus.
-const (
-	MessageItemStatusAck     MessageItemStatus = "ack"
-	MessageItemStatusEmpty   MessageItemStatus = ""
-	MessageItemStatusFail    MessageItemStatus = "fail"
-	MessageItemStatusNotice  MessageItemStatus = "notice"
-	MessageItemStatusPending MessageItemStatus = "pending"
-	MessageItemStatusSystem  MessageItemStatus = "system"
-)
-
-// Valid indicates whether the value is a known member of the MessageItemStatus enum.
-func (e MessageItemStatus) Valid() bool {
-	switch e {
-	case MessageItemStatusAck:
-		return true
-	case MessageItemStatusEmpty:
-		return true
-	case MessageItemStatusFail:
-		return true
-	case MessageItemStatusNotice:
-		return true
-	case MessageItemStatusPending:
-		return true
-	case MessageItemStatusSystem:
-		return true
-	default:
-		return false
-	}
-}
-
 // AutoUSBInputBody defines model for AutoUSBInputBody.
 type AutoUSBInputBody struct {
 	// Schema A URL to the JSON Schema for this object.
@@ -262,7 +202,7 @@ type Message struct {
 	Snr *string `json:"snr,omitempty"`
 
 	// Status ok | ack | pending | fail | system | notice
-	Status MessageStatus `json:"status"`
+	Status string `json:"status"`
 
 	// Text message body, post-sanitization
 	Text string `json:"text"`
@@ -273,9 +213,6 @@ type Message struct {
 	// ToNum addressee node num; 0xFFFFFFFF = broadcast
 	ToNum int32 `json:"to_num"`
 }
-
-// MessageStatus ok | ack | pending | fail | system | notice
-type MessageStatus string
 
 // MessageItem defines model for MessageItem.
 type MessageItem struct {
@@ -322,7 +259,7 @@ type MessageItem struct {
 	Snr *string `json:"snr,omitempty"`
 
 	// Status ok | ack | pending | fail | system | notice
-	Status MessageItemStatus `json:"status"`
+	Status string `json:"status"`
 
 	// Text message body, post-sanitization
 	Text string `json:"text"`
@@ -333,9 +270,6 @@ type MessageItem struct {
 	// ToNum addressee node num; 0xFFFFFFFF = broadcast
 	ToNum int32 `json:"to_num"`
 }
-
-// MessageItemStatus ok | ack | pending | fail | system | notice
-type MessageItemStatus string
 
 // NodeInfo defines model for NodeInfo.
 type NodeInfo struct {
@@ -388,7 +322,7 @@ type NodeItem struct {
 	ShortName string `json:"short_name"`
 
 	// State online | offline | failed | muted | (empty for unknown)
-	State int64 `json:"state"`
+	State string `json:"state"`
 
 	// Unresolved identity is a synthesized placeholder; no NodeInfo yet
 	Unresolved bool `json:"unresolved"`

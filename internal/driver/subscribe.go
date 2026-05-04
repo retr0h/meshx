@@ -108,9 +108,6 @@ func (d *Driver) Subscribe(ctx context.Context) <-chan Event {
 // migrate onto Driver in the apply* relocation MR, the call sites
 // move with them.
 func (d *Driver) Publish(ev Event) {
-	if d == nil {
-		return
-	}
 	d.subMu.RLock()
 	defer d.subMu.RUnlock()
 	for _, ch := range d.subs {

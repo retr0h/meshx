@@ -121,6 +121,13 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		drv := driver.New(nil, nil, drvStore)
 		drv.State.ConnectDest = radio
 		drv.State.RadioID = "pending:" + radio
+		// Daemon surfaces persistence failures via slog rather than a
+		// State.Messages row — remote clients can spot the slog line
+		// in the daemon's log; injecting a system row would conflict
+		// with the live SSE event stream.
+		drv.OnStoreError = func(err error) {
+			log.Warn("storage", slog.Any("error", err))
+		}
 
 		// Replay persisted history (identity + NodeDB + messages +
 		// ghost-peer + last-heard backfill + stale-pending sweep)

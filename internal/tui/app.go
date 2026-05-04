@@ -387,6 +387,11 @@ func RunRadio(dest string) error {
 	sess.ConnectDest = dest
 	sess.RadioBuzzerEnabled = true
 	drv := driver.New(sess, nil, nil)
+	// Surface the first persistence failure of the session as a
+	// permanent "-!- storage: ..." row in the messages pane;
+	// subsequent failures drop silently so a degraded sqlite handle
+	// can't machine-gun the log.
+	drv.OnStoreError = drv.AlertStorageError
 
 	// Local-mode hydration: open SQLite, replay history, claim radio
 	// identity, run stale-pending sweep. Returns the system-line

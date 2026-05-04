@@ -257,12 +257,12 @@ func (d *Driver) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
 		HwModel:     msg.HwModel,
 	}
 	if d.Store != nil {
-		_ = d.Store.SaveNode(d.State.RadioID, mdl.CachedNode{
+		d.storeError(d.Store.SaveNode(d.State.RadioID, mdl.CachedNode{
 			NodeNum:   msg.NodeNum,
 			LongName:  msg.LongName,
 			ShortName: msg.ShortName,
 			HwModel:   msg.HwModel,
-		})
+		}))
 	}
 	res := ApplyNodeInfoResult{}
 	if idx, ok := d.State.NodesByNum[msg.NodeNum]; ok {
@@ -364,7 +364,7 @@ func (d *Driver) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) Ap
 				prev.Status = mdl.StatusAck
 			}
 			if d.Store != nil {
-				_ = d.Store.SaveMessage(d.State.RadioID, channelName, prev.Message)
+				d.storeError(d.Store.SaveMessage(d.State.RadioID, channelName, prev.Message))
 			}
 			return ApplyTextResult{Index: existing, Skipped: true, FromMine: mine}
 		}
@@ -375,7 +375,7 @@ func (d *Driver) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) Ap
 		d.State.MessagesByPacketID[body.PacketID] = idx
 	}
 	if d.Store != nil {
-		_ = d.Store.SaveMessage(d.State.RadioID, channelName, item.Message)
+		d.storeError(d.Store.SaveMessage(d.State.RadioID, channelName, item.Message))
 	}
 	if ev.Channel < len(d.State.Channels) &&
 		d.State.Channels[ev.Channel].Name != d.State.CurrentChannel && !mine {
@@ -417,11 +417,11 @@ func (d *Driver) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 			d.State.Messages[i].Status = mdl.StatusFail
 		}
 		if d.Store != nil {
-			_ = d.Store.SaveMessage(
+			d.storeError(d.Store.SaveMessage(
 				d.State.RadioID,
 				d.State.CurrentChannel,
 				d.State.Messages[i].Message,
-			)
+			))
 		}
 		return ApplyRoutingResult{
 			Matched:   true,
@@ -496,9 +496,6 @@ type RecordOutboundOptions struct {
 // Without it, remote-mode TUIs would type a message, see it
 // disappear, and never know the daemon actually accepted it.
 func (d *Driver) RecordOutbound(opts RecordOutboundOptions) ApplyTextResult {
-	if d == nil {
-		return ApplyTextResult{Index: -1}
-	}
 	channelName := d.State.CurrentChannel
 	if opts.Channel >= 0 && opts.Channel < len(d.State.Channels) {
 		if name := d.State.Channels[opts.Channel].Name; name != "" {
@@ -525,7 +522,7 @@ func (d *Driver) RecordOutbound(opts RecordOutboundOptions) ApplyTextResult {
 		d.State.MessagesByPacketID[opts.PacketID] = idx
 	}
 	if d.Store != nil {
-		_ = d.Store.SaveMessage(d.State.RadioID, channelName, item.Message)
+		d.storeError(d.Store.SaveMessage(d.State.RadioID, channelName, item.Message))
 	}
 	// Publish a synthesized mdl.Text so SSE subscribers get a
 	// live "new outbound message" event in lockstep with the

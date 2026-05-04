@@ -130,7 +130,7 @@ type HydrationOptions struct {
 // store accumulated during migration / open.
 func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
 	var res HydrationResult
-	if d == nil || d.Store == nil {
+	if d.Store == nil {
 		return res
 	}
 	if opts.MessageLimit <= 0 {

@@ -36,6 +36,8 @@
 package driver
 
 import (
+	"time"
+
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
@@ -56,10 +58,54 @@ type Driver struct {
 	// Store is the persistence handle. Nil = in-memory only.
 	Store Store
 
+	// OnStoreError fires once per failed Store call inside Apply*
+	// and RecordOutbound. Nil = errors are dropped (test fixtures,
+	// demo mode). The TUI sets this to surface "-!- storage:
+	// degraded" once-per-session; the daemon points it at slog.
+	// Driver doesn't decide policy — caller does.
+	OnStoreError func(error)
+
 	// subState owns the Subscribe/Publish fan-out registry. Embedded
 	// so callers can read d.Subscribe / d.Publish at the receiver
 	// without indirection.
 	subState
+}
+
+// storeError centralizes the "did a store call fail; should we
+// surface it" check. Apply* methods call this immediately after
+// every Store mutation. Nil error / nil callback = no-op.
+func (d *Driver) storeError(err error) {
+	if err == nil || d.OnStoreError == nil {
+		return
+	}
+	d.OnStoreError(err)
+}
+
+// AlertStorageError is the canonical OnStoreError implementation
+// — appends a permanent "-!- storage: ..." system row to
+// State.Messages on the FIRST failure of a session, drops every
+// subsequent error so a degraded sqlite handle doesn't machine-gun
+// the messages pane. State.StorageAlerted is the gate; flips true
+// on first surface.
+//
+// Callers wire this in via:
+//
+//	drv.OnStoreError = drv.AlertStorageError
+//
+// Daemon callers may prefer a slog-only sink instead — they wire
+// their own callback that does not touch State.Messages.
+func (d *Driver) AlertStorageError(err error) {
+	if err == nil || d.State.StorageAlerted {
+		return
+	}
+	d.State.StorageAlerted = true
+	d.State.Messages = append(d.State.Messages, mdl.MessageItem{
+		Message: mdl.Message{
+			Time:   time.Now().Format("15:04"),
+			Text:   "-!- storage: persistence degraded — " + err.Error(),
+			Status: mdl.StatusSystem,
+		},
+	})
 }
 
 // New returns a Driver wired with the given Pump, Store, and State.
@@ -77,7 +123,7 @@ func New(s *State, p Pump, st Store) *Driver {
 // ok=false when the pump is nil (demo mode) or the outbound buffer
 // is full.
 func (d *Driver) Send(cmd mdl.Command) (uint32, bool) {
-	if d == nil || d.Pump == nil {
+	if d.Pump == nil {
 		return 0, false
 	}
 	return d.Pump.Send(cmd)
@@ -88,7 +134,7 @@ func (d *Driver) Send(cmd mdl.Command) (uint32, bool) {
 // the lifecycle of Store is the caller's concern (RunRadio's defer
 // owns it today).
 func (d *Driver) Stop() {
-	if d == nil || d.Pump == nil {
+	if d.Pump == nil {
 		return
 	}
 	d.Pump.Stop()
@@ -99,27 +145,18 @@ func (d *Driver) Stop() {
 // own seam — see internal/server/driver.go for the server's Driver
 // interface.
 func (d *Driver) Session() *State {
-	if d == nil {
-		return nil
-	}
 	return d.State
 }
 
 // AttachPump sets the pump handle. Called by the TUI once the tea
 // program is running and the transport has been dialed.
 func (d *Driver) AttachPump(p Pump) {
-	if d == nil {
-		return
-	}
 	d.Pump = p
 }
 
 // AttachStore sets the storage handle. Called by newModel after
 // storage.New succeeds.
 func (d *Driver) AttachStore(s Store) {
-	if d == nil {
-		return
-	}
 	d.Store = s
 }
 
@@ -128,9 +165,6 @@ func (d *Driver) AttachStore(s Store) {
 // transition can call this; future follow-ups will replace these call
 // sites with higher-level methods on Driver.
 func (d *Driver) PumpHandle() Pump {
-	if d == nil {
-		return nil
-	}
 	return d.Pump
 }
 
@@ -138,8 +172,5 @@ func (d *Driver) PumpHandle() Pump {
 // mode). Consumers that need direct Store access during the transition
 // call this; future follow-ups will replace these with driver methods.
 func (d *Driver) StoreHandle() Store {
-	if d == nil {
-		return nil
-	}
 	return d.Store
 }

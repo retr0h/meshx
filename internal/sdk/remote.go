@@ -153,9 +153,6 @@ func (r *Remote) seed(ctx context.Context) error {
 // Send method — typed as func(msg any) so this package doesn't import
 // bubbletea. Idempotent; calling Stop and then Start re-subscribes.
 func (r *Remote) Start(teaSend func(msg any)) {
-	if r == nil {
-		return
-	}
 	r.teaSend = teaSend
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
@@ -168,9 +165,6 @@ func (r *Remote) Start(teaSend func(msg any)) {
 // is therefore a no-op there — keeping it makes the lifecycle
 // uniform with local mode.
 func (r *Remote) Stop() {
-	if r == nil {
-		return
-	}
 	if r.cancel != nil {
 		r.cancel()
 		r.cancel = nil
@@ -185,9 +179,6 @@ func (r *Remote) Stop() {
 // Driver.Send (which would write to a nil Pump and silently no-op)
 // with HTTP POST against the daemon.
 func (r *Remote) Send(cmd mdl.Command) (uint32, bool) {
-	if r == nil {
-		return 0, false
-	}
 	switch c := cmd.(type) {
 	case mdl.SendText:
 		body := gen.SendMessageJSONRequestBody{

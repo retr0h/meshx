@@ -31,18 +31,27 @@ just just::fmt     # format justfiles
 ## Running
 
 ```bash
-go run .                                   # auto-connect: USB → saved BLE
-go run . usb probe                         # list USB candidates
+go run .                                   # bare meshx — prints help (no auto-connect)
+go run . usb scan                          # identify Meshtastic radios on USB
+go run . usb connect                       # auto-detect single USB radio + open TUI
 go run . usb connect /dev/cu.usbmodem2101  # explicit serial path
-go run . tcp connect 10.0.0.50:4403        # meshtasticd / WiFi radio
+go run . usb probe --port /dev/cu.usb…     # deep diagnostic — dumps every FromRadio packet
 go run . ble scan                          # nearby Bluetooth radios
 go run . ble pair <uuid>                   # save for later connects
+go run . ble list                          # show paired devices
+go run . ble fav <uuid|name>               # mark bare-launch favorite
 go run . ble connect <uuid|name>           # open TUI over Bluetooth
-go run . ble probe <uuid>                  # 15s diagnostic packet dump
+go run . ble probe <uuid>                  # 15s diagnostic FromRadio dump
 
-# Pump events to a log file when the TUI is up (alt-screen swallows
-# stderr so this is the only way to inspect live transport flow).
-MESHX_DEBUG=1 go run . ble connect <uuid>  # writes /tmp/meshx-pump.log
+# Headless HTTP+SSE daemon
+go run . server start                      # bind 127.0.0.1:4404 (default)
+go run . server start --bind :4404         # listen on all interfaces
+MESHX_SERVER_BIND=:9000 go run . server start  # env-var override
+
+# Debug logging — `--debug` (or MESHX_DEBUG=1) flips the global slog
+# level so each subcommand's "running" line + the daemon's request log
+# become visible. `--json` / `-j` swaps to JSON for log aggregators.
+go run . --debug ble pair <uuid>
 ```
 
 ## Architecture
@@ -50,82 +59,113 @@ MESHX_DEBUG=1 go run . ble connect <uuid>  # writes /tmp/meshx-pump.log
 ```
 meshx/
 ├── main.go                       # tiny — forwards to cmd.Execute()
-├── cmd/
-│   ├── root.go                   # cobra root + auto-connect chain
-│   ├── usb.go                    # `meshx usb {probe,connect}`
-│   ├── usb_probe.go              # `meshx usb probe`
-│   ├── tcp.go                    # `meshx tcp connect`
-│   ├── ble.go                    # `meshx ble {scan,pair,list,forget,connect,disconnect,fav}`
-│   ├── ble_probe.go              # `meshx ble probe` diagnostic dump
-│   ├── serve.go                  # `meshx serve` parent command
-│   └── serve_start.go            # `meshx serve start` — headless HTTP+SSE daemon
-└── internal/meshx/
-    ├── app.go                    # Bubble Tea model: state, Update, View,
-    │                             # newModel, autoConnect, myCallsign …
-    ├── ui.go                     # View dispatcher, model getters, generic utils
-    ├── pump.go                   # consumer interface (Pump) — twin of store.go (osapi-io)
-    ├── store.go                  # consumer interface (Store) for the storage package
-    ├── commands.go               # /command dispatcher + ham bangs
-    ├── input.go                  # key bindings, nav mode, tab wiring
-    ├── components_box.go         # Box/Component/Cell/Row + RawBlock, Viewport, Centered
-    ├── components_stack.go       # VStack, HStack, Bordered, Styled
-    ├── components_chrome.go      # statusBar / topDivider / channelTabsRow / inputBar
-    ├── components_chat.go        # chatRow* cell builders + nick/zebra colors
-    ├── components_notice.go      # noticeRow* cell builders
-    ├── components_message.go     # messageRow Component + notice/chat dispatch
-    ├── components_overlays.go    # overlay row builders + selection chrome
-    ├── components_panes.go       # channels/nodes/messages/help pane Components + frameView
-    ├── components_panes_geo.go   # nearby/radar pane Components + peerPlot data prep
-    ├── components_radar.go       # radarCanvas Component + radar legend cells
-    ├── components_splash.go      # BitchX rotating splash data + builder
-    ├── notices.go                # TTL + pin + fade for `-!-` rows
-    ├── ble_cli.go                # `meshx ble` CLI helpers
-    ├── complete.go               # Tab completion — /cmd, #chan, nicks
-    ├── palette.go                # maxheadroom color constants
-    ├── node.go                   # nodeItem + state derivation
-    ├── radio.go                  # apply* handlers for mdl.Text / NodeInfo / Routing / …
-    ├── geo.go                    # haversine / bearing / compass math
-    ├── help.go                   # /help entry data
-    ├── model/                    # canonical wire/persisted shapes — the lingua franca
-    │   ├── message.go            # Message + MessageStatus enum
-    │   ├── node.go               # CachedNode (NodeDB cache row)
-    │   ├── ble.go                # BLEDevice (BLE pairing row)
-    │   ├── events.go             # pump-emitted events: Text, NodeInfo, Position, Ping, …
-    │   ├── commands.go           # consumer-issued commands: SendText, SetOwner, SetBuzzer, RequestSync, …
-    │   ├── config.go             # modeled radio configs (ExternalNotification today)
-    │   └── enums.go              # Region, ModemPreset, DeviceRole, ChannelRole, RoutingError typed strings
-    ├── pump/                     # transport ↔ tea bridge (concrete *pump.Pump)
-    │   ├── pump.go               # New / Stop + run loop with reconnect policy
-    │   ├── translate.go          # FromRadio → []model.X (proto→model inbound boundary)
-    │   ├── outbound.go           # (*Pump).Send(model.Command) + envelope builders (model→proto outbound)
-    │   ├── channel_url.go        # Parse/Build meshtastic:// share URLs as model values
-    │   └── config.go             # ExternalNotificationFromProto / ToProto bridges (grows with config writes)
-    ├── storage/                  # SQLite persistence (concrete *storage.Sqlite)
-    │   ├── sqlite.go             # CRUD against model.Message / CachedNode / BLEDevice
-    │   └── migrations/           # embedded goose SQL migrations (001…010)
-    └── transport/
-        ├── client.go             # Client interface + Dial dispatcher
-        ├── framing.go            # 0x94 0xc3 <hi> <lo> <proto> frame codec
-        ├── stream.go             # Shared framed-stream runner (serial/tcp)
-        ├── serial.go             # USB-serial transport
-        ├── tcp.go                # TCP transport (meshtasticd / WiFi)
-        ├── ble.go                # Bluetooth LE transport
-        └── identify.go           # AutoDetectMeshtastic USB probe
+├── cmd/                          # one file per subcommand; *_deps.go declares the cmd-local narrow consumer interfaces
+│   ├── root.go                   # cobra root + global slog logger (lmittmann/tint, JSON via -j) + viper (MESHX_ env prefix) + persistent flags
+│   ├── version.go                # `meshx version` JSON build identity
+│   ├── usb.go                    # `meshx usb` parent + init wiring
+│   ├── usb_scan.go               # `meshx usb scan` — direct transport.IdentifyAllSerial
+│   ├── usb_connect.go            # `meshx usb connect` — auto-detect or explicit, then tui.RunRadio
+│   ├── usb_probe.go              # `meshx usb probe` — deep diagnostic packet dump
+│   ├── usb_deps.go               # narrow usbScanner interface + transportUSBScanner adapter (cliUSBScanner)
+│   ├── ble.go                    # `meshx ble` parent + init + orDash helper
+│   ├── ble_scan.go ble_pair.go ble_list.go ble_forget.go ble_connect.go ble_disconnect.go ble_fav.go
+│   ├── ble_probe.go              # 15s FromRadio dump
+│   ├── ble_deps.go               # narrow bleScanner / blePairer / bleStore interfaces + transport adapters + cliOpenBLEStore
+│   ├── server.go                 # `meshx server` parent
+│   ├── server_start.go           # `meshx server start` — headless daemon (binds via viper.server.bind, default 127.0.0.1:4404)
+│   └── server_deps.go            # daemon-only adapters (daemonBLEScanner / daemonBLEPairer / daemonUSBScanner / openStore) wiring server.Config
+└── internal/
+    ├── tui/                      # Bubble Tea rendering surface (model holds *driver.Driver today)
+    │   ├── app.go                # Bubble Tea model + View + Update + RunRadio entrypoint
+    │   ├── ui.go                 # View dispatcher, model getters, generic utils
+    │   ├── commands.go           # /command dispatcher + ham bangs
+    │   ├── input.go              # key bindings, nav mode, tab wiring
+    │   ├── radio.go              # apply* handlers for mdl.Text / NodeInfo / Routing / … (move to driver in MR-3.5c)
+    │   ├── components_box.go     # Box / Component / Cell / Row + RawBlock / Viewport / Centered
+    │   ├── components_stack.go   # VStack / HStack / Bordered / Styled
+    │   ├── components_chrome.go  # statusBar / topDivider / channelTabsRow / inputBar
+    │   ├── components_chat.go    # chatRow* cell builders + nick/zebra colors
+    │   ├── components_notice.go  # noticeRow* cell builders
+    │   ├── components_message.go # messageRow Component + notice/chat dispatch
+    │   ├── components_overlays.go # overlay row builders + selection chrome
+    │   ├── components_panes.go   # channels/nodes/messages/help pane Components + frameView
+    │   ├── components_panes_geo.go # nearby/radar pane Components + peerPlot prep
+    │   ├── components_radar.go   # radarCanvas + radar legend cells
+    │   ├── components_splash.go  # BitchX rotating splash data + builder
+    │   ├── notices.go            # TTL + pin + fade for `-!-` rows
+    │   ├── complete.go           # Tab completion — /cmd, #chan, nicks
+    │   ├── palette.go            # maxheadroom color constants
+    │   ├── node.go               # nodeItem + state derivation
+    │   ├── geo.go                # haversine / bearing / compass math
+    │   ├── help.go               # /help entry data
+    │   └── qr.go                 # ASCII QR rendering for /channel share
+    ├── driver/                   # headless radio session layer — owns canonical State, wraps Pump + Store
+    │   ├── driver.go             # *driver.Driver + New + Send + Stop + Session
+    │   ├── state.go              # *driver.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests
+    │   ├── pump.go               # consumer interface (Pump) for internal/meshx/pump
+    │   └── store.go              # consumer interface (Store) for internal/meshx/storage
+    ├── server/                   # HTTP+SSE daemon (Huma)
+    │   ├── server.go             # *Server + Config{Radios, Store, Scanner, Pairer, USBScanner, Logger}
+    │   ├── registry.go           # radio_id → Driver multiplex
+    │   ├── middleware.go         # request-id / request-log / panic recovery
+    │   ├── driver.go             # consumer interface (Driver)
+    │   ├── store.go              # Store / BLEScanner / BLEPairer / USBScanner consumer interfaces + sighting wire shapes
+    │   ├── routes.go             # huma.Register calls
+    │   ├── handlers.go           # per-route handlers
+    │   ├── transport_ble.go      # /transports/ble/* HTTP routes (remote admin)
+    │   └── transport_usb.go      # /transports/usb/{scan,auto} HTTP routes (remote admin)
+    ├── sdk/
+    │   └── gen/                  # generated Go HTTP client (api.yaml + cfg.yaml + generate.go + client.gen.go)
+    ├── version/                  # build identity (Version / Commit / Date / BuiltBy)
+    └── meshx/                    # foundational sub-packages — model / pump / storage / transport
+        ├── model/                # canonical wire/persisted shapes — the lingua franca
+        │   ├── message.go        # Message + MessageStatus enum (JSON-tagged for HTTP API)
+        │   ├── items.go          # ChannelItem + NodeItem + MessageItem
+        │   ├── node.go           # CachedNode (NodeDB cache row)
+        │   ├── ble.go            # BLEDevice (BLE pairing row)
+        │   ├── events.go         # pump-emitted events: Text, NodeInfo, Position, Ping, Routing, …
+        │   ├── commands.go       # consumer-issued commands: SendText, SetOwner, SetBuzzer, RequestSync, …
+        │   ├── config.go         # modeled radio configs
+        │   └── enums.go          # Region, ModemPreset, DeviceRole, ChannelRole, RoutingError, NodeState
+        ├── pump/                 # transport ↔ tea bridge (concrete *pump.Pump)
+        │   ├── pump.go           # New / Stop + run loop with reconnect policy
+        │   ├── transport.go      # consumer interface (Transport)
+        │   ├── translate.go      # FromRadio → []model.X
+        │   ├── outbound.go       # (*Pump).Send(model.Command)
+        │   ├── channel_url.go    # Parse/Build meshtastic:// share URLs
+        │   └── config.go         # ExternalNotificationFromProto / ToProto bridges
+        ├── storage/              # SQLite persistence (concrete *storage.Sqlite)
+        │   ├── sqlite.go         # CRUD against model.Message / CachedNode / BLEDevice
+        │   └── migrations/       # embedded goose SQL migrations
+        └── transport/
+            ├── client.go         # Client interface + Dial dispatcher
+            ├── framing.go        # 0x94 0xc3 <hi> <lo> <proto> frame codec
+            ├── stream.go         # Shared framed-stream runner (serial/tcp)
+            ├── serial.go         # USB-serial transport
+            ├── tcp.go            # TCP transport (meshtasticd / WiFi)
+            ├── ble.go            # Bluetooth LE dial / connect
+            ├── ble_scan.go       # ScanBLE + PairBLE + BLESighting (shared by cmd-direct + daemon adapters)
+            └── identify.go       # AutoDetectMeshtastic + IdentifyAllSerial USB probes
 ```
 
 ### Public API
 
+`internal/` packages are not re-exported. The cmd tree consumes them directly:
+
 ```go
-meshx.RunRadio("/dev/cu.usbmodem2101")     // live — serial / TCP / "ble:<uuid>"
-meshx.RunBLE("<uuid|name>")                // resolve saved BLE device + open TUI
-meshx.AutoConnectTarget()                  // bare-`meshx` resolution chain
-meshx.BLEScan / BLEPair / BLEListDevices
-meshx.BLEForget / BLEMarkFavorite / BLESetFavorite
+tui.RunRadio("/dev/cu.usbmodem2101")         // live — serial or "ble:<uuid>"
+transport.ScanBLE(timeout)                   // BLE discovery
+transport.PairBLE(uuid)                      // OS-level bonding
+transport.IdentifyAllSerial(timeout)         // USB scan + handshake probe
+transport.AutoDetectMeshtastic(timeout)      // single-Meshtastic-port helper
+storage.New(path) → *Sqlite                  // SQLite handle (BLE devices, messages, …)
+server.New(server.Config{...}) → *Server     // HTTP+SSE daemon
 ```
 
-`RunRadio` calls `tea.NewProgram(newModel(dest), tea.WithAltScreen()).Run()`.
-`RunBLE` is a thin wrapper that resolves a name-or-uuid against `ble_devices`
-and delegates to `RunRadio("ble:<uuid>")` — `transport.Dial` routes the prefix
+`tui.RunRadio` calls
+`tea.NewProgram(newModel(dest), tea.WithAltScreen()).Run()`.
+`ble connect <name>` resolves the name through `storage.LookupBLEDevice` and
+hands off to `tui.RunRadio("ble:<uuid>")` — `transport.Dial` routes the prefix
 to `DialBLE`.
 
 ### `model` is the lingua franca
@@ -175,6 +215,65 @@ TUI's view of the contract. The compile-time binding
 `var p Pump = pump.New(...)` at the construction site catches drift the moment a
 method gets renamed.
 
+The same pattern applies in `cmd/`: `cmd/ble_deps.go` declares `bleScanner` /
+`blePairer` / `bleStore` interfaces and `cmd/usb_deps.go` declares `usbScanner`.
+Production wiring sits at the bottom of each file (`cliBLEScanner`,
+`cliBLEPairer`, `cliOpenBLEStore`, `cliUSBScanner`) and tests can swap the
+package-level vars to fake the host. The transport adapters
+(`transportBLEScanner`, etc.) all delegate into `internal/meshx/transport`,
+which means **`meshx ble scan`, `meshx usb scan`, etc. don't need a daemon to be
+running** — they're direct OS interrogations.
+
+## Daemon, logging, config
+
+`meshx server start` runs the HTTP+SSE daemon. Default bind is `127.0.0.1:4404`
+(chosen to sit adjacent to meshtasticd's `4403` — "4403 talks to the radio, 4404
+talks to clients of meshx"). The bind address resolves through viper: `--bind`
+flag > `MESHX_SERVER_BIND` env > default. `MESHX_SERVER_RADIO` plus the
+`--radio <dest>` flag pre-register a pending radio at startup.
+
+Logging is a single package-level `slog.Logger` set up in
+`cmd/root.go::initLogger` via `cobra.OnInitialize`. The default handler is
+`lmittmann/tint` (colored when stderr is a TTY, plain otherwise); `--json` /
+`-j` swaps in `slog.NewJSONHandler` for log aggregators; `--debug` / `-d` flips
+the level. Subcommands tag their child logger with `subsystem=<verb>.<action>`
+and emit a `Debug("running", …)` line at the top of each `RunE` so debugging
+shows the parsed inputs without polluting default UX. The daemon emits `Info`
+"config" + "listening" lines at boot and a structured request log line per HTTP
+request.
+
+`internal/server/middleware.go` wires three Huma middlewares (outermost-first):
+panic recovery (logs stack + 500), request-id (honors inbound `X-Request-ID` or
+generates 8-byte hex; echoes header, stashes on context, retrievable via
+`server.RequestIDFromContext`), and a structured request log (method, path,
+status, duration, request_id, remote, user-agent — Error level for 5xx, Warn for
+4xx, Info otherwise).
+
+## OpenAPI client SDK
+
+The daemon emits its OpenAPI spec at `/openapi.{json,yaml}` (3.1) and a
+downgraded version at `/openapi-3.0.{json,yaml}`. oapi-codegen still can't
+consume 3.1 (oapi-codegen #373) so the codegen pipeline pulls the 3.0 spec.
+
+```bash
+# regen spec from a freshly-built daemon
+go run . server start --bind :19199 &
+curl -sS localhost:19199/openapi-3.0.yaml > internal/sdk/gen/api.yaml
+kill %1
+
+# regen Go client (client.gen.go)
+just generate                # wraps `go generate ./internal/sdk/gen/...`
+```
+
+`internal/sdk/gen/cfg.yaml` configures oapi-codegen
+(`generate.models: true, client: true`); `client.gen.go` is checked in so
+consumers can build without invoking codegen.
+
+**Schema-name caveat**: oapi-codegen auto-generates a `<OpId>Response` struct
+per operation as the HTTP response wrapper. Avoid `*Response` schema names in
+`internal/server/handlers.go` — that's why the send-message body is
+`SendMessageResult`, not `SendMessageResponse`.
+
 ## Dependencies
 
 | Package                         | Purpose                                        |
@@ -183,12 +282,16 @@ method gets renamed.
 | `charmbracelet/bubbles`         | textinput widget for input + search prompts    |
 | `charmbracelet/lipgloss`        | colors, borders, layout primitives             |
 | `spf13/cobra`                   | CLI command tree                               |
+| `spf13/viper`                   | flag/env/default config resolution             |
+| `lmittmann/tint`                | colored slog handler                           |
 | `lmatte7/gomesh/...gomeshproto` | Meshtastic protobuf definitions                |
 | `go.bug.st/serial`              | cross-platform USB-serial                      |
 | `tinygo.org/x/bluetooth`        | cross-platform Bluetooth LE (macOS / Linux)    |
 | `google.golang.org/protobuf`    | proto marshal / unmarshal                      |
 | `mattn/go-sqlite3`              | SQLite driver (CGo) for scrollback persistence |
 | `pressly/goose`                 | embedded SQL migrations                        |
+| `danielgtaylor/huma/v2`         | HTTP+OpenAPI framework for the daemon          |
+| `oapi-codegen/oapi-codegen/v2`  | Go client codegen from the OpenAPI spec (tool) |
 
 ## Modal UI — where the code lives
 

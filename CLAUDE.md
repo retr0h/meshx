@@ -42,29 +42,44 @@ and `░▒▓█` block-border language.
 ```
 meshx/
 ├── main.go                       # 7-line entry → cmd.Execute()
-├── cmd/
-│   ├── root.go                   # cobra root + auto-connect fallback chain
-│   ├── usb.go                    # `meshx usb {probe,connect}`
-│   ├── usb_probe.go              # `meshx usb probe` — USB diagnostic packet dump
-│   ├── tcp.go                    # `meshx tcp connect`
-│   ├── ble.go                    # `meshx ble {scan,pair,list,forget,connect,disconnect,fav}`
-│   ├── ble_probe.go              # `meshx ble probe` — diagnostic packet dump
-│   ├── serve.go                  # `meshx serve` parent command
-│   ├── serve_start.go            # `meshx serve start` — headless HTTP+SSE daemon (declares daemonRunner consumer interface)
-│   └── serve_deps.go             # constructs the daemon's optional deps (sqlite store, BLE scanner/pairer adapters using tinygo bluetooth)
+├── cmd/                          # one file per subcommand; *_deps.go declares the cmd-local narrow consumer interfaces
+│   ├── root.go                   # cobra root + global slog logger (lmittmann/tint, JSON via -j) + viper (MESHX_ env prefix) + persistent flags
+│   ├── version.go                # `meshx version` — JSON build-identity dump
+│   ├── usb.go                    # `meshx usb` parent + init wiring
+│   ├── usb_scan.go               # `meshx usb scan` — cliUSBScanner.Identify
+│   ├── usb_connect.go            # `meshx usb connect` — auto-detect or explicit path, then tui.RunRadio
+│   ├── usb_probe.go              # `meshx usb probe` — deep-dump diagnostic (--port for full packet stream)
+│   ├── usb_deps.go               # narrow usbScanner consumer interface + transportUSBScanner adapter wired as cliUSBScanner
+│   ├── ble.go                    # `meshx ble` parent + init wiring + orDash helper
+│   ├── ble_scan.go               # `meshx ble scan` — cliBLEScanner.Scan
+│   ├── ble_pair.go               # `meshx ble pair` — cliBLEPairer.Pair + cliOpenBLEStore.SaveBLEDevice
+│   ├── ble_list.go               # `meshx ble list` — cliOpenBLEStore.LoadBLEDevices
+│   ├── ble_forget.go             # `meshx ble forget` — LookupBLEDevice + ForgetBLEDevice
+│   ├── ble_connect.go            # `meshx ble connect` — resolve via storage, then tui.RunRadio("ble:<uuid>")
+│   ├── ble_disconnect.go         # `meshx ble disconnect` — clear favorite
+│   ├── ble_fav.go                # `meshx ble fav` — set favorite
+│   ├── ble_probe.go              # `meshx ble probe` — 15s diagnostic FromRadio dump
+│   ├── ble_deps.go               # narrow bleScanner / blePairer / bleStore consumer interfaces + transportBLEScanner / transportBLEPairer adapters + cliOpenBLEStore (sqlite.New)
+│   ├── server.go                 # `meshx server` parent command
+│   ├── server_start.go           # `meshx server start` — headless HTTP+SSE daemon (declares daemonRunner; binds via viper server.bind default 127.0.0.1:4404)
+│   └── server_deps.go            # daemon-only adapters (daemonBLEScanner / daemonBLEPairer / daemonUSBScanner / openStore) wiring server.Config; every adapter delegates into internal/meshx/transport
 ├── internal/driver/              # headless radio session layer — owns canonical State, wraps Pump + Store
 │   ├── driver.go                 # *driver.Driver type + New(state, pump, store) + Send / Stop / Session
 │   ├── state.go                  # *driver.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests, reconnect banner
 │   ├── pump.go                   # consumer interface (Pump) for internal/meshx/pump
 │   └── store.go                  # consumer interface (Store) for internal/meshx/storage
 ├── internal/server/              # HTTP+SSE daemon (Huma framework) — middleman between driver + clients; multi-radio aware via Registry
-│   ├── server.go                 # *server.Server type + New(Registry) + Run(ctx, addr) + Drivers()
+│   ├── server.go                 # *server.Server type + New(Config) + Run(ctx, addr) + Drivers(); slog-tagged with subsystem=http
 │   ├── registry.go               # *server.Registry — radio_id → Driver multiplex, mutex-guarded for concurrent HTTP handlers
+│   ├── middleware.go             # request-id (echoed as X-Request-ID) + structured request log (status-aware level) + panic recovery; wired via api.UseMiddleware
 │   ├── driver.go                 # consumer interface (Driver) at the seam — concrete *driver.Driver satisfies via Session() + Send()
-│   ├── store.go                  # Store / BLEScanner / BLEPairer consumer interfaces (osapi-io seam) + BLESighting wire shape
-│   ├── routes.go                 # huma.Register calls — radio-scoped under /radios/{radio_id}/..., transports under /transports/...
+│   ├── store.go                  # Store / BLEScanner / BLEPairer / USBScanner consumer interfaces (osapi-io seam) + BLESighting + USBSighting wire shapes
+│   ├── routes.go                 # huma.Register calls — radio-scoped under /radios/{radio_id}/..., transports under /transports/{ble,usb}/...
 │   ├── handlers.go               # per-route handlers; channels/nodes/messages emit model types directly (single source of truth, no DTO duplication)
-│   └── transport_ble.go          # /transports/ble/* HTTP routes + in-process counterparts (ScanBLE/PairBLE/ListBLEDevices/...) used by cmd/ble.go
+│   ├── transport_ble.go          # /transports/ble/* HTTP routes (scan, pair, list, forget, fav, clear-favorite) for remote admin
+│   └── transport_usb.go          # /transports/usb/{scan,auto} HTTP routes for remote admin
+├── internal/sdk/                 # generated Go HTTP client for the daemon's API
+│   └── gen/                      # api.yaml (curl /openapi-3.0.yaml from a running daemon) + cfg.yaml + generate.go + client.gen.go (oapi-codegen output)
 ├── internal/tui/                 # Bubble Tea rendering surface (model dispatches apply* directly today)
 │   #                             # GAP: TUI consumes *driver.Driver concretely (m.driver.Pump.Send, m.driver.Store.SaveMessage,
 │   #                             # m.driver.Pump = p). Should declare a narrow consumer interface per osapi-io once apply*
@@ -159,6 +174,83 @@ only by the `cmd/` tree.
   macOS, BlueZ on Linux)
 - `pressly/goose` — embedded sqlite migrations
 - `lmatte7/gomesh/gomeshproto` — Meshtastic protobuf bindings
+- `danielgtaylor/huma/v2` — HTTP framework with auto-generated OpenAPI 3.1 spec
+- `oapi-codegen/oapi-codegen/v2` (tool) — Go client codegen from the spec
+- `lmittmann/tint` — colored slog handler for the global logger
+- `spf13/viper` — config + env var binding
+
+## Daemon, logging, config
+
+Bare `meshx` does **not** auto-connect — it prints help. Pick a transport
+explicitly: `meshx usb connect`, `meshx ble connect <name>`, or
+`meshx server start` for the headless daemon.
+
+CLI logging goes through a single package-level `logger *slog.Logger`
+configured in `cmd/root.go` via `cobra.OnInitialize(initConfig, initLogger)`.
+Default handler is `tint.NewHandler` (colored when stderr is a TTY, plain
+otherwise). `--json` / `-j` swaps in `slog.NewJSONHandler` for log
+aggregators. `--debug` / `-d` flips the level. Subcommands tag their child
+logger with `subsystem=<verb>.<action>` and emit a `Debug("running", …)`
+line at the top of each `RunE` so `MESHX_DEBUG=1 meshx ble pair <uuid>`
+shows the parsed inputs without polluting the default UX.
+
+`viper` is wired with the `MESHX_` env prefix and dot→underscore replacer.
+The daemon's bind address is `viper.serve.bind` — the precedence is
+`--bind` flag > `MESHX_SERVER_BIND` env > default `127.0.0.1:4404` (4404
+sits adjacent to meshtasticd's 4403 — "4403 talks to the radio, 4404
+talks to clients of meshx").
+
+The HTTP server (`internal/server/middleware.go`) wraps every request
+in three middlewares — outermost first: panic recovery (logs the stack +
+500s), request-id (honors inbound `X-Request-ID` or generates 8-byte hex,
+echoes header, stashes on context, retrievable via
+`server.RequestIDFromContext`), and a structured request log (method,
+path, status, duration, request_id, remote, user-agent — Error level for
+5xx, Warn for 4xx, Info otherwise).
+
+## CLI vs HTTP for transport ops
+
+Scan / pair / list / forget / fav are **CLI-local OS interrogations** —
+they don't need a daemon. `cmd/ble_*.go` and `cmd/usb_*.go` declare narrow
+consumer interfaces (`bleScanner`, `blePairer`, `bleStore`, `usbScanner`)
+in their `*_deps.go` files, with adapters that delegate to
+`internal/meshx/transport` and `internal/meshx/storage`. Tests can swap
+the package-level vars (`cliBLEScanner`, `cliBLEPairer`, `cliOpenBLEStore`,
+`cliUSBScanner`) to fake the host.
+
+The daemon's `/transports/{ble,usb}/*` HTTP routes exist for **remote
+admin** (a future web UI inspecting Bluetooth / USB state on a headless
+box). They share the same `internal/meshx/transport` primitives behind
+the daemon's own `server.BLEScanner` / `BLEPairer` / `USBScanner`
+interfaces — adapters in `cmd/server_deps.go` (`daemonBLEScanner`,
+`daemonBLEPairer`, `daemonUSBScanner`) lift `transport.*` outputs into
+the server's wire shapes.
+
+`internal/meshx/transport/ble_scan.go` is the single source of truth for
+the tinygo-bluetooth scan + pair primitives — both cmd-direct and
+daemon-side callers consume `transport.ScanBLE` / `transport.PairBLE`.
+
+## OpenAPI client SDK
+
+`internal/sdk/gen/` houses the generated Go HTTP client. The pipeline:
+
+1. Edits to handlers/routes change the spec Huma emits.
+2. Spawn the daemon and pull `/openapi-3.0.yaml` (Huma's downgraded 3.0
+   spec — oapi-codegen still can't consume 3.1; see oapi-codegen #373):
+   ```bash
+   meshx server start --bind :19199 &
+   curl -sS localhost:19199/openapi-3.0.yaml > internal/sdk/gen/api.yaml
+   ```
+3. `cd internal/sdk/gen && go generate .` runs oapi-codegen against
+   `api.yaml` + `cfg.yaml`, producing `client.gen.go`.
+4. `just generate` chains the codegen step; `just ready` runs it before
+   fmt + lint.
+
+**Schema-name caveat**: oapi-codegen auto-generates a `<OpId>Response`
+struct per operation as the HTTP response wrapper. A schema named
+`SendMessageResponse` would collide — that's why our send-message body
+type is `SendMessageResult`. Avoid `*Response` schema names in
+`internal/server/handlers.go` going forward.
 
 ## Modal UI model
 
@@ -306,3 +398,22 @@ Operational: `/msg  /reply(/r)  /ping  /tr(/traceroute)  /whois(/w)
       (ASCII QR via half-block) + `/channel add <meshtastic://url>` (PSK import)
       + `/channel del` (disable). PSK is RAM-only — never persisted to
       `~/.meshx/meshx.db`. Hidden `/qrtest` for renderer iteration.
+- [x] `internal/driver/` extracted (canonical State + Pump/Store seams).
+- [x] `meshx server start` daemon (Huma HTTP + multi-radio Registry,
+      `/radios/{radio_id}/...` for radio-scoped reads + `/transports/{ble,usb}/*`
+      for remote admin).
+- [x] Server middleware: panic recovery + request-id + structured request log.
+- [x] OpenAPI 3.0 codegen pipeline → `internal/sdk/gen/client.gen.go`
+      (regen via daemon + curl, then `go generate`).
+- [x] CLI one-shots (scan / pair / list / forget / fav) talk directly to
+      transport+storage through cmd-local consumer interfaces — no daemon
+      required for everyday CLI use.
+- [ ] **MR-3.5c**: relocate `apply*` handlers from `internal/tui/radio.go`
+      onto `*driver.Driver` so the daemon can mutate Session as packets
+      arrive. Adds `Driver.Subscribe(...)` for the SSE fan-out seam.
+- [ ] **MR-4 (events)**: implement `/radios/{radio_id}/events` SSE stream
+      (currently 501) on top of the new Subscribe seam.
+- [ ] **MR-5 (TUI as remote client)**: TUI consumes `internal/sdk/gen` +
+      SSE so `meshx ble connect` auto-spawns or attaches to a daemon, and
+      reconnect/backoff/persistence become server-side concerns. Server log
+      goes to `~/.meshx/server.log` when stdout isn't a TTY (TUI case).

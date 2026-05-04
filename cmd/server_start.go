@@ -31,6 +31,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/retr0h/meshx/internal/driver"
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
 	"github.com/retr0h/meshx/internal/meshx/storage"
 	"github.com/retr0h/meshx/internal/server"
@@ -136,10 +137,59 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		drv := driver.New(nil, nil, drvStore)
 		drv.State.ConnectDest = radio
 		drv.State.RadioID = radioID
+
+		// Replay persisted history from SQLite so /messages and
+		// /nodes return non-empty results to remote clients
+		// immediately — same pattern the local TUI's newModel uses.
+		// Errors surface as warnings; an empty State is acceptable
+		// (clients still see live traffic once the radio handshakes).
+		if concreteStore != nil {
+			if past, err := concreteStore.LoadMessages(radioID, "", 500); err == nil {
+				for _, mm := range past {
+					item := mdl.MessageItem{Message: mm}
+					drv.State.Messages = append(drv.State.Messages, item)
+					if mm.PacketID > 0 {
+						drv.State.MessagesByPacketID[mm.PacketID] = len(drv.State.Messages) - 1
+					}
+				}
+			} else {
+				log.Warn("storage replay (messages) failed", slog.Any("error", err))
+			}
+			if cached, err := concreteStore.LoadNodes(radioID); err == nil {
+				for _, n := range cached {
+					name := n.LongName
+					if name == "" {
+						name = n.ShortName
+					}
+					if name == "" {
+						name = fmt.Sprintf("node 0x%x", n.NodeNum)
+					}
+					state := mdl.StateOffline
+					if n.Muted {
+						state = mdl.StateMuted
+					}
+					drv.State.NodesByNum[n.NodeNum] = len(drv.State.Nodes)
+					drv.State.Nodes = append(drv.State.Nodes, mdl.NodeItem{
+						Callsign:  name,
+						ShortName: n.ShortName,
+						NodeNum:   n.NodeNum,
+						State:     state,
+						Fav:       n.Favorite,
+						LastHeard: "cached",
+						HwModel:   n.HwModel,
+					})
+				}
+			} else {
+				log.Warn("storage replay (nodes) failed", slog.Any("error", err))
+			}
+		}
+
 		radios.Add(radioID, drv)
 		log.Info("radio registered",
 			slog.String("radio_id", radioID),
 			slog.String("dest", radio),
+			slog.Int("history_messages", len(drv.State.Messages)),
+			slog.Int("history_nodes", len(drv.State.Nodes)),
 		)
 
 		// Spawn the pump — same backoff + reconnect engine the local

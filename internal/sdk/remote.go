@@ -351,6 +351,24 @@ func (r *Remote) dispatch(kind, payload string) {
 		send(&mdl.Traceroute{})
 	case driver.EventPing:
 		send(&mdl.Ping{})
+	case driver.EventMyInfo:
+		send(&mdl.MyInfo{})
+	case driver.EventMetadata:
+		send(&mdl.Metadata{})
+	case driver.EventDeviceMetrics:
+		send(&mdl.DeviceMetrics{})
+	case driver.EventEnvMetrics:
+		send(&mdl.EnvMetrics{})
+	case driver.EventLoRaConfig:
+		send(&mdl.LoraConfig{})
+	case driver.EventDeviceConfig:
+		send(&mdl.DeviceConfig{})
+	case driver.EventConfigComplete:
+		send(&mdl.ConfigComplete{})
+	case driver.EventReconnecting:
+		send(&mdl.Reconnecting{})
+	case driver.EventDisconnected:
+		send(&mdl.Disconnected{})
 	}
 }
 
@@ -378,6 +396,24 @@ func derefAny(v any) any {
 	case *mdl.Traceroute:
 		return *x
 	case *mdl.Ping:
+		return *x
+	case *mdl.MyInfo:
+		return *x
+	case *mdl.Metadata:
+		return *x
+	case *mdl.DeviceMetrics:
+		return *x
+	case *mdl.EnvMetrics:
+		return *x
+	case *mdl.LoraConfig:
+		return *x
+	case *mdl.DeviceConfig:
+		return *x
+	case *mdl.ConfigComplete:
+		return *x
+	case *mdl.Reconnecting:
+		return *x
+	case *mdl.Disconnected:
 		return *x
 	}
 	return v

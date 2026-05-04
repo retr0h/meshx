@@ -62,6 +62,7 @@ type ApplyMyInfoResult struct {
 // we keep the old RadioID so apply* paths don't crash later trying
 // to scope by an empty key.
 func (d *Driver) ApplyMyInfo(msg mdl.MyInfo) ApplyMyInfoResult {
+	defer d.Publish(Event{Kind: EventMyInfo, Data: msg})
 	res := ApplyMyInfoResult{OldRadioID: d.State.RadioID}
 	d.State.MyNodeNum = msg.NodeNum
 	if d.Store != nil {
@@ -77,6 +78,7 @@ func (d *Driver) ApplyMyInfo(msg mdl.MyInfo) ApplyMyInfoResult {
 // ApplyMetadata stamps firmware + hw flags from the radio's one-shot
 // Metadata envelope. Surfaces in the status bar.
 func (d *Driver) ApplyMetadata(msg mdl.Metadata) {
+	defer d.Publish(Event{Kind: EventMetadata, Data: msg})
 	d.State.RadioFirmware = msg.FirmwareVersion
 	d.State.RadioDeviceState = msg.DeviceStateVer
 	d.State.RadioHasWifi = msg.HasWifi
@@ -86,6 +88,7 @@ func (d *Driver) ApplyMetadata(msg mdl.Metadata) {
 // ApplyLoraConfig stamps the radio's tx_power, region, and modem
 // preset.
 func (d *Driver) ApplyLoraConfig(msg mdl.LoraConfig) {
+	defer d.Publish(Event{Kind: EventLoRaConfig, Data: msg})
 	d.State.RadioTxPower = msg.TxPowerDBm
 	d.State.RadioRegion = string(msg.Region)
 	d.State.RadioModemPreset = string(msg.ModemPreset)
@@ -94,6 +97,7 @@ func (d *Driver) ApplyLoraConfig(msg mdl.LoraConfig) {
 // ApplyDeviceConfig stamps the radio's role (Client / Router /
 // Repeater / Tracker).
 func (d *Driver) ApplyDeviceConfig(msg mdl.DeviceConfig) {
+	defer d.Publish(Event{Kind: EventDeviceConfig, Data: msg})
 	d.State.RadioRole = string(msg.Role)
 }
 
@@ -101,6 +105,7 @@ func (d *Driver) ApplyDeviceConfig(msg mdl.DeviceConfig) {
 // telemetry. Peer metrics are ignored here for now (peer metrics
 // land in PeerEnv via ApplyEnvMetrics).
 func (d *Driver) ApplyDeviceMetrics(msg mdl.DeviceMetrics) {
+	defer d.Publish(Event{Kind: EventDeviceMetrics, Data: msg})
 	if msg.FromNodeNum == d.State.MyNodeNum || msg.FromNodeNum == 0 {
 		d.State.BatteryLevel = msg.BatteryLevel
 		d.State.BatteryVoltage = msg.Voltage
@@ -114,6 +119,7 @@ func (d *Driver) ApplyDeviceMetrics(msg mdl.DeviceMetrics) {
 // temperature / humidity / pressure / gas. Indexed by FromNodeNum
 // so /env or per-peer dashboards can render the freshest reading.
 func (d *Driver) ApplyEnvMetrics(msg mdl.EnvMetrics) {
+	defer d.Publish(Event{Kind: EventEnvMetrics, Data: msg})
 	if d.State.PeerEnv == nil {
 		d.State.PeerEnv = make(map[uint32]PeerEnvMetrics)
 	}

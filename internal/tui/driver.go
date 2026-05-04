@@ -62,17 +62,31 @@ type radioDriver interface {
 	// Stop tears down the pump goroutines and transport. Idempotent.
 	Stop()
 
-	// Publish* fan an inbound model event out to every Subscribe-r on
-	// the driver. Today the apply* handlers in radio.go call these
-	// after the in-process state mutation runs, so SSE consumers see
-	// the same events the TUI model does. When apply* relocates onto
-	// the driver itself, the call sites move with it and these
-	// shortcuts get called from inside the driver instead.
-	PublishText(t mdl.Text) driver.Event
-	PublishNodeInfo(n mdl.NodeInfo) driver.Event
-	PublishChannelInfo(c mdl.ChannelInfo) driver.Event
-	PublishPosition(p mdl.Position) driver.Event
-	PublishRouting(r mdl.Routing) driver.Event
-	PublishTraceroute(t mdl.Traceroute) driver.Event
-	PublishPing(p mdl.Ping) driver.Event
+	// Apply* mutates the canonical State in response to an inbound
+	// model event. Each method publishes to subscribers on its way
+	// out (defer Publish*), so consumers see the same events the
+	// state mutation produced. Local mode uses *driver.Driver which
+	// also persists via Store; remote mode uses *sdk.Remote (which
+	// embeds *driver.Driver with nil Pump + nil Store) so Apply*
+	// only mutates the local State projection — persistence and
+	// SSE fan-out happened daemon-side before the event arrived.
+	//
+	// The TUI's Update dispatches every inbound mdl.X tea.Msg to
+	// the matching ApplyX, then layers TUI-only side effects (flash
+	// banner, ding, scrollback nudge). State mutation is single-
+	// source: there is exactly one implementation in driver/apply.go.
+	ApplyMyInfo(msg mdl.MyInfo) driver.ApplyMyInfoResult
+	ApplyMetadata(msg mdl.Metadata)
+	ApplyLoraConfig(msg mdl.LoraConfig)
+	ApplyDeviceConfig(msg mdl.DeviceConfig)
+	ApplyDeviceMetrics(msg mdl.DeviceMetrics)
+	ApplyEnvMetrics(msg mdl.EnvMetrics)
+	ApplyPosition(msg mdl.Position, grid string) driver.ApplyPositionResult
+	ApplyChannelInfo(msg mdl.ChannelInfo)
+	ApplyNodeInfo(msg mdl.NodeInfo) driver.ApplyNodeInfoResult
+	ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) driver.ApplyTextResult
+	ApplyRouting(msg mdl.Routing) driver.ApplyRoutingResult
+	ApplyTraceroute(msg mdl.Traceroute)
+	ApplyPing(msg mdl.Ping)
+	ApplyConfigComplete() bool
 }

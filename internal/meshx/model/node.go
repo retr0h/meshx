@@ -20,6 +20,45 @@
 
 package model
 
+import "fmt"
+
+// DefaultCallsign synthesizes the Meshtastic firmware-default name
+// pair from a node num. Used to render a peer's row before NodeInfo
+// arrives (and to seed ghost peers when a Text packet from an unknown
+// node lands). Format matches Meshtastic's official clients:
+// "Meshtastic xxxx" / "xxxx" where xxxx is the lowercase last-4-hex
+// of node_num.
+func DefaultCallsign(nodeNum uint32) (long, short string) {
+	short = fmt.Sprintf("%04x", nodeNum&0xFFFF)
+	long = "Meshtastic " + short
+	return long, short
+}
+
+// NodeItemFromCached projects a CachedNode (storage row) into a
+// NodeItem (live runtime row). The fallback name chain matches what
+// the renderer expects: long → short → "node 0xNNNNNNNN" placeholder.
+// State is the supplied default; callers pass StateMuted when n.Muted
+// or StateOffline for general post-replay seeding (live LastHeardAt
+// derives the actual state at render time via NodeItem.CurrentState).
+func NodeItemFromCached(n CachedNode, state NodeState) NodeItem {
+	name := n.LongName
+	if name == "" {
+		name = n.ShortName
+	}
+	if name == "" {
+		name = fmt.Sprintf("node 0x%x", n.NodeNum)
+	}
+	return NodeItem{
+		Callsign:  name,
+		ShortName: n.ShortName,
+		NodeNum:   n.NodeNum,
+		State:     state,
+		Fav:       n.Favorite,
+		LastHeard: "cached",
+		HwModel:   n.HwModel,
+	}
+}
+
 // CachedNode is the slim persistence shape of a peer — identity
 // fields plus sticky UX preferences (favorite / muted). Returned by
 // the storage layer's LoadNodes; consumed by the meshx renderer at

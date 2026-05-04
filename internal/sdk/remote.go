@@ -42,24 +42,30 @@ import (
 
 // Remote is the HTTP+SSE-backed radio session — the *driver.Driver
 // twin used in remote-client mode (`meshx remote <radio_id>
-// --server URL`). Owns:
+// --server URL`).
 //
+// Embeds a *driver.Driver with nil Pump and nil Store. That gives
+// Remote every Apply* and Publish* method for free, and ensures
+// state mutation in remote mode goes through the *exact same code
+// path* the daemon uses on its own State. The only methods Remote
+// overrides are Send (POST HTTP instead of pump write) and Stop
+// (cancel SSE before tearing down). AttachPump is a no-op in
+// practice — the TUI's openPumpMsg path doesn't fire when the
+// model is in remote mode.
+//
+// Wire shape:
 //   - *gen.ClientWithResponses for typed outbound calls
-//   - *driver.State seeded from initial GETs and projected forward
-//     by the SSE consumer
-//   - a goroutine that reads the daemon's /radios/{id}/events stream
-//     and feeds events back into the TUI via tea.Program.Send so the
-//     model's existing Update / apply* path runs unchanged
-//
-// AttachPump / AttachStore are no-ops, PumpHandle / StoreHandle return
-// nil — there's no local pump or storage in remote mode (the daemon
-// owns both). PublishX returns the event without fan-out — no one
-// subscribes to a Remote.
+//   - *driver.State (via the embedded Driver) seeded from initial
+//     GETs and projected forward by the SSE consumer through Apply*
+//   - a goroutine that reads /radios/{id}/events and forwards each
+//     event to teaSend so the TUI's Update sees the same mdl.X
+//     tea.Msg the local pump path would have produced
 type Remote struct {
+	*driver.Driver
+
 	client    *gen.ClientWithResponses
 	radioID   string
 	serverURL string
-	state     *driver.State
 	cancel    context.CancelFunc
 
 	// teaSend is set by Start once the bubbletea program is up.
@@ -79,10 +85,10 @@ func NewRemote(serverURL, radioID string) (*Remote, error) {
 		return nil, fmt.Errorf("sdk: build client: %w", err)
 	}
 	r := &Remote{
+		Driver:    driver.New(driver.NewState(), nil, nil),
 		client:    c,
 		radioID:   radioID,
 		serverURL: serverURL,
-		state:     driver.NewState(),
 	}
 	if err := r.seed(context.Background()); err != nil {
 		return nil, err
@@ -103,7 +109,7 @@ func (r *Remote) seed(ctx context.Context) error {
 	if snapResp.JSON200 == nil {
 		return fmt.Errorf("sdk: get radio %s: %s", r.radioID, snapResp.Status())
 	}
-	applySessionSnapshot(r.state, *snapResp.JSON200)
+	applySessionSnapshot(r.State, *snapResp.JSON200)
 
 	chResp, err := r.client.ListChannelsWithResponse(ctx, r.radioID)
 	if err != nil {
@@ -111,7 +117,7 @@ func (r *Remote) seed(ctx context.Context) error {
 	}
 	if chResp.JSON200 != nil && chResp.JSON200.Channels != nil {
 		for _, g := range *chResp.JSON200.Channels {
-			r.state.Channels = append(r.state.Channels, channelFromGen(g))
+			r.State.Channels = append(r.State.Channels, channelFromGen(g))
 		}
 	}
 
@@ -122,8 +128,8 @@ func (r *Remote) seed(ctx context.Context) error {
 	if ndResp.JSON200 != nil && ndResp.JSON200.Nodes != nil {
 		for _, g := range *ndResp.JSON200.Nodes {
 			n := nodeFromGen(g)
-			r.state.NodesByNum[n.NodeNum] = len(r.state.Nodes)
-			r.state.Nodes = append(r.state.Nodes, n)
+			r.State.NodesByNum[n.NodeNum] = len(r.State.Nodes)
+			r.State.Nodes = append(r.State.Nodes, n)
 		}
 	}
 
@@ -135,9 +141,9 @@ func (r *Remote) seed(ctx context.Context) error {
 		for _, g := range *msgResp.JSON200.Messages {
 			m := messageFromGen(g)
 			if m.PacketID > 0 {
-				r.state.MessagesByPacketID[m.PacketID] = len(r.state.Messages)
+				r.State.MessagesByPacketID[m.PacketID] = len(r.State.Messages)
 			}
-			r.state.Messages = append(r.state.Messages, m)
+			r.State.Messages = append(r.State.Messages, m)
 		}
 	}
 	return nil
@@ -157,28 +163,27 @@ func (r *Remote) Start(teaSend func(msg any)) {
 }
 
 // Stop cancels the SSE goroutine and any in-flight call. Idempotent.
+// The embedded Driver.Stop is also called for symmetry, even though
+// the embedded driver's Pump is always nil in remote mode and Stop
+// is therefore a no-op there — keeping it makes the lifecycle
+// uniform with local mode.
 func (r *Remote) Stop() {
-	if r == nil || r.cancel == nil {
+	if r == nil {
 		return
 	}
-	r.cancel()
-	r.cancel = nil
-}
-
-// Session returns the local State projection. Same shape and
-// semantics as *driver.Driver.Session() — render code reads it
-// unchanged in either mode.
-func (r *Remote) Session() *driver.State {
-	if r == nil {
-		return nil
+	if r.cancel != nil {
+		r.cancel()
+		r.cancel = nil
 	}
-	return r.state
+	r.Driver.Stop()
 }
 
 // Send dispatches a command to the daemon. Today only mdl.SendText
 // is wired — the other Command variants (SetOwner, SetBuzzer,
 // RequestSync, …) need their own daemon endpoints first; they fall
-// through with ok=false until then.
+// through with ok=false until then. Overrides the embedded
+// Driver.Send (which would write to a nil Pump and silently no-op)
+// with HTTP POST against the daemon.
 func (r *Remote) Send(cmd mdl.Command) (uint32, bool) {
 	if r == nil {
 		return 0, false
@@ -201,62 +206,6 @@ func (r *Remote) Send(cmd mdl.Command) (uint32, bool) {
 	default:
 		return 0, false
 	}
-}
-
-// AttachPump is a no-op in remote mode — the daemon owns the pump.
-// Implemented to satisfy the radioDriver interface; the TUI's
-// openPumpMsg path never fires when the model carries a *Remote.
-func (r *Remote) AttachPump(_ driver.Pump) {}
-
-// AttachStore is a no-op in remote mode — the daemon owns persistence.
-func (r *Remote) AttachStore(_ driver.Store) {}
-
-// PumpHandle returns nil — no local pump in remote mode.
-func (r *Remote) PumpHandle() driver.Pump { return nil }
-
-// StoreHandle returns nil — no local storage in remote mode. Apply*
-// handlers in internal/tui/radio.go nil-check this before persisting,
-// so save calls become no-ops; the daemon already saved before
-// emitting the event over SSE.
-func (r *Remote) StoreHandle() driver.Store { return nil }
-
-// PublishText is a no-op subscribe-side fan-out — Remote has no
-// subscribers. The method exists to satisfy radioDriver. In local
-// mode this is the seam the SSE handler subscribes to; in remote
-// mode the fan-out already happened on the daemon, the SSE arrival
-// is the event, and re-publishing here would be the loopback noise.
-func (r *Remote) PublishText(t mdl.Text) driver.Event {
-	return driver.Event{Kind: driver.EventText, Data: t}
-}
-
-// PublishNodeInfo — see PublishText.
-func (r *Remote) PublishNodeInfo(n mdl.NodeInfo) driver.Event {
-	return driver.Event{Kind: driver.EventNodeInfo, Data: n}
-}
-
-// PublishChannelInfo — see PublishText.
-func (r *Remote) PublishChannelInfo(c mdl.ChannelInfo) driver.Event {
-	return driver.Event{Kind: driver.EventChannelInfo, Data: c}
-}
-
-// PublishPosition — see PublishText.
-func (r *Remote) PublishPosition(p mdl.Position) driver.Event {
-	return driver.Event{Kind: driver.EventPosition, Data: p}
-}
-
-// PublishRouting — see PublishText.
-func (r *Remote) PublishRouting(rt mdl.Routing) driver.Event {
-	return driver.Event{Kind: driver.EventRouting, Data: rt}
-}
-
-// PublishTraceroute — see PublishText.
-func (r *Remote) PublishTraceroute(t mdl.Traceroute) driver.Event {
-	return driver.Event{Kind: driver.EventTraceroute, Data: t}
-}
-
-// PublishPing — see PublishText.
-func (r *Remote) PublishPing(p mdl.Ping) driver.Event {
-	return driver.Event{Kind: driver.EventPing, Data: p}
 }
 
 // runSSE is the long-lived consumer. Opens a streaming GET against

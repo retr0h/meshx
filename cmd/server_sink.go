@@ -87,6 +87,10 @@ func (s *daemonSink) Send(msg any) {
 		s.drv.ApplyText(ev, ev.Body.Text, false)
 	case mdl.Routing:
 		s.drv.ApplyRouting(ev)
+	case mdl.Ping:
+		s.drv.ApplyPing(ev)
+	case mdl.Traceroute:
+		s.drv.ApplyTraceroute(ev)
 	case mdl.ConfigComplete:
 		wasDisconnected := s.drv.ApplyConfigComplete()
 		if wasDisconnected {

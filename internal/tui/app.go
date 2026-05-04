@@ -22,6 +22,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -654,6 +655,14 @@ func hydrateLocalSession(drv *driver.Driver, dest string) []string {
 	transport, addr := storage.ParseRadioDest(dest)
 	if rid, err := store.ResolveRadioByConnection(transport, addr); err == nil {
 		drv.State.RadioID = rid
+		// Pre-populate MyNodeNum from the canonical radio_id
+		// ("0xNNNNNNNN") so splash + status bar render the user's
+		// own callsign immediately on launch instead of "as —" until
+		// MyInfo arrives. mdl.MyInfo handler still re-confirms via
+		// ClaimRadioIdentity once handshake completes.
+		if n, err := strconv.ParseUint(strings.TrimPrefix(rid, "0x"), 16, 32); err == nil {
+			drv.State.MyNodeNum = uint32(n)
+		}
 	}
 
 	// Persisted prefs hydration — /mute (terminal ding, global) and
@@ -668,30 +677,17 @@ func hydrateLocalSession(drv *driver.Driver, dest string) []string {
 
 	// NodeDB cache — every peer we've ever resolved a real User for
 	// is loaded FIRST so ghost replay below can skip them and live
-	// telemetry has a row to upsert against.
+	// telemetry has a row to upsert against. mdl.NodeItemFromCached
+	// is the shared projection both this hydration and the daemon's
+	// equivalent in cmd/server_start.go consume.
 	if cached, err := store.LoadNodes(drv.State.RadioID); err == nil {
 		for _, n := range cached {
-			name := n.LongName
-			if name == "" {
-				name = n.ShortName
-			}
-			if name == "" {
-				name = fmt.Sprintf("node 0x%x", n.NodeNum)
-			}
 			state := mdl.StateOffline
 			if n.Muted {
 				state = mdl.StateMuted
 			}
 			drv.State.NodesByNum[n.NodeNum] = len(drv.State.Nodes)
-			drv.State.Nodes = append(drv.State.Nodes, mdl.NodeItem{
-				Callsign:  name,
-				ShortName: n.ShortName,
-				NodeNum:   n.NodeNum,
-				State:     state,
-				Fav:       n.Favorite,
-				LastHeard: "cached",
-				HwModel:   n.HwModel,
-			})
+			drv.State.Nodes = append(drv.State.Nodes, mdl.NodeItemFromCached(n, state))
 		}
 	}
 
@@ -729,7 +725,7 @@ func hydrateLocalSession(drv *driver.Driver, dest string) []string {
 			if _, ok := drv.State.NodesByNum[msg.FromNum]; ok {
 				continue
 			}
-			long, short := defaultCallsignLocal(msg.FromNum)
+			long, short := mdl.DefaultCallsign(msg.FromNum)
 			drv.State.Nodes = append(drv.State.Nodes, mdl.NodeItem{
 				Callsign:   long,
 				ShortName:  short,
@@ -782,16 +778,6 @@ func hydrateLocalSession(drv *driver.Driver, dest string) []string {
 		))
 	}
 	return notices
-}
-
-// defaultCallsignLocal mirrors the daemon-side helper in driver/apply.go.
-// Kept duplicated here intentionally — the TUI's hydration runs before
-// any pump events, so it can't lean on Driver methods to synthesize
-// names. Once apply* fully consolidates this can collapse.
-func defaultCallsignLocal(nodeNum uint32) (long, short string) {
-	short = fmt.Sprintf("%04x", nodeNum&0xFFFF)
-	long = "Meshtastic " + short
-	return long, short
 }
 
 func (m model) Init() tea.Cmd {
@@ -931,24 +917,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case mdl.MyInfo:
-		m.MyNodeNum = msg.NodeNum
-		// First MyNodeInfo of the session locks in the radio's
-		// canonical identity — "0x" + hex(my_node_num), the same
-		// shape the Meshtastic phone app + Python CLI use. If
-		// m.RadioID is still a placeholder (a "pending:…" string
-		// minted pre-handshake by resolveRadioByConnection, or the
-		// legacy migration-009 seed UUID), claimRadioIdentity does
-		// the atomic rewrite across radios + every FK column
-		// (messages, nodes, settings) in one transaction. Already-
-		// canonical IDs (we've handshaken with this radio before)
-		// just refresh my_node_num + last_seen.
-		if st := m.driver.StoreHandle(); st != nil {
-			if newID, err := st.ClaimRadioIdentity(m.RadioID, msg.NodeNum); err == nil {
-				m.RadioID = newID
-			} else {
-				m.storagePersist(err)
-			}
-		}
+		// State mutation (MyNodeNum + identity claim across FK columns)
+		// goes through Driver.ApplyMyInfo so the daemon and the local
+		// TUI run the same code path. Driver.ApplyMyInfo publishes too.
+		m.driver.ApplyMyInfo(msg)
 		// MyInfo = first frame of the handshake. Reset the received
 		// counter to 0 and emit the start-of-sync notice so the
 		// user sees node-list progress instead of staring at an
@@ -966,15 +938,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case mdl.NodeInfo:
-		m.upsertNode(msg)
-		m.driver.PublishNodeInfo(msg)
-		// While the handshake is still in flight (m.Connected stays
-		// false until ConfigComplete), bump the received counter and
-		// surface it in the chanRow flash via syncCounterFlash —
-		// the running number renders bright (mesh-green bold) so it
-		// reads as the active live signal, "peers received" stays
-		// in the regular flash green. On ConfigComplete the
-		// systemLine path takes over with the final tally.
+		// State + persistence + publish all happen inside Driver.
+		// TUI side effects (ghost-upgrade system line, sync-progress
+		// flash) layer on top of the result.
+		res := m.driver.ApplyNodeInfo(msg)
+		if res.GhostUpgrade {
+			m.systemLine(fmt.Sprintf("identified %s (was %s)", res.NewCallsign, res.PrevCallsign))
+		}
 		if !m.Connected && m.MyNodeNum != 0 {
 			m.SyncReceived++
 			m.flash = "sync: " + syncCounterFlash(m.SyncReceived) + " peers received"
@@ -982,28 +952,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case mdl.ChannelInfo:
-		m.applyChannel(msg)
-		m.driver.PublishChannelInfo(msg)
+		m.driver.ApplyChannelInfo(msg)
 		return m, nil
 
 	case mdl.Text:
+		// applyTextMessage still owns the TUI-side autoscroll +
+		// ding logic. Sanitize + state mutation happen through
+		// Driver.ApplyText so the daemon and the TUI write
+		// identical State.Messages rows.
 		cmd := m.applyTextMessage(msg)
-		m.driver.PublishText(msg)
 		return m, cmd
 
 	case mdl.Routing:
-		m.applyRouting(msg)
-		m.driver.PublishRouting(msg)
+		// Driver.ApplyRouting flips Message.Status (ack/fail) and
+		// persists. The TUI layer adds ping-correlation fallback
+		// (some firmware acks before REPLY_APP returns) + flash.
+		res := m.driver.ApplyRouting(msg)
+		m.reactRouting(msg, res)
 		return m, nil
 
 	case mdl.Traceroute:
+		// Driver.ApplyTraceroute refreshes peer LastHops + publishes;
+		// applyTraceroute layers the systemBlock + flash + clears
+		// PendingTraceroute on a request_id match.
+		m.driver.ApplyTraceroute(msg)
 		m.applyTraceroute(msg)
-		m.driver.PublishTraceroute(msg)
 		return m, nil
 
 	case mdl.Ping:
+		// Driver.ApplyPing refreshes peer telemetry + publishes;
+		// applyPing layers the systemBlock + flash + clears
+		// PendingPing on a request_id match.
+		m.driver.ApplyPing(msg)
 		m.applyPing(msg)
-		m.driver.PublishPing(msg)
 		return m, nil
 
 	case pingTimeoutMsg:
@@ -1063,71 +1044,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case mdl.Metadata:
-		m.RadioFirmware = msg.FirmwareVersion
-		m.RadioDeviceState = msg.DeviceStateVer
-		m.RadioHasWifi = msg.HasWifi
-		m.RadioHasBT = msg.HasBluetooth
+		m.driver.ApplyMetadata(msg)
 		return m, nil
 
 	case mdl.LoraConfig:
-		m.RadioTxPower = msg.TxPowerDBm
-		m.RadioRegion = string(msg.Region)
-		m.RadioModemPreset = string(msg.ModemPreset)
+		m.driver.ApplyLoraConfig(msg)
 		return m, nil
 
 	case mdl.DeviceMetrics:
-		// Only apply metrics for our own node to the "my radio"
-		// status fields. Peer metrics could later be upserted onto
-		// their nodeItem for per-peer battery display.
-		if msg.FromNodeNum == m.MyNodeNum || msg.FromNodeNum == 0 {
-			m.BatteryLevel = msg.BatteryLevel
-			m.BatteryVoltage = msg.Voltage
-			m.ChannelUtil = msg.ChannelUtil
-			m.AirUtilTx = msg.AirUtilTx
-			m.HasTelemetry = true
-		}
+		m.driver.ApplyDeviceMetrics(msg)
 		return m, nil
 
 	case mdl.DeviceConfig:
-		m.RadioRole = string(msg.Role)
+		m.driver.ApplyDeviceConfig(msg)
 		return m, nil
 
 	case mdl.Position:
-		if m.PeerPositions == nil {
-			m.PeerPositions = make(map[uint32]driver.PeerPosition)
-		}
-		m.PeerPositions[msg.FromNodeNum] = driver.PeerPosition{
-			Latitude:  msg.Latitude,
-			Longitude: msg.Longitude,
-			Altitude:  msg.Altitude,
-			Grid:      maidenhead(msg.Latitude, msg.Longitude),
-			At:        msg.At,
-		}
-		// If this is our own position, also populate the top-bar grid.
-		if msg.FromNodeNum == m.MyNodeNum {
-			m.MyLatitude = msg.Latitude
-			m.MyLongitude = msg.Longitude
-			m.MyAltitude = msg.Altitude
-			m.MyGrid = maidenhead(msg.Latitude, msg.Longitude)
-		}
+		m.driver.ApplyPosition(msg, maidenhead(msg.Latitude, msg.Longitude))
 		return m, nil
 
 	case mdl.EnvMetrics:
-		if m.PeerEnv == nil {
-			m.PeerEnv = make(map[uint32]driver.PeerEnvMetrics)
-		}
-		m.PeerEnv[msg.FromNodeNum] = driver.PeerEnvMetrics{
-			Temperature: msg.Temperature,
-			Humidity:    msg.Humidity,
-			Pressure:    msg.Pressure,
-			Gas:         msg.Gas,
-			At:          time.Now(),
-		}
+		m.driver.ApplyEnvMetrics(msg)
 		return m, nil
 
 	case mdl.ConfigComplete:
-		wasDisconnected := !m.Connected
-		m.Connected = true
+		wasDisconnected := m.driver.ApplyConfigComplete()
 		// Definitive end of the handshake — NodeDB and config dump
 		// have all arrived, the user can see live state. Drop the
 		// reconnect banner now and not before; MyInfo isn't strong

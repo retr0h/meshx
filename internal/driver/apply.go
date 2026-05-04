@@ -225,7 +225,7 @@ func (d *Driver) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
 	defer d.PublishNodeInfo(msg)
 	unresolved := false
 	if msg.LongName == "" && msg.ShortName == "" {
-		long, short := defaultCallsign(msg.NodeNum)
+		long, short := mdl.DefaultCallsign(msg.NodeNum)
 		msg.LongName = long
 		msg.ShortName = short
 		unresolved = true
@@ -304,7 +304,7 @@ type ApplyTextResult struct {
 func (d *Driver) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) ApplyTextResult {
 	defer d.PublishText(ev)
 	body := ev.Body
-	defaultLong, _ := defaultCallsign(body.FromNum)
+	defaultLong, _ := mdl.DefaultCallsign(body.FromNum)
 	from := defaultLong
 	if idx, ok := d.State.NodesByNum[body.FromNum]; ok {
 		from = d.State.Nodes[idx].Callsign
@@ -320,7 +320,7 @@ func (d *Driver) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) Ap
 			d.State.Nodes[idx].LastHops = body.Hops
 		}
 	} else if body.FromNum != 0 {
-		long, short := defaultCallsign(body.FromNum)
+		long, short := mdl.DefaultCallsign(body.FromNum)
 		d.State.Nodes = append(d.State.Nodes, mdl.NodeItem{
 			Callsign:    long,
 			ShortName:   short,
@@ -433,6 +433,43 @@ func (d *Driver) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 	return ApplyRoutingResult{}
 }
 
+// ApplyPing records a REPLY_APP echo's telemetry against the
+// matching peer's NodeItem (LastHops / LastSNR / LastRSSI /
+// LastHeardAt) and publishes the event so SSE consumers see the
+// ping land. The TUI side correlates the ping against its
+// PendingPing slot and renders the systemBlock — that lives in
+// the TUI because the report shape is presentation, not state.
+//
+// The state mutation here mirrors the per-Node telemetry refresh
+// that happens on every text packet, so a remote client doing
+// /whois on a peer that just answered a /ping reads the freshest
+// signal numbers without needing the TUI's correlation logic.
+func (d *Driver) ApplyPing(msg mdl.Ping) {
+	defer d.PublishPing(msg)
+	if idx, ok := d.State.NodesByNum[msg.FromNum]; ok && idx < len(d.State.Nodes) {
+		d.State.Nodes[idx].LastHops = msg.Hops
+		if msg.SNR != "" {
+			d.State.Nodes[idx].LastSNR = msg.SNR
+		}
+		if msg.RSSI != "" {
+			d.State.Nodes[idx].LastRSSI = msg.RSSI
+		}
+		d.State.Nodes[idx].LastHeardAt = time.Now()
+	}
+}
+
+// ApplyTraceroute records a TRACEROUTE_APP reply's hop count on
+// the source peer's NodeItem and publishes the event. Path
+// rendering (systemBlock with the resolved hop chain) lives in
+// the TUI — it's presentation, and the daemon doesn't know which
+// callsigns the consumer wants to see.
+func (d *Driver) ApplyTraceroute(msg mdl.Traceroute) {
+	defer d.PublishTraceroute(msg)
+	if idx, ok := d.State.NodesByNum[msg.FromNum]; ok && idx < len(d.State.Nodes) {
+		d.State.Nodes[idx].LastHops = len(msg.Route)
+	}
+}
+
 // ApplyConfigComplete marks the handshake as complete — Connected
 // flips true, the reconnect banner clears. Returns whether this was
 // the first ConfigComplete (TUI uses it to decide whether to emit
@@ -444,17 +481,6 @@ func (d *Driver) ApplyConfigComplete() bool {
 	d.State.SyncReceived = 0
 	d.Publish(Event{Kind: EventConfigComplete, Data: mdl.ConfigComplete{}})
 	return wasDisconnected
-}
-
-// defaultCallsign synthesizes the Meshtastic firmware-default name
-// pair from a node num. Used to render a peer's row before NodeInfo
-// arrives (and to seed ghost peers in ApplyText). Format matches
-// Meshtastic's own clients: "Meshtastic xxxx" / "xxxx" where xxxx is
-// the lowercase last-4-hex of node_num.
-func defaultCallsign(nodeNum uint32) (long, short string) {
-	short = fmt.Sprintf("%04x", nodeNum&0xFFFF)
-	long = "Meshtastic " + short
-	return long, short
 }
 
 // humanDuration is a tiny formatter for the LastHeard display column

@@ -109,25 +109,23 @@ func tabCompletionFlashCell(matches []matchItem, active int) string {
 }
 
 // splashTaglineCell renders the BitchX-style tagline that hangs
-// under the splash banner: `░▒▓█▓▒░ Meshtastic messenger  ·  as
-// <callsign> ░▒▓█▓▒░` — or just `░▒▓█▓▒░ Meshtastic messenger
-// ░▒▓█▓▒░` when callsign is empty (fresh boot, no cached self).
+// under the splash banner:
+// `░▒▓█▓▒░ Meshtastic messenger  ·  by retr0h ░▒▓█▓▒░`.
 // Sparks bracket the brand in mesh-green, product name in cyan,
-// connector in dim drained, callsign in magenta.
-func splashTaglineCell(callsign string) string {
+// connector in dim drained, author credit in magenta. The callsign
+// argument is unused today (kept on the signature so call sites
+// don't churn) — the running-as info already lives in the top
+// status bar and doesn't need to duplicate here.
+func splashTaglineCell(_ string) string {
 	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
 	magenta := lipgloss.NewStyle().Foreground(lipgloss.Color(mhMagenta))
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	spark := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(meshGreen)).
 		Render("░▒▓█▓▒░")
-	if callsign == "" {
-		return spark + " " + cyan.Render("Meshtastic") +
-			dim.Render(" messenger") + " " + spark
-	}
 	return spark + " " +
-		cyan.Render("Meshtastic") + dim.Render(" messenger  ·  as ") +
-		magenta.Render(callsign) + " " + spark
+		cyan.Render("Meshtastic") + dim.Render(" messenger  ·  by ") +
+		magenta.Render("retr0h") + " " + spark
 }
 
 // gutterWidth is the left margin reserved for the selection

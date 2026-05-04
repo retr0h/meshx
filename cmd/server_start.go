@@ -157,27 +157,12 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 			}
 			if cached, err := concreteStore.LoadNodes(radioID); err == nil {
 				for _, n := range cached {
-					name := n.LongName
-					if name == "" {
-						name = n.ShortName
-					}
-					if name == "" {
-						name = fmt.Sprintf("node 0x%x", n.NodeNum)
-					}
 					state := mdl.StateOffline
 					if n.Muted {
 						state = mdl.StateMuted
 					}
 					drv.State.NodesByNum[n.NodeNum] = len(drv.State.Nodes)
-					drv.State.Nodes = append(drv.State.Nodes, mdl.NodeItem{
-						Callsign:  name,
-						ShortName: n.ShortName,
-						NodeNum:   n.NodeNum,
-						State:     state,
-						Fav:       n.Favorite,
-						LastHeard: "cached",
-						HwModel:   n.HwModel,
-					})
+					drv.State.Nodes = append(drv.State.Nodes, mdl.NodeItemFromCached(n, state))
 				}
 			} else {
 				log.Warn("storage replay (nodes) failed", slog.Any("error", err))

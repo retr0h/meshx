@@ -571,7 +571,7 @@ func (s *Sqlite) SaveMessage(radioID, channel string, msg model.Message) error {
             status = excluded.status,
             hops   = excluded.hops,
             snr    = excluded.snr`,
-		radioID, channel, msg.Time, msg.From, msg.Text, mine, msg.Bang, msg.Status.String(),
+		radioID, channel, msg.Time, msg.From, msg.Text, mine, msg.Bang, string(msg.Status),
 		msg.Hops, msg.SNR, msg.PacketID, msg.ReplyID, msg.FromNum, msg.ToNum,
 	)
 	if err != nil {
@@ -629,7 +629,7 @@ func (s *Sqlite) LoadMessages(
 		); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
-		msg.Status = model.ParseMessageStatus(statusStr)
+		msg.Status = model.MessageStatus(statusStr)
 		msg.Mine = mine != 0
 		out = append(out, msg)
 	}

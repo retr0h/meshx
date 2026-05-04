@@ -28,100 +28,46 @@ package model
 
 import "time"
 
-// MessageStatus is a typed enum for Message.Status. Strings on the
-// wire / disk (the SQLite messages.status column stays TEXT for
-// debuggability — `sqlite3 meshx.db "select status from messages"`
-// reads as "ack" / "pending" / etc., not opaque ints) but typed in
-// the model so a typo like StatusPendng becomes a compile error
-// instead of a row that silently never matches a switch case. The
-// boundary lives in the storage package's saveMessage/loadMessages
-// using String() and ParseMessageStatus() for the conversion.
-type MessageStatus int
+// MessageStatus is a string-typed enum for Message.Status — the wire
+// form (HTTP/SSE JSON), the persistence form (SQLite messages.status
+// TEXT column), and the in-memory form are all the same string. Using
+// a named string type rather than a raw string keeps typo'd values
+// (StatusPendng, "pendnig") a compile error instead of a row that
+// silently never matches a switch case, and lets OpenAPI codegen emit
+// proper typed enums in every consumer language.
+type MessageStatus string
 
+// Each constant's value is the canonical wire/disk string. Stable —
+// historic SQLite rows replay correctly across refactors. Order
+// matches the lifecycle: empty ↔ inbound, ack/pending/fail are
+// outbound, system/notice are TUI-local.
 const (
-	// StatusOK is the zero value — used for inbound chat that doesn't
-	// carry a delivery indicator. Persisted as the empty string "".
-	StatusOK MessageStatus = iota
+	// StatusOK is the zero value — inbound chat without a delivery
+	// indicator. Persists as the empty string in SQLite.
+	StatusOK MessageStatus = ""
 	// StatusAck — outbound message the radio confirmed delivery for
 	// (Routing.NONE on a routing reply OR a real REPLY_APP echo).
 	// Renders the trailing ✓ glyph.
-	StatusAck
+	StatusAck MessageStatus = "ack"
 	// StatusPending — outbound message we've enqueued but haven't
 	// heard back on. Renders the trailing … glyph; the stale-pending
 	// sweep at startup flips any row stuck here past the cutoff to
 	// StatusFail.
-	StatusPending
+	StatusPending MessageStatus = "pending"
 	// StatusFail — outbound message the radio actively rejected OR
 	// that aged out without an ack. Renders the trailing ✗ glyph;
 	// the `R` nav-key resends.
-	StatusFail
+	StatusFail MessageStatus = "fail"
 	// StatusSystem — locally generated row (`-!-` notice, /whois /
 	// /info / /config blocks, etc.). NOT persisted to SQLite — the
 	// storage layer's saveMessage early-returns on these since they
 	// regenerate from live state on every launch.
-	StatusSystem
+	StatusSystem MessageStatus = "system"
 	// StatusNotice — TTL-expiring `-!-` row from notices.go. Same
 	// rendering as StatusSystem but with a fade + reap path; NOT
 	// persisted for the same reason.
-	StatusNotice
+	StatusNotice MessageStatus = "notice"
 )
-
-// MarshalJSON emits the string form so HTTP API responses carry
-// "ack" / "pending" / etc. rather than opaque integer values.
-func (s MessageStatus) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + s.String() + `"`), nil
-}
-
-// UnmarshalJSON is the inverse for client-side round-tripping.
-func (s *MessageStatus) UnmarshalJSON(data []byte) error {
-	v := string(data)
-	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
-		v = v[1 : len(v)-1]
-	}
-	*s = ParseMessageStatus(v)
-	return nil
-}
-
-// String returns the wire/disk form. Kept stable so historic SQLite
-// rows replay correctly across refactors (column stays TEXT, no
-// migration needed).
-func (s MessageStatus) String() string {
-	switch s {
-	case StatusAck:
-		return "ack"
-	case StatusPending:
-		return "pending"
-	case StatusFail:
-		return "fail"
-	case StatusSystem:
-		return "system"
-	case StatusNotice:
-		return "notice"
-	default:
-		return ""
-	}
-}
-
-// ParseMessageStatus is the inverse — used by the storage layer when
-// reading the messages.status TEXT column off disk. Unknown values
-// fall back to StatusOK rather than panicking; an invalid row is
-// surface-level wrong (no glyph) but doesn't crash the UI.
-func ParseMessageStatus(s string) MessageStatus {
-	switch s {
-	case "ack":
-		return StatusAck
-	case "pending":
-		return StatusPending
-	case "fail":
-		return StatusFail
-	case "system":
-		return StatusSystem
-	case "notice":
-		return StatusNotice
-	default:
-		return StatusOK
-	}
-}
 
 // Message is the persistence/wire shape of one chat row — every
 // field maps to a SQLite messages column AND (eventually) a JSON

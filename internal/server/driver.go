@@ -63,4 +63,13 @@ type Driver interface {
 	// responsible for ctx lifecycle, the driver detaches the channel
 	// and closes it on cancel. Used by the SSE handler.
 	Subscribe(ctx context.Context) <-chan driver.Event
+
+	// RecordOutbound mirrors ApplyText for locally-originated text —
+	// appends a "mine" row to State.Messages, persists, indexes by
+	// PacketID, and publishes a synthesized mdl.Text. Called by
+	// handleSendMessage after Send returns the allocated packet id
+	// so remote clients see their own outbound message reflected in
+	// /messages and /events without waiting for a radio echo that
+	// never comes.
+	RecordOutbound(opts driver.RecordOutboundOptions) driver.ApplyTextResult
 }

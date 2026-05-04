@@ -26,6 +26,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/retr0h/meshx/internal/driver"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
@@ -301,6 +302,16 @@ func (s *Server) handleSendMessage(
 		Channel: in.Body.Channel,
 		Text:    in.Body.Text,
 		ReplyID: in.Body.ReplyID,
+	})
+	// Record the outbound row in State.Messages + persist + publish
+	// even when ok=false (demo mode / pump disconnected): the row
+	// still belongs in the user's chat log as a pending entry, and
+	// the Routing handler flips it to Fail when no ack arrives.
+	d.RecordOutbound(driver.RecordOutboundOptions{
+		Channel:  in.Body.Channel,
+		Text:     in.Body.Text,
+		ReplyID:  in.Body.ReplyID,
+		PacketID: pid,
 	})
 	out := &sendMessageOutput{}
 	out.Body = SendMessageResult{PacketID: pid, OK: ok}

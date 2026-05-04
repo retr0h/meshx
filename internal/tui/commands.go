@@ -71,28 +71,22 @@ func (m *model) sendPlainMessage(text string) {
 // renders with the magenta `›` "mine" marker instead of the yellow
 // `*` bang flag.
 func (m *model) sendPlainReply(text string, replyToID uint32) {
-	var pid uint32
-	if m.driver.PumpHandle() != nil {
-		pid, _ = m.driver.Send(mdl.SendText{
-			Channel: int(m.currentChannelIndex()),
-			Text:    text,
-			ReplyID: replyToID,
-		})
-	}
-	item := messageItem{Message: mdl.Message{
-		Time: timeNowHHMM(), From: "me", Mine: true, Text: text,
-		Status: mdl.StatusPending, PacketID: pid,
+	channel := int(m.currentChannelIndex())
+	pid, _ := m.driver.Send(mdl.SendText{
+		Channel: channel,
+		Text:    text,
 		ReplyID: replyToID,
-		FromNum: m.MyNodeNum,
-		SentAt:  time.Now(),
-	}}
-	m.Messages = append(m.Messages, item)
-	m.selectedMsg = len(m.Messages) - 1
-	m.flash = fmt.Sprintf("sent in %s", m.CurrentChannel)
-
-	if st := m.driver.StoreHandle(); st != nil {
-		m.storagePersist(st.SaveMessage(m.RadioID, m.CurrentChannel, item.Message))
+	})
+	res := m.driver.RecordOutbound(driver.RecordOutboundOptions{
+		Channel:  channel,
+		Text:     text,
+		ReplyID:  replyToID,
+		PacketID: pid,
+	})
+	if res.Index >= 0 {
+		m.selectedMsg = res.Index
 	}
+	m.flash = fmt.Sprintf("sent in %s", m.CurrentChannel)
 }
 
 // setOwner validates the desired longname / shortname and sends an
@@ -1945,36 +1939,23 @@ func (m *model) sendBang(bang, body string) {
 // the same replyID so the renderer can draw a quoted-parent line
 // above the reply.
 func (m *model) sendBangReply(bang, body string, replyToID uint32) {
-	status := mdl.StatusPending // flipped by mdl.Routing handler
-	var pid uint32
-	if m.driver.PumpHandle() != nil {
-		pid, _ = m.driver.Send(mdl.SendText{
-			Channel: int(m.currentChannelIndex()),
-			Text:    body,
-			ReplyID: replyToID,
-		})
-	}
-	item := messageItem{Message: mdl.Message{
-		Time:     timeNowHHMM(),
-		From:     "me",
-		Mine:     true,
-		Bang:     bang,
+	channel := int(m.currentChannelIndex())
+	pid, _ := m.driver.Send(mdl.SendText{
+		Channel: channel,
+		Text:    body,
+		ReplyID: replyToID,
+	})
+	res := m.driver.RecordOutbound(driver.RecordOutboundOptions{
+		Channel:  channel,
 		Text:     body,
-		Status:   status,
+		Bang:     bang,
 		ReplyID:  replyToID,
 		PacketID: pid,
-		FromNum:  m.MyNodeNum,
-		SentAt:   time.Now(),
-	}}
-	m.Messages = append(m.Messages, item)
-	m.selectedMsg = len(m.Messages) - 1
-	m.focused = paneMessages
-
-	// Persist the outgoing so the log survives restart. Skipped in
-	// demo mode (store is nil there).
-	if st := m.driver.StoreHandle(); st != nil {
-		m.storagePersist(st.SaveMessage(m.RadioID, m.CurrentChannel, item.Message))
+	})
+	if res.Index >= 0 {
+		m.selectedMsg = res.Index
 	}
+	m.focused = paneMessages
 }
 
 // replyTargetFor returns the packetID of the most recent message

@@ -470,6 +470,80 @@ func (d *Driver) ApplyTraceroute(msg mdl.Traceroute) {
 	}
 }
 
+// RecordOutboundOptions describes a locally-originated text packet
+// the caller has just handed to the pump (or POSTed to the daemon).
+// Fields mirror mdl.SendText with the Driver-allocated PacketID
+// included so the row's MessagesByPacketID index lines up with the
+// later Routing receipt.
+type RecordOutboundOptions struct {
+	Channel  int
+	Text     string
+	Bang     string // empty for plain chat; "/cq", "/73", etc. for ham bangs
+	ReplyID  uint32
+	PacketID uint32 // returned by Send; 0 in demo mode
+	ToNum    uint32 // 0 for broadcast
+}
+
+// RecordOutbound appends a "mine" row for a just-sent text packet
+// into State.Messages, persists it, indexes by PacketID, and
+// publishes the synthesized mdl.Text event so SSE consumers (remote
+// TUIs in particular) see their own outbound message reflected in
+// the chat log immediately rather than waiting for the radio to
+// echo a packet that's never coming.
+//
+// State mutation is single-source: TUI's sendPlainReply /
+// sendBangReply and the daemon's handleSendMessage both call this.
+// Without it, remote-mode TUIs would type a message, see it
+// disappear, and never know the daemon actually accepted it.
+func (d *Driver) RecordOutbound(opts RecordOutboundOptions) ApplyTextResult {
+	if d == nil {
+		return ApplyTextResult{Index: -1}
+	}
+	channelName := d.State.CurrentChannel
+	if opts.Channel >= 0 && opts.Channel < len(d.State.Channels) {
+		if name := d.State.Channels[opts.Channel].Name; name != "" {
+			channelName = name
+		}
+	}
+	now := time.Now()
+	item := mdl.MessageItem{Message: mdl.Message{
+		Time:     timeHHMM(now),
+		From:     "me",
+		Mine:     true,
+		Bang:     opts.Bang,
+		Text:     opts.Text,
+		Status:   mdl.StatusPending,
+		PacketID: opts.PacketID,
+		ReplyID:  opts.ReplyID,
+		FromNum:  d.State.MyNodeNum,
+		ToNum:    opts.ToNum,
+		SentAt:   now,
+	}}
+	d.State.Messages = append(d.State.Messages, item)
+	idx := len(d.State.Messages) - 1
+	if opts.PacketID != 0 {
+		d.State.MessagesByPacketID[opts.PacketID] = idx
+	}
+	if d.Store != nil {
+		_ = d.Store.SaveMessage(d.State.RadioID, channelName, item.Message)
+	}
+	// Publish a synthesized mdl.Text so SSE subscribers get a
+	// live "new outbound message" event in lockstep with the
+	// State.Messages append. Mirrors the inbound ApplyText path.
+	d.Publish(Event{Kind: EventText, Data: mdl.Text{
+		Body:    item.Message,
+		Channel: opts.Channel,
+		ToNum:   opts.ToNum,
+	}})
+	return ApplyTextResult{Index: idx, FromMine: true}
+}
+
+// timeHHMM is the same HH:MM formatter the TUI uses; lifted here so
+// RecordOutbound doesn't reach into the TUI package for the format.
+func timeHHMM(t time.Time) string {
+	return fmt.Sprintf("%02d:%02d", t.Hour(), t.Minute())
+}
+
 // ApplyConfigComplete marks the handshake as complete — Connected
 // flips true, the reconnect banner clears. Returns whether this was
 // the first ConfigComplete (TUI uses it to decide whether to emit

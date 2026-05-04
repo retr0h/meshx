@@ -89,4 +89,11 @@ type radioDriver interface {
 	ApplyTraceroute(msg mdl.Traceroute)
 	ApplyPing(msg mdl.Ping)
 	ApplyConfigComplete() bool
+
+	// RecordOutbound mirrors the inbound ApplyText path for messages
+	// the user just typed locally — appends a "mine" row, persists,
+	// indexes by PacketID, and publishes a synthesized mdl.Text so
+	// SSE clients see the outbound row in lockstep with the daemon's
+	// State.Messages append.
+	RecordOutbound(opts driver.RecordOutboundOptions) driver.ApplyTextResult
 }

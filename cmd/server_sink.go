@@ -56,7 +56,8 @@ func (s *daemonSink) Send(msg any) {
 		res := s.drv.ApplyMyInfo(ev)
 		if res.Changed && s.registry != nil {
 			s.registry.Rekey(res.OldRadioID, res.NewRadioID, s.drv)
-			s.log.Info("radio identified",
+			s.log.Info(
+				"radio identified",
 				slog.String("old_radio_id", res.OldRadioID),
 				slog.String("new_radio_id", res.NewRadioID),
 				slog.Uint64("my_node_num", uint64(ev.NodeNum)),
@@ -93,7 +94,8 @@ func (s *daemonSink) Send(msg any) {
 	case mdl.ConfigComplete:
 		wasDisconnected := s.drv.ApplyConfigComplete()
 		if wasDisconnected {
-			s.log.Info("radio connected",
+			s.log.Info(
+				"radio connected",
 				slog.String("radio_id", s.drv.State.RadioID),
 				slog.Int("nodes", len(s.drv.State.Nodes)),
 				slog.Int("channels", len(s.drv.State.Channels)),
@@ -107,7 +109,8 @@ func (s *daemonSink) Send(msg any) {
 		if ev.Err != nil {
 			errStr = ev.Err.Error()
 		}
-		s.log.Warn("transport reconnecting",
+		s.log.Warn(
+			"transport reconnecting",
 			slog.Int("attempt", ev.Attempt),
 			slog.Duration("retry_in", ev.After),
 			slog.String("error", errStr),

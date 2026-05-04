@@ -59,7 +59,8 @@ in the pump / model wiring; if probe sees nothing, the issue is
 in DialBLE / bleClient.Run itself.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
-		logger.With(slog.String("subsystem", "ble.probe")).Debug("running",
+		logger.With(slog.String("subsystem", "ble.probe")).Debug(
+			"running",
 			slog.String("uuid", args[0]),
 			slog.Duration("timeout", bleProbeTimeout),
 		)
@@ -163,7 +164,8 @@ func fromRadioKind(msg *pb.FromRadio) string {
 	case *pb.FromRadio_MyInfo:
 		return fmt.Sprintf("MyNodeInfo my_node_num=0x%x", v.MyInfo.GetMyNodeNum())
 	case *pb.FromRadio_NodeInfo:
-		return fmt.Sprintf("NodeInfo num=0x%x user=%q",
+		return fmt.Sprintf(
+			"NodeInfo num=0x%x user=%q",
 			v.NodeInfo.GetNum(),
 			v.NodeInfo.GetUser().GetLongName(),
 		)

@@ -199,7 +199,8 @@ func (m *model) reactRouting(msg mdl.Routing, res driver.ApplyRoutingResult) {
 		tgt := m.PendingPing.TargetCall
 		rtt := time.Since(m.PendingPing.RequestedAt).Round(100 * time.Millisecond)
 		if msg.OK {
-			m.systemBlock(fmt.Sprintf("ping %s", tgt),
+			m.systemBlock(
+				fmt.Sprintf("ping %s", tgt),
 				fmt.Sprintf("rtt:     %s (ack only — no echo)", rtt),
 				"note:    radio acknowledged delivery, but REPLY_APP echo",
 				"         did not return. Common when the target's REPLY_APP",
@@ -207,7 +208,8 @@ func (m *model) reactRouting(msg mdl.Routing, res driver.ApplyRoutingResult) {
 			)
 			m.flash = fmt.Sprintf("ping: %s — ack in %s (no echo)", tgt, rtt)
 		} else {
-			m.systemBlock(fmt.Sprintf("ping %s", tgt),
+			m.systemBlock(
+				fmt.Sprintf("ping %s", tgt),
 				fmt.Sprintf("result:  delivery failed (%s)", msg.ErrorName),
 			)
 			m.flash = fmt.Sprintf("ping: %s — %s", tgt, msg.ErrorName)

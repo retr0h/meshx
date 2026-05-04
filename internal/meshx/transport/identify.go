@@ -116,7 +116,8 @@ func AutoDetectMeshtastic(timeout time.Duration) (string, error) {
 		for _, d := range infos {
 			lines = append(lines, d.String())
 		}
-		lines = append(lines,
+		lines = append(
+			lines,
 			"",
 			"  Try: power-cycle the radio, use a known-good DATA USB cable, or pass --port <path>.",
 		)

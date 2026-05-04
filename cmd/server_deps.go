@@ -68,7 +68,8 @@ func openStore(_ *cobra.Command, log *slog.Logger) *storage.Sqlite {
 	}
 	s, err := storage.New(path)
 	if err != nil {
-		log.Warn("storage disabled: open failed",
+		log.Warn(
+			"storage disabled: open failed",
 			slog.String("path", path),
 			slog.Any("error", err),
 		)

@@ -263,7 +263,8 @@ func (m *model) channelShare(typed string) tea.Cmd {
 	header := fmt.Sprintf("/channel share — %s", c.Name)
 	qrLines := strings.Split(qr, "\n")
 	lines := make([]string, 0, len(qrLines)+4)
-	lines = append(lines,
+	lines = append(
+		lines,
 		"scan with the Meshtastic app to join (in-person only — the PSK is in this QR)",
 		"",
 	)
@@ -1206,7 +1207,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			if nodeNum := m.nodeNumOf(target); nodeNum != 0 {
 				if pos, ok := m.PeerPositions[nodeNum]; ok && m.MyGrid != "" {
 					if km := haversineKm(m.MyLatitude, m.MyLongitude, pos.Latitude, pos.Longitude); km > 0 {
-						lines = append(lines,
+						lines = append(
+							lines,
 							fmt.Sprintf("distance:   %.1f km", km),
 						)
 					}
@@ -1286,7 +1288,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		lines = append(lines, "")
 		if ghost {
-			lines = append(lines,
+			lines = append(
+				lines,
 				"👻 no NodeInfo received for this peer",
 				"  we've heard text packets from them but never their",
 				"  User broadcast, so longname / hw / fw / position are",
@@ -1295,7 +1298,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 				"",
 			)
 		}
-		lines = append(lines,
+		lines = append(
+			lines,
 			fmt.Sprintf("hw:     %s", hw),
 			fmt.Sprintf("fw:     %s", fw),
 			fmt.Sprintf("heard:  %s ago", nodeLastHeard(n)),
@@ -1541,7 +1545,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// /dingtest, the cause is your terminal's audible + visual
 		// bell preferences (Terminal.app / iTerm Profile → Audible
 		// Bell + Visual Bell) — not a meshX bug.
-		m.systemBlock("/dingtest",
+		m.systemBlock(
+			"/dingtest",
 			"emit:    BEL queued via tea.Cmd",
 			"hint:    if no audible/visual bell, check",
 			"         Terminal/iTerm Profile → Audible Bell + Visual Bell.",
@@ -1576,7 +1581,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		qrLines := strings.Split(qr, "\n")
 		lines := make([]string, 0, len(qrLines)+4)
-		lines = append(lines,
+		lines = append(
+			lines,
 			fmt.Sprintf("payload: %s", payload),
 			fmt.Sprintf("size:    %d bytes", len(payload)),
 			"note:    scans to plain text — does NOT add a channel",
@@ -1785,7 +1791,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		} else {
 			m.SyncPendingGhosts = ghosts
 		}
-		m.systemBlock("sync",
+		m.systemBlock(
+			"sync",
 			"requested NodeDB re-dump",
 			fmt.Sprintf("baseline: %d unresolved peers", ghosts),
 			"watching for incoming NodeInfo — any placeholder that resolves",

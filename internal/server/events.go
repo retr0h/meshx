@@ -79,7 +79,8 @@ func (s *Server) handleEvents(
 		// case... actually no: sse.Register hands us the live response
 		// writer. Best we can do is log + bail; the connection will
 		// 200 with no events, which is itself a signal.
-		s.logger.Warn("sse: resolveRadio failed",
+		s.logger.Warn(
+			"sse: resolveRadio failed",
 			slog.String("radio_id", in.RadioID),
 			slog.Any("error", err),
 		)
@@ -107,7 +108,8 @@ func (s *Server) handleEvents(
 				// Most likely the client disconnected mid-write —
 				// next ctx tick catches it; log + bail so we don't
 				// spam the channel until then.
-				log.Debug("send failed",
+				log.Debug(
+					"send failed",
 					slog.String("kind", ev.Kind),
 					slog.Any("error", err),
 				)

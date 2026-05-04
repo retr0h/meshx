@@ -90,7 +90,8 @@ func runRemote(_ *cobra.Command, args []string) error {
 		needle = args[0]
 	}
 
-	logger.Debug("running",
+	logger.Debug(
+		"running",
 		slog.String("subsystem", "remote.connect"),
 		slog.String("server", server),
 		slog.String("needle", needle),
@@ -100,7 +101,8 @@ func runRemote(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("resolved",
+	logger.Info(
+		"resolved",
 		slog.String("subsystem", "remote.connect"),
 		slog.String("radio_id", radioID),
 	)

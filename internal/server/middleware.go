@@ -88,7 +88,8 @@ func (s *Server) requestLogMiddleware(ctx huma.Context, next func(huma.Context))
 		level = slog.LevelWarn
 	}
 
-	s.logger.LogAttrs(ctx.Context(), level, "request",
+	s.logger.LogAttrs(
+		ctx.Context(), level, "request",
 		slog.String("method", ctx.Method()),
 		slog.String("path", url.Path),
 		slog.Int("status", status),
@@ -106,7 +107,8 @@ func (s *Server) requestLogMiddleware(ctx huma.Context, next func(huma.Context))
 func (s *Server) recoveryMiddleware(ctx huma.Context, next func(huma.Context)) {
 	defer func() {
 		if r := recover(); r != nil {
-			s.logger.LogAttrs(ctx.Context(), slog.LevelError, "panic recovered",
+			s.logger.LogAttrs(
+				ctx.Context(), slog.LevelError, "panic recovered",
 				slog.Any("panic", r),
 				slog.String("stack", string(debug.Stack())),
 				slog.String("method", ctx.Method()),

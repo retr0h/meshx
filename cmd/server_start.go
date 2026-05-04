@@ -85,7 +85,8 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 	radio := viper.GetString("server.radio")
 
 	log := logger.With(slog.String("subsystem", "server"))
-	log.Info("config",
+	log.Info(
+		"config",
 		slog.String("bind", bind),
 		slog.String("radio", radio),
 		slog.Bool("debug", viper.GetBool("debug")),
@@ -145,7 +146,8 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		radioID := drv.State.RadioID
 
 		radios.Add(radioID, drv)
-		log.Info("radio registered",
+		log.Info(
+			"radio registered",
 			slog.String("radio_id", radioID),
 			slog.String("dest", radio),
 			slog.Int("history_messages", hyd.MessagesLoaded),
@@ -180,7 +182,8 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		Logger:     logger,
 	})
 
-	log.Info("listening",
+	log.Info(
+		"listening",
 		slog.String("bind", bind),
 		slog.String("openapi", "http://"+bind+"/openapi.json"),
 		slog.String("docs", "http://"+bind+"/docs"),

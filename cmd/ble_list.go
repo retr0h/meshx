@@ -57,7 +57,8 @@ var bleListCmd = &cobra.Command{
 			if d.Favorite {
 				star = " ★"
 			}
-			_, _ = fmt.Fprintf(tw, "%s %s\t%s\t%s\t%s\n",
+			_, _ = fmt.Fprintf(
+				tw, "%s %s\t%s\t%s\t%s\n",
 				star, d.UUID, orDash(d.LongName), orDash(d.ShortName), orDash(d.HWModel),
 			)
 		}

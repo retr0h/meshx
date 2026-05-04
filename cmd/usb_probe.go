@@ -60,7 +60,8 @@ With --port <path>, runs the full config handshake against that
 device and dumps every FromRadio packet for the --timeout duration
 — a deep diagnostic for framing / protocol debugging.`,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		logger.With(slog.String("subsystem", "usb.probe")).Debug("running",
+		logger.With(slog.String("subsystem", "usb.probe")).Debug(
+			"running",
 			slog.String("port", probePort),
 			slog.Duration("timeout", probeTimeout),
 			slog.Duration("id_timeout", probeIDTO),

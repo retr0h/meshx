@@ -1017,7 +1017,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			resolved := baseline - current
 			total := len(m.Nodes)
-			m.systemBlock("sync complete",
+			m.systemBlock(
+				"sync complete",
 				fmt.Sprintf("NodeDB re-dump done — %d peers in NodeDB", total),
 				fmt.Sprintf("placeholders: %d → %d  (%d resolved this sync)", baseline, current, resolved),
 			)

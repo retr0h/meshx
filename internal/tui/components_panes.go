@@ -590,7 +590,8 @@ func (p configPane) Render(box Box) string {
 		if e.kind == cfgEntryReadOnly {
 			labelStyle = dim
 		}
-		row := fmt.Sprintf("%s %s  %s",
+		row := fmt.Sprintf(
+			"%s %s  %s",
 			marker,
 			labelStyle.Render(padCells(e.label, 14)),
 			styledVal,

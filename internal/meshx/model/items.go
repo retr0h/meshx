@@ -86,7 +86,7 @@ func (n *NodeItem) CurrentState() NodeState {
 type MessageItem struct {
 	Message
 
-	Acks            string        `json:"acks,omitempty"      doc:"child line ('↳ 3 acks — ...') under outgoing messages"`
+	Acks            string        `json:"acks,omitempty" doc:"child line ('↳ 3 acks — ...') under outgoing messages"`
 	Group           uint64        `json:"-"`
 	Style           any           `json:"-"`
 	ExpireAt        *time.Time    `json:"-"`

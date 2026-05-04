@@ -1,0 +1,183 @@
+// Copyright (c) 2026 John Dewey
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to
+// deal in the Software without restriction, including without limitation the
+// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+// sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+// DEALINGS IN THE SOFTWARE.
+
+package driver
+
+import (
+	"context"
+	"sync"
+
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
+)
+
+// Event is the union the driver publishes whenever the canonical
+// session state changes. Each variant is one of the existing model
+// event types (Text, NodeInfo, ChannelInfo, Position, Routing, …)
+// plus a Kind tag so JSON consumers can route without protobuf-style
+// oneofs. The same shape goes onto the SSE stream, into a future
+// audit log, and (eventually) feeds the in-process TUI when it
+// flips to subscriber-only mode.
+type Event struct {
+	Kind string `json:"kind"`
+	Data any    `json:"data"`
+}
+
+// EventKind tags every variant. Stable contract — the SSE consumer
+// (generated SDK or hand-written) keys on these strings.
+const (
+	EventText           = "text"
+	EventNodeInfo       = "node_info"
+	EventChannelInfo    = "channel_info"
+	EventPosition       = "position"
+	EventRouting        = "routing"
+	EventTraceroute     = "traceroute"
+	EventPing           = "ping"
+	EventMyInfo         = "my_info"
+	EventMetadata       = "metadata"
+	EventDeviceMetrics  = "device_metrics"
+	EventEnvMetrics     = "env_metrics"
+	EventLoRaConfig     = "lora_config"
+	EventDeviceConfig   = "device_config"
+	EventConfigComplete = "config_complete"
+	EventReconnecting   = "reconnecting"
+	EventDisconnected   = "disconnected"
+	EventTransportError = "transport_error"
+)
+
+// subscriberBuffer is the per-subscriber channel depth. Big enough
+// that a momentarily-slow consumer (a remote SSE client behind a
+// laggy network) doesn't block the publisher; small enough that a
+// permanently-stuck one drops events instead of bloating memory.
+// Drops are silent — Subscribe contract says "sample, not durable"
+// since the canonical state is the source of truth and clients can
+// resync via GET /radios/{radio_id} after reconnect.
+const subscriberBuffer = 64
+
+// Subscribe returns a channel that receives every Event published
+// on this Driver until ctx is canceled. Multiple concurrent
+// subscribers are supported (one for each SSE client + the future
+// in-process TUI). When ctx cancels, Driver removes the channel
+// from its fan-out and closes it; subscribers that range over the
+// channel exit cleanly.
+//
+// Channel buffer is subscriberBuffer events. A subscriber that
+// can't keep up sees DROPPED events, not blocked publishers — fine
+// because the canonical state lives in *State and a fresh
+// snapshot is one HTTP GET away.
+func (d *Driver) Subscribe(ctx context.Context) <-chan Event {
+	ch := make(chan Event, subscriberBuffer)
+	d.subMu.Lock()
+	d.subs = append(d.subs, ch)
+	d.subMu.Unlock()
+	go func() {
+		<-ctx.Done()
+		d.subMu.Lock()
+		for i, c := range d.subs {
+			if c == ch {
+				d.subs = append(d.subs[:i], d.subs[i+1:]...)
+				break
+			}
+		}
+		d.subMu.Unlock()
+		close(ch)
+	}()
+	return ch
+}
+
+// Publish fans an event out to every active subscriber. Non-blocking
+// — a slow subscriber drops the event rather than back-pressuring
+// the apply* path. Today's call sites are the apply* handlers in
+// internal/tui/radio.go (one-line publish per handler); when those
+// migrate onto Driver in the apply* relocation MR, the call sites
+// move with them.
+func (d *Driver) Publish(ev Event) {
+	if d == nil {
+		return
+	}
+	d.subMu.RLock()
+	defer d.subMu.RUnlock()
+	for _, ch := range d.subs {
+		select {
+		case ch <- ev:
+		default:
+			// Subscriber's buffer is full — drop. The state.go
+			// snapshot is canonical; a re-fetch via GET /radios/{id}
+			// recovers anything that was dropped here.
+		}
+	}
+}
+
+// PublishText is the typed shortcut for an mdl.Text event.
+func (d *Driver) PublishText(t mdl.Text) Event {
+	ev := Event{Kind: EventText, Data: t}
+	d.Publish(ev)
+	return ev
+}
+
+// PublishNodeInfo is the typed shortcut for an mdl.NodeInfo event.
+func (d *Driver) PublishNodeInfo(n mdl.NodeInfo) Event {
+	ev := Event{Kind: EventNodeInfo, Data: n}
+	d.Publish(ev)
+	return ev
+}
+
+// PublishChannelInfo is the typed shortcut for an mdl.ChannelInfo event.
+func (d *Driver) PublishChannelInfo(c mdl.ChannelInfo) Event {
+	ev := Event{Kind: EventChannelInfo, Data: c}
+	d.Publish(ev)
+	return ev
+}
+
+// PublishPosition is the typed shortcut for an mdl.Position event.
+func (d *Driver) PublishPosition(p mdl.Position) Event {
+	ev := Event{Kind: EventPosition, Data: p}
+	d.Publish(ev)
+	return ev
+}
+
+// PublishRouting is the typed shortcut for an mdl.Routing event.
+func (d *Driver) PublishRouting(r mdl.Routing) Event {
+	ev := Event{Kind: EventRouting, Data: r}
+	d.Publish(ev)
+	return ev
+}
+
+// PublishTraceroute is the typed shortcut for an mdl.Traceroute event.
+func (d *Driver) PublishTraceroute(t mdl.Traceroute) Event {
+	ev := Event{Kind: EventTraceroute, Data: t}
+	d.Publish(ev)
+	return ev
+}
+
+// PublishPing is the typed shortcut for an mdl.Ping event.
+func (d *Driver) PublishPing(p mdl.Ping) Event {
+	ev := Event{Kind: EventPing, Data: p}
+	d.Publish(ev)
+	return ev
+}
+
+// subState is the embedded fan-out registry on Driver. Kept as an
+// embedded struct (rather than fields directly on Driver) so the
+// driver.go file stays focused on lifecycle and this file owns the
+// subscribe seam end-to-end.
+type subState struct {
+	subMu sync.RWMutex
+	subs  []chan Event
+}

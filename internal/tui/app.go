@@ -877,6 +877,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mdl.NodeInfo:
 		m.upsertNode(msg)
+		m.driver.PublishNodeInfo(msg)
 		// While the handshake is still in flight (m.Connected stays
 		// false until ConfigComplete), bump the received counter and
 		// surface it in the chanRow flash via syncCounterFlash —
@@ -892,21 +893,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mdl.ChannelInfo:
 		m.applyChannel(msg)
+		m.driver.PublishChannelInfo(msg)
 		return m, nil
 
 	case mdl.Text:
-		return m, m.applyTextMessage(msg)
+		cmd := m.applyTextMessage(msg)
+		m.driver.PublishText(msg)
+		return m, cmd
 
 	case mdl.Routing:
 		m.applyRouting(msg)
+		m.driver.PublishRouting(msg)
 		return m, nil
 
 	case mdl.Traceroute:
 		m.applyTraceroute(msg)
+		m.driver.PublishTraceroute(msg)
 		return m, nil
 
 	case mdl.Ping:
 		m.applyPing(msg)
+		m.driver.PublishPing(msg)
 		return m, nil
 
 	case pingTimeoutMsg:

@@ -61,4 +61,18 @@ type radioDriver interface {
 
 	// Stop tears down the pump goroutines and transport. Idempotent.
 	Stop()
+
+	// Publish* fan an inbound model event out to every Subscribe-r on
+	// the driver. Today the apply* handlers in radio.go call these
+	// after the in-process state mutation runs, so SSE consumers see
+	// the same events the TUI model does. When apply* relocates onto
+	// the driver itself, the call sites move with it and these
+	// shortcuts get called from inside the driver instead.
+	PublishText(t mdl.Text) driver.Event
+	PublishNodeInfo(n mdl.NodeInfo) driver.Event
+	PublishChannelInfo(c mdl.ChannelInfo) driver.Event
+	PublishPosition(p mdl.Position) driver.Event
+	PublishRouting(r mdl.Routing) driver.Event
+	PublishTraceroute(t mdl.Traceroute) driver.Event
+	PublishPing(p mdl.Ping) driver.Event
 }

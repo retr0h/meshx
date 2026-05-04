@@ -55,6 +55,11 @@ type Driver struct {
 
 	// Store is the persistence handle. Nil = in-memory only.
 	Store Store
+
+	// subState owns the Subscribe/Publish fan-out registry. Embedded
+	// so callers can read d.Subscribe / d.Publish at the receiver
+	// without indirection.
+	subState
 }
 
 // New returns a Driver wired with the given Pump, Store, and State.

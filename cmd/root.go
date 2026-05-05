@@ -22,6 +22,7 @@
 package cmd
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -31,6 +32,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
+
+	"github.com/retr0h/meshx/internal/cli"
 )
 
 // logger is the package-level slog logger, populated from initLogger
@@ -46,12 +49,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "meshx",
 	Short: "Glitched-out terminal Meshtastic messenger",
-	Long: `
-█▀▄▀█ █▀▀ █▀▀ █░░█ ▀▄▀
-█░▀░█ █▀▀ ▀▀█ █▀▀█ █▀█
-▀░░░▀ ▀▀▀ ▀▀▀ ▀░░▀ ▀░▀
-
-meshx is an irssi-style terminal Meshtastic messenger — an
+	Long: `meshx is an irssi-style terminal Meshtastic messenger — an
 irssi/BitchX/mutt-inspired chat client for your LoRa radio with a
 vintage BBS aesthetic.
 
@@ -71,6 +69,22 @@ Pick a transport explicitly:
 // prints "Error: <err>" on its own.
 func Execute() {
 	rootCmd.SilenceUsage = true
+
+	// Wrap cobra's default help to print the themed banner above it.
+	// SetHelpFunc fires for `meshx --help` and for the bare-command
+	// fallback alike, so the banner shows in both paths without
+	// duplicating itself.
+	defaultHelp := rootCmd.HelpFunc()
+	rootCmd.SetHelpFunc(func(c *cobra.Command, args []string) {
+		if c == rootCmd {
+			out := c.OutOrStdout()
+			_, _ = fmt.Fprintln(out)
+			_, _ = fmt.Fprint(out, cli.Banner(out))
+			_, _ = fmt.Fprintln(out)
+		}
+		defaultHelp(c, args)
+	})
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

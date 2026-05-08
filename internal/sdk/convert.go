@@ -21,7 +21,7 @@
 package sdk
 
 import (
-	"github.com/retr0h/meshx/internal/driver"
+	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/sdk/gen"
 )
@@ -108,7 +108,7 @@ func messageFromGen(g gen.MessageItem) mdl.MessageItem {
 // Only writes fields the snapshot owns — leaves Channels/Nodes/
 // Messages alone since those are populated from their own GET
 // endpoints.
-func applySessionSnapshot(st *driver.State, g gen.SessionSnapshot) {
+func applySessionSnapshot(st *session.State, g gen.SessionSnapshot) {
 	st.RadioID = g.RadioId
 	st.MyNodeNum = uint32(g.MyNodeNum)
 	st.Connected = g.Connected

@@ -26,7 +26,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2/sse"
 
-	"github.com/retr0h/meshx/internal/driver"
+	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
@@ -35,28 +35,28 @@ import (
 // send.Data against this map and writes `event: <name>\ndata: <json>`.
 // Clients (the generated SDK + hand-written) key on the event name.
 //
-// The kinds match driver.Event{Kind} constants so a future
+// The kinds match session.Event{Kind} constants so a future
 // EventEnvelope-style send (one wire shape, kind discriminator in the
 // JSON) can swap in without changing call sites — just update the map
 // to register a single envelope type.
 var eventsTypeMap = map[string]any{
-	driver.EventText:           mdl.Text{},
-	driver.EventNodeInfo:       mdl.NodeInfo{},
-	driver.EventChannelInfo:    mdl.ChannelInfo{},
-	driver.EventPosition:       mdl.Position{},
-	driver.EventRouting:        mdl.Routing{},
-	driver.EventTraceroute:     mdl.Traceroute{},
-	driver.EventPing:           mdl.Ping{},
-	driver.EventMyInfo:         mdl.MyInfo{},
-	driver.EventMetadata:       mdl.Metadata{},
-	driver.EventDeviceMetrics:  mdl.DeviceMetrics{},
-	driver.EventEnvMetrics:     mdl.EnvMetrics{},
-	driver.EventLoRaConfig:     mdl.LoraConfig{},
-	driver.EventDeviceConfig:   mdl.DeviceConfig{},
-	driver.EventConfigComplete: mdl.ConfigComplete{},
-	driver.EventReconnecting:   mdl.Reconnecting{},
-	driver.EventDisconnected:   mdl.Disconnected{},
-	driver.EventTransportError: mdl.TransportError{},
+	session.EventText:           mdl.Text{},
+	session.EventNodeInfo:       mdl.NodeInfo{},
+	session.EventChannelInfo:    mdl.ChannelInfo{},
+	session.EventPosition:       mdl.Position{},
+	session.EventRouting:        mdl.Routing{},
+	session.EventTraceroute:     mdl.Traceroute{},
+	session.EventPing:           mdl.Ping{},
+	session.EventMyInfo:         mdl.MyInfo{},
+	session.EventMetadata:       mdl.Metadata{},
+	session.EventDeviceMetrics:  mdl.DeviceMetrics{},
+	session.EventEnvMetrics:     mdl.EnvMetrics{},
+	session.EventLoRaConfig:     mdl.LoraConfig{},
+	session.EventDeviceConfig:   mdl.DeviceConfig{},
+	session.EventConfigComplete: mdl.ConfigComplete{},
+	session.EventReconnecting:   mdl.Reconnecting{},
+	session.EventDisconnected:   mdl.Disconnected{},
+	session.EventTransportError: mdl.TransportError{},
 }
 
 // handleEvents subscribes to the resolved Driver's event stream and

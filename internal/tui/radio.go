@@ -42,7 +42,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/retr0h/meshx/internal/driver"
+	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
@@ -170,7 +170,7 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 	// they are (irssi convention: scrollback is sticky).
 	wasAtTail := len(m.Messages) == 0 || m.selectedMsg == len(m.Messages)-1
 
-	res := m.driver.ApplyText(ev, cleanText, corrupted)
+	res := m.session.ApplyText(ev, cleanText, corrupted)
 
 	if !res.Skipped && wasAtTail && res.Index >= 0 {
 		m.selectedMsg = res.Index
@@ -220,7 +220,7 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 //     matches its packet id.
 //   - User-visible flash for our own outbound messages — "ack
 //     received" / "delivery failed: ...". State stays in Driver.
-func (m *model) reactRouting(msg mdl.Routing, res driver.ApplyRoutingResult) {
+func (m *model) reactRouting(msg mdl.Routing, res session.ApplyRoutingResult) {
 	if msg.RequestID == 0 {
 		return
 	}
@@ -286,7 +286,7 @@ func ringTerminalBellCmd() tea.Cmd {
 // at MeshPacket.From / .To), and the resolved callsign of every hop
 // when we know one (placeholder hex when we don't).
 //
-// On match the driver.PendingTraceroute slot clears so the user can fire a
+// On match the session.PendingTraceroute slot clears so the user can fire a
 // fresh /tr without waiting for the timeout to elapse, and the
 // scheduled tracerouteTimeoutMsg becomes a no-op when its tick lands
 // (the packetID guard there falls through silently).
@@ -300,7 +300,7 @@ func (m *model) applyTraceroute(msg mdl.Traceroute) {
 	// TRACEROUTE_APP request with a fresh MeshPacket whose Data does
 	// NOT echo the original packetID, so a strict request_id match
 	// silently times out every time. The fromNum fallback only fires
-	// while a request is in flight, and `driver.PendingTraceroute` enforces
+	// while a request is in flight, and `session.PendingTraceroute` enforces
 	// one-in-flight, so the worst-case false positive is "we accept
 	// a foreign traceroute reply that happens to come from the exact
 	// peer we just asked about" — which IS effectively the right
@@ -425,11 +425,11 @@ func (m *model) resend(idx int) {
 		m.flash = "R: nothing to resend on this row"
 		return
 	}
-	if m.driver.PumpHandle() == nil {
+	if m.session.PumpHandle() == nil {
 		m.flash = "R: no radio connected — cannot resend"
 		return
 	}
-	pid, _ := m.driver.Send(mdl.SendText{
+	pid, _ := m.session.Send(mdl.SendText{
 		Channel: int(m.currentChannelIndex()),
 		Text:    msg.Text,
 		ReplyID: msg.ReplyID,
@@ -441,7 +441,7 @@ func (m *model) resend(idx int) {
 	// just retransmitted past. Without this, an unacked resend
 	// followed by a quit would expire on the original packet's
 	// packet_id row and leave the new attempt orphaned in SQLite.
-	if st := m.driver.StoreHandle(); st != nil {
+	if st := m.session.StoreHandle(); st != nil {
 		m.storagePersist(st.SaveMessage(m.RadioID, m.CurrentChannel, msg.Message))
 	}
 	m.flash = fmt.Sprintf("↻ retransmit sent (pid=0x%08x) — awaiting ack", pid)

@@ -26,7 +26,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/retr0h/meshx/internal/driver"
+	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
@@ -132,7 +132,7 @@ func (s *Server) handleListRadios(
 		if !ok {
 			continue
 		}
-		st := d.Session()
+		st := d.Snapshot()
 		if st == nil {
 			out.Body.Radios = append(out.Body.Radios, RadioSummary{RadioID: id})
 			continue
@@ -161,7 +161,7 @@ func (s *Server) handleGetRadio(_ context.Context, in *getRadioInput) (*getRadio
 		return nil, err
 	}
 	out := &getRadioOutput{}
-	st := d.Session()
+	st := d.Snapshot()
 	if st == nil {
 		return out, nil
 	}
@@ -207,7 +207,7 @@ func (s *Server) handleListChannels(
 	}
 	out := &listChannelsOutput{}
 	out.Body.Channels = []mdl.ChannelItem{}
-	st := d.Session()
+	st := d.Snapshot()
 	if st == nil {
 		return out, nil
 	}
@@ -236,7 +236,7 @@ func (s *Server) handleListNodes(_ context.Context, in *listNodesInput) (*listNo
 	}
 	out := &listNodesOutput{}
 	out.Body.Nodes = []mdl.NodeItem{}
-	st := d.Session()
+	st := d.Snapshot()
 	if st == nil {
 		return out, nil
 	}
@@ -269,7 +269,7 @@ func (s *Server) handleListMessages(
 	}
 	out := &listMessagesOutput{}
 	out.Body.Messages = []mdl.MessageItem{}
-	st := d.Session()
+	st := d.Snapshot()
 	if st == nil {
 		return out, nil
 	}
@@ -307,7 +307,7 @@ func (s *Server) handleSendMessage(
 	// even when ok=false (demo mode / pump disconnected): the row
 	// still belongs in the user's chat log as a pending entry, and
 	// the Routing handler flips it to Fail when no ack arrives.
-	d.RecordOutbound(driver.RecordOutboundOptions{
+	d.RecordOutbound(session.RecordOutboundOptions{
 		Channel:  in.Body.Channel,
 		Text:     in.Body.Text,
 		ReplyID:  in.Body.ReplyID,

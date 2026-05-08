@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package driver
+package session
 
 import (
 	"time"
@@ -26,15 +26,15 @@ import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
-// Store is the storage surface the Driver consumes — the concrete
+// Store is the storage surface the Session consumes — the concrete
 // implementation lives in internal/meshx/storage as *storage.Sqlite,
 // cast to this interface at construction in cmd/. Defined here
 // (where it's consumed) per the osapi-io pattern: each consumer
 // declares only the methods it actually calls, so a future remote
 // client (MR-5) can declare a smaller surface without bloating the
-// Driver's view of storage.
+// Session's view of storage.
 //
-// Methods are the subset of *storage.Sqlite's API the Driver and
+// Methods are the subset of *storage.Sqlite's API the Session and
 // its callers (TUI Update arms, daemon sink) actually use. BLE
 // pairing storage isn't part of this surface — it's CLI / HTTP
 // admin territory and the driver-side seam should not pull it in.

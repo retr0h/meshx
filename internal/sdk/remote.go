@@ -20,9 +20,9 @@
 
 // Package sdk is the consumer-facing companion to internal/sdk/gen.
 // gen/ is the generated typed RPC layer over the daemon's HTTP+SSE
-// API; this package provides Remote, the *driver.Driver-shaped
-// implementation of tui.radioDriver that the TUI uses when pointed at
-// a remote daemon. Remote satisfies the same interface *driver.Driver
+// API; this package provides Remote, the *session.Session-shaped
+// implementation of tui.radioSession that the TUI uses when pointed at
+// a remote daemon. Remote satisfies the same interface *session.Session
 // satisfies in local mode, so the TUI's Update / apply* / View paths
 // don't branch on mode.
 package sdk
@@ -36,16 +36,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/retr0h/meshx/internal/driver"
+	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/sdk/gen"
 )
 
-// Remote is the HTTP+SSE-backed radio session — the *driver.Driver
+// Remote is the HTTP+SSE-backed radio session — the *session.Session
 // twin used in remote-client mode (`meshx remote <radio_id>
 // --server URL`).
 //
-// Embeds a *driver.Driver with nil Pump and nil Store. That gives
+// Embeds a *session.Session with nil Pump and nil Store. That gives
 // Remote every Apply* and Publish* method for free, and ensures
 // state mutation in remote mode goes through the *exact same code
 // path* the daemon uses on its own State. The only methods Remote
@@ -56,13 +56,13 @@ import (
 //
 // Wire shape:
 //   - *gen.ClientWithResponses for typed outbound calls
-//   - *driver.State (via the embedded Driver) seeded from initial
+//   - *session.State (via the embedded Driver) seeded from initial
 //     GETs and projected forward by the SSE consumer through Apply*
 //   - a goroutine that reads /radios/{id}/events and forwards each
 //     event to teaSend so the TUI's Update sees the same mdl.X
 //     tea.Msg the local pump path would have produced
 type Remote struct {
-	*driver.Driver
+	*session.Session
 
 	client    *gen.ClientWithResponses
 	radioID   string
@@ -77,8 +77,8 @@ type Remote struct {
 }
 
 // NewRemote builds a Remote pointed at serverURL, verifies the radio
-// is registered, and seeds *driver.State from the daemon's snapshot
-// endpoints. The returned Remote is ready to satisfy radioDriver but
+// is registered, and seeds *session.State from the daemon's snapshot
+// endpoints. The returned Remote is ready to satisfy radioSession but
 // won't receive live events until Start is called.
 func NewRemote(serverURL, radioID string) (*Remote, error) {
 	c, err := gen.NewClientWithResponses(serverURL)
@@ -86,7 +86,7 @@ func NewRemote(serverURL, radioID string) (*Remote, error) {
 		return nil, fmt.Errorf("sdk: build client: %w", err)
 	}
 	r := &Remote{
-		Driver:    driver.New(driver.NewState(), nil, nil),
+		Session:   session.New(session.NewState(), nil, nil),
 		client:    c,
 		radioID:   radioID,
 		serverURL: serverURL,
@@ -170,7 +170,7 @@ func (r *Remote) Stop() {
 		r.cancel()
 		r.cancel = nil
 	}
-	r.Driver.Stop()
+	r.Session.Stop()
 }
 
 // Send dispatches a command to the daemon. Today only mdl.SendText
@@ -289,37 +289,37 @@ func (r *Remote) dispatch(kind, payload string) {
 		r.teaSend(derefAny(v))
 	}
 	switch kind {
-	case driver.EventText:
+	case session.EventText:
 		send(&mdl.Text{})
-	case driver.EventNodeInfo:
+	case session.EventNodeInfo:
 		send(&mdl.NodeInfo{})
-	case driver.EventChannelInfo:
+	case session.EventChannelInfo:
 		send(&mdl.ChannelInfo{})
-	case driver.EventPosition:
+	case session.EventPosition:
 		send(&mdl.Position{})
-	case driver.EventRouting:
+	case session.EventRouting:
 		send(&mdl.Routing{})
-	case driver.EventTraceroute:
+	case session.EventTraceroute:
 		send(&mdl.Traceroute{})
-	case driver.EventPing:
+	case session.EventPing:
 		send(&mdl.Ping{})
-	case driver.EventMyInfo:
+	case session.EventMyInfo:
 		send(&mdl.MyInfo{})
-	case driver.EventMetadata:
+	case session.EventMetadata:
 		send(&mdl.Metadata{})
-	case driver.EventDeviceMetrics:
+	case session.EventDeviceMetrics:
 		send(&mdl.DeviceMetrics{})
-	case driver.EventEnvMetrics:
+	case session.EventEnvMetrics:
 		send(&mdl.EnvMetrics{})
-	case driver.EventLoRaConfig:
+	case session.EventLoRaConfig:
 		send(&mdl.LoraConfig{})
-	case driver.EventDeviceConfig:
+	case session.EventDeviceConfig:
 		send(&mdl.DeviceConfig{})
-	case driver.EventConfigComplete:
+	case session.EventConfigComplete:
 		send(&mdl.ConfigComplete{})
-	case driver.EventReconnecting:
+	case session.EventReconnecting:
 		send(&mdl.Reconnecting{})
-	case driver.EventDisconnected:
+	case session.EventDisconnected:
 		send(&mdl.Disconnected{})
 	}
 }

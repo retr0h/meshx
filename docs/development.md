@@ -75,7 +75,7 @@ meshx/
 │   ├── server_start.go           # `meshx server start` — headless daemon (binds via viper.server.bind, default 127.0.0.1:4404)
 │   └── server_deps.go            # daemon-only adapters (daemonBLEScanner / daemonBLEPairer / daemonUSBScanner / openStore) wiring server.Config
 └── internal/
-    ├── tui/                      # Bubble Tea rendering surface (model holds *driver.Driver today)
+    ├── tui/                      # Bubble Tea rendering surface (model holds *session.Session today)
     │   ├── app.go                # Bubble Tea model + View + Update + RunRadio entrypoint
     │   ├── ui.go                 # View dispatcher, model getters, generic utils
     │   ├── commands.go           # /command dispatcher + ham bangs
@@ -100,15 +100,15 @@ meshx/
     │   ├── help.go               # /help entry data
     │   └── qr.go                 # ASCII QR rendering for /channel share
     ├── driver/                   # headless radio session layer — owns canonical State, wraps Pump + Store
-    │   ├── driver.go             # *driver.Driver + New + Send + Stop + Session
-    │   ├── state.go              # *driver.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests
+    │   ├── session.go             # *session.Session + New + Send + Stop + Session
+    │   ├── state.go              # *session.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests
     │   ├── pump.go               # consumer interface (Pump) for internal/meshx/pump
     │   └── store.go              # consumer interface (Store) for internal/meshx/storage
     ├── server/                   # HTTP+SSE daemon (Huma)
     │   ├── server.go             # *Server + Config{Radios, Store, Scanner, Pairer, USBScanner, Logger}
     │   ├── registry.go           # radio_id → Driver multiplex
     │   ├── middleware.go         # request-id / request-log / panic recovery
-    │   ├── driver.go             # consumer interface (Driver)
+    │   ├── session.go             # consumer interface (Driver)
     │   ├── store.go              # Store / BLEScanner / BLEPairer / USBScanner consumer interfaces + sighting wire shapes
     │   ├── routes.go             # huma.Register calls
     │   ├── handlers.go           # per-route handlers
@@ -234,10 +234,10 @@ Three modes share one binary:
 3. **Remote** (planned) — `meshx ble connect --server http://host:4404 <id>`
    runs the TUI against a remote daemon.
 
-The dual-mode seam is `internal/tui/driver.go::radioDriver`. `*driver.Driver`
+The dual-mode seam is `internal/tui/session.go::radioSession`. `*session.Session`
 satisfies it for local mode; `*sdk.RemoteDriver` (planned) satisfies it over
 HTTP+SSE — it holds a `*gen.Client` for outbound calls and consumes
-`/radios/{id}/events` to project events onto a local `*driver.State`. The TUI's
+`/radios/{id}/events` to project events onto a local `*session.State`. The TUI's
 Update path doesn't branch on mode.
 
 Remote mode has two independent reconnect loops: radio↔daemon (pump backoff on
@@ -273,8 +273,8 @@ status, duration, request_id, remote, user-agent — Error level for 5xx, Warn f
 
 A request flows: Huma router → middleware stack (panic / request-id / log) →
 `internal/server/handlers.go` → `resolveRadio({radio_id})` → `Registry.Get(id)`
-→ `Driver` (the consumer interface in `internal/server/driver.go`, satisfied by
-`*driver.Driver`). Handlers project model types (`mdl.ChannelItem`,
+→ `Driver` (the consumer interface in `internal/server/session.go`, satisfied by
+`*session.Session`). Handlers project model types (`mdl.ChannelItem`,
 `mdl.NodeItem`, `mdl.MessageItem`) directly into responses — no DTO duplication,
 the JSON shape on the wire IS the model shape. Multi-radio is the `Registry`
 multiplex (`radio_id → Driver`, RWMutex-guarded); routes are radio-scoped under
@@ -311,7 +311,7 @@ per operation as the HTTP response wrapper. Avoid `*Response` schema names in
 `internal/sdk/` is the consumer-facing surface. `gen/` is the generated typed
 HTTP client for every route Huma registers. `remote.go` (planned) is the
 hand-written companion that wraps `gen.Client` plus an SSE consumer behind the
-`tui.radioDriver` interface — so `meshx ble connect --server <url>` runs the TUI
+`tui.radioSession` interface — so `meshx ble connect --server <url>` runs the TUI
 against a remote daemon with no branching in the model code. SSE isn't generated
 by oapi-codegen, so the event reader is hand-rolled against the
 `/radios/{id}/events` stream.

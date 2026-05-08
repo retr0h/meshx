@@ -29,7 +29,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/retr0h/meshx/internal/driver"
+	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
 	"github.com/retr0h/meshx/internal/meshx/storage"
@@ -242,13 +242,13 @@ const (
 
 // model is the Bubble Tea state. Session-state fields (nodes,
 // messages, NodeDB indices, radio telemetry, in-flight ping/tr
-// bookkeeping, …) live on the embedded *driver.State — which is
+// bookkeeping, …) live on the embedded *session.State — which is
 // also what a future headless `meshx serve` daemon will construct
 // directly without dragging Bubble Tea in. TUI-only state (focus
 // cursors, search query, splash, key bindings, flash banner, config
 // draft, etc.) stays on model proper.
 type model struct {
-	*driver.State
+	*session.State
 
 	w, h int
 
@@ -292,21 +292,21 @@ type model struct {
 	historyDraft  string // the line the user was typing before Up-arrowing — restored on Down past end
 
 	// driver is the headless radio session layer — owns Pump (outbound
-	// + reconnect) and Store (persistence) along with the *driver.State
-	// the model embeds. Typed as the narrow radioDriver interface
+	// + reconnect) and Store (persistence) along with the *session.State
+	// the model embeds. Typed as the narrow radioSession interface
 	// (declared in tui/driver.go) so a test double or future in-process
-	// variant can satisfy it without the concrete *driver.Driver.
+	// variant can satisfy it without the concrete *session.Session.
 	// Nil-safe: demo mode leaves PumpHandle and StoreHandle nil and
 	// the session runs in-memory.
-	driver radioDriver
+	session radioSession
 
 	// attachPump wires the dialed pump back onto the underlying
 	// driver. Held as a callback rather than as an interface method
-	// so radioDriver can stay focused on running-TUI behavior — pump
+	// so radioSession can stay focused on running-TUI behavior — pump
 	// wiring is a once-per-session construction concern. Set in
-	// newModel from the concrete *driver.Driver's AttachPump method;
+	// newModel from the concrete *session.Session's AttachPump method;
 	// nil-safe so demo / remote modes (no local pump) skip cleanly.
-	attachPump func(driver.Pump)
+	attachPump func(session.Pump)
 
 	// remoteMode is true when the model is talking to a remote daemon
 	// over HTTP+SSE rather than owning the radio in-process. Init()
@@ -400,10 +400,10 @@ func RunRadio(dest string) error {
 	// Build the per-radio session. Defaults match a stock Meshtastic
 	// radio + a fresh meshX install (radio buzzer beeps on text,
 	// terminal also dings); persisted prefs override below.
-	sess := driver.NewState()
+	sess := session.NewState()
 	sess.ConnectDest = dest
 	sess.RadioBuzzerEnabled = true
-	drv := driver.New(sess, nil, nil)
+	drv := session.New(sess, nil, nil)
 	// Surface the first persistence failure of the session as a
 	// permanent "-!- storage: ..." row in the messages pane;
 	// subsequent failures drop silently so a degraded sqlite handle
@@ -418,14 +418,14 @@ func RunRadio(dest string) error {
 	m := newModel(drv, notices...)
 	// Off-interface concrete-type wiring: AttachPump is a once-per-
 	// session construction step, not running-TUI behavior, so it
-	// stays off radioDriver. Bind the concrete method as a callback
+	// stays off radioSession. Bind the concrete method as a callback
 	// the tea loop can invoke when the dialed pump message arrives.
 	m.attachPump = drv.AttachPump
 	// Close the persistence handle when the tea loop exits. Nil-safe:
 	// if hydration didn't open a store, StoreHandle() is nil and the
 	// close is a no-op.
 	defer func() {
-		if st := m.driver.StoreHandle(); st != nil {
+		if st := m.session.StoreHandle(); st != nil {
 			_ = st.Close()
 		}
 	}()
@@ -462,12 +462,12 @@ func RunRadioRemote(serverURL, radioID string) error {
 	defer r.Stop()
 
 	notices := []string{"remote: connected to " + serverURL}
-	if n := len(r.Session().Messages); n > 0 {
+	if n := len(r.Snapshot().Messages); n > 0 {
 		notices = append(notices, fmt.Sprintf(
 			"remote: replayed %d messages from daemon", n,
 		))
 	}
-	if n := len(r.Session().Nodes); n > 0 {
+	if n := len(r.Snapshot().Nodes); n > 0 {
 		notices = append(notices, fmt.Sprintf(
 			"remote: %d known peers from daemon", n,
 		))
@@ -476,7 +476,7 @@ func RunRadioRemote(serverURL, radioID string) error {
 	m := newModel(r, notices...)
 	// Remote mode never opens a local pump, but bind anyway in case
 	// a future remote-with-fallback flow attaches one. *sdk.Remote
-	// embeds *driver.Driver, so AttachPump is method-promoted.
+	// embeds *session.Session, so AttachPump is method-promoted.
 	m.attachPump = r.AttachPump
 	slot := &programSlot{}
 	m.programSlot = slot
@@ -495,7 +495,7 @@ func RunRadioRemote(serverURL, radioID string) error {
 }
 
 // (newRemoteModel removed — collapsed into the unified newModel above.
-// Both RunRadio and RunRadioRemote now hand a populated radioDriver
+// Both RunRadio and RunRadioRemote now hand a populated radioSession
 // to newModel along with their own startup-notice slices.)
 
 // teaProgramSink wraps *tea.Program to satisfy pump.Sink. tea.Msg is
@@ -523,7 +523,7 @@ type programSlot struct {
 
 // pumpAttachedMsg hands the transport pump handle into the model so
 // outbound messages (/cq, typed text) can enqueue ToRadio envelopes.
-type pumpAttachedMsg struct{ p driver.Pump }
+type pumpAttachedMsg struct{ p session.Pump }
 
 // shortFirmware trims Meshtastic's long firmware-version strings
 // down to just the semver portion. "2.7.15.567b8ea" → "2.7.15" since
@@ -574,7 +574,7 @@ func mod(x, y float64) float64 {
 }
 
 // newModel is the unified bubble-tea constructor — works against any
-// radioDriver. The driver's *State must already be populated by the
+// radioSession. The driver's *State must already be populated by the
 // caller (RunRadio replays from SQLite, RunRadioRemote seeds via
 // HTTP); newModel builds the UI shell, drops the splash card, and
 // emits any caller-supplied startup notices in order. extraNotices
@@ -585,7 +585,7 @@ func mod(x, y float64) float64 {
 // no Store IS a remote driver (it's neither dialing radios nor
 // owning local persistence — both are the daemon's job). The flag
 // gates Init()'s openPumpMsg dispatch.
-func newModel(d radioDriver, extraNotices ...string) model {
+func newModel(d radioSession, extraNotices ...string) model {
 	// Always-on input bar at the bottom — composes messages, or runs
 	// /commands when the line begins with "/". irssi-style.
 	in := textinput.New()
@@ -614,8 +614,8 @@ func newModel(d radioDriver, extraNotices ...string) model {
 
 	chosenSplash := pickSplash()
 	m := model{
-		State:       d.Session(),
-		driver:      d,
+		State:       d.Snapshot(),
+		session:     d,
 		remoteMode:  d.PumpHandle() == nil && d.StoreHandle() == nil,
 		mode:        modeInput,
 		focused:     paneMessages,
@@ -668,7 +668,7 @@ func newModel(d radioDriver, extraNotices ...string) model {
 // Fail-open: any storage error leaves drv with no Store and produces
 // no notices, so the session runs in-memory for that boot. Losing
 // history is preferable to crashing.
-func hydrateLocalSession(drv *driver.Driver, dest string) []string {
+func hydrateLocalSession(drv *session.Session, dest string) []string {
 	var notices []string
 	path, err := storage.DefaultPath()
 	if err != nil {
@@ -678,7 +678,7 @@ func hydrateLocalSession(drv *driver.Driver, dest string) []string {
 	if err != nil {
 		return notices
 	}
-	var store driver.Store = sqliteStore
+	var store session.Store = sqliteStore
 	drv.AttachStore(store)
 
 	// Identity + NodeDB + history + ghost-peer + last-heard backfill
@@ -687,7 +687,7 @@ func hydrateLocalSession(drv *driver.Driver, dest string) []string {
 	// TUI-side concern that rides along — daemon stores raw bytes,
 	// TUI scrubs on read so historic rows from before the sanitizer
 	// landed pick up the ⚠ marker.
-	res := drv.HydrateFromStore(driver.HydrationOptions{
+	res := drv.HydrateFromStore(session.HydrationOptions{
 		Dest:                     dest,
 		SanitizeText:             sanitizeMessageText,
 		ResolveRadioByConnection: store.ResolveRadioByConnection,
@@ -837,7 +837,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// will overwrite this with the full "reconnecting · attempt
 		// N · …" banner if the first dial fails; the first radio
 		// frame clears it.
-		m.Reconnect = &driver.ReconnectState{
+		m.Reconnect = &session.ReconnectState{
 			Initial: true,
 			ReadyAt: time.Now(),
 		}
@@ -852,7 +852,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// pump.Sink (whose Send takes any) — same underlying type,
 		// different signature, so Go's structural typing needs the
 		// trampoline.
-		var p driver.Pump = pump.New(msg.dest, teaProgramSink{p: m.programSlot.p})
+		var p session.Pump = pump.New(msg.dest, teaProgramSink{p: m.programSlot.p})
 		if m.attachPump != nil {
 			m.attachPump(p)
 		}
@@ -868,7 +868,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// State mutation (MyNodeNum + identity claim across FK columns)
 		// goes through Driver.ApplyMyInfo so the daemon and the local
 		// TUI run the same code path. Driver.ApplyMyInfo publishes too.
-		m.driver.ApplyMyInfo(msg)
+		m.session.ApplyMyInfo(msg)
 		// MyInfo = first frame of the handshake. Reset the received
 		// counter to 0 and emit the start-of-sync notice so the
 		// user sees node-list progress instead of staring at an
@@ -889,7 +889,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// State + persistence + publish all happen inside Driver.
 		// TUI side effects (ghost-upgrade system line, sync-progress
 		// flash) layer on top of the result.
-		res := m.driver.ApplyNodeInfo(msg)
+		res := m.session.ApplyNodeInfo(msg)
 		if res.GhostUpgrade {
 			m.systemLine(fmt.Sprintf("identified %s (was %s)", res.NewCallsign, res.PrevCallsign))
 		}
@@ -900,7 +900,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case mdl.ChannelInfo:
-		m.driver.ApplyChannelInfo(msg)
+		m.session.ApplyChannelInfo(msg)
 		return m, nil
 
 	case mdl.Text:
@@ -915,7 +915,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Driver.ApplyRouting flips Message.Status (ack/fail) and
 		// persists. The TUI layer adds ping-correlation fallback
 		// (some firmware acks before REPLY_APP returns) + flash.
-		res := m.driver.ApplyRouting(msg)
+		res := m.session.ApplyRouting(msg)
 		m.reactRouting(msg, res)
 		return m, nil
 
@@ -923,7 +923,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Driver.ApplyTraceroute refreshes peer LastHops + publishes;
 		// applyTraceroute layers the systemBlock + flash + clears
 		// PendingTraceroute on a request_id match.
-		m.driver.ApplyTraceroute(msg)
+		m.session.ApplyTraceroute(msg)
 		m.applyTraceroute(msg)
 		return m, nil
 
@@ -931,7 +931,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Driver.ApplyPing refreshes peer telemetry + publishes;
 		// applyPing layers the systemBlock + flash + clears
 		// PendingPing on a request_id match.
-		m.driver.ApplyPing(msg)
+		m.session.ApplyPing(msg)
 		m.applyPing(msg)
 		return m, nil
 
@@ -968,7 +968,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.RadioBuzzerEnabled {
 			v = "on"
 		}
-		m.driver.PutSetting(m.RadioID, "radio_buzzer", v)
+		m.session.PutSetting(m.RadioID, "radio_buzzer", v)
 		return m, nil
 
 	case tracerouteTimeoutMsg:
@@ -990,31 +990,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case mdl.Metadata:
-		m.driver.ApplyMetadata(msg)
+		m.session.ApplyMetadata(msg)
 		return m, nil
 
 	case mdl.LoraConfig:
-		m.driver.ApplyLoraConfig(msg)
+		m.session.ApplyLoraConfig(msg)
 		return m, nil
 
 	case mdl.DeviceMetrics:
-		m.driver.ApplyDeviceMetrics(msg)
+		m.session.ApplyDeviceMetrics(msg)
 		return m, nil
 
 	case mdl.DeviceConfig:
-		m.driver.ApplyDeviceConfig(msg)
+		m.session.ApplyDeviceConfig(msg)
 		return m, nil
 
 	case mdl.Position:
-		m.driver.ApplyPosition(msg, maidenhead(msg.Latitude, msg.Longitude))
+		m.session.ApplyPosition(msg, maidenhead(msg.Latitude, msg.Longitude))
 		return m, nil
 
 	case mdl.EnvMetrics:
-		m.driver.ApplyEnvMetrics(msg)
+		m.session.ApplyEnvMetrics(msg)
 		return m, nil
 
 	case mdl.ConfigComplete:
-		wasDisconnected := m.driver.ApplyConfigComplete()
+		wasDisconnected := m.session.ApplyConfigComplete()
 		// Definitive end of the handshake — NodeDB and config dump
 		// have all arrived, the user can see live state. Drop the
 		// reconnect banner now and not before; MyInfo isn't strong
@@ -1072,8 +1072,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// FromRadio_ModuleConfig and routes through the same
 		// mdl.ModuleBuzzer handler. Skipped if we already know
 		// the state (the dump did contain it).
-		if !m.RadioBuzzerKnown && m.driver.PumpHandle() != nil {
-			m.driver.Send(mdl.RequestBuzzerConfig{})
+		if !m.RadioBuzzerKnown && m.session.PumpHandle() != nil {
+			m.session.Send(mdl.RequestBuzzerConfig{})
 		}
 		return m, nil
 
@@ -1094,7 +1094,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// counter climb instead of seeing a 5s flash and then nothing
 		// for the rest of a 30s backoff.
 		m.Connected = false
-		m.Reconnect = &driver.ReconnectState{
+		m.Reconnect = &session.ReconnectState{
 			Attempt: msg.Attempt,
 			Err:     msg.Err,
 			ReadyAt: time.Now().Add(msg.After),

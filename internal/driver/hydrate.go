@@ -102,7 +102,7 @@ type HydrationOptions struct {
 }
 
 // HydrateFromStore replays the cached identity, NodeDB, and message
-// history from d.Store into d.State so the consumer can render a
+// history from d.store into d.State so the consumer can render a
 // non-empty session immediately on launch — same shape every consumer
 // (local TUI on first paint, daemon on `meshx server start`, future
 // remote-as-server resyncs) needs.
@@ -130,7 +130,7 @@ type HydrationOptions struct {
 // store accumulated during migration / open.
 func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
 	var res HydrationResult
-	if d.Store == nil {
+	if d.store == nil {
 		return res
 	}
 	if opts.MessageLimit <= 0 {
@@ -155,7 +155,7 @@ func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
 
 	// Step 2 — NodeDB cache. Loaded BEFORE message history so
 	// ghost-peer creation in step 4 can skip already-known peers.
-	if cached, err := d.Store.LoadNodes(d.State.RadioID); err == nil {
+	if cached, err := d.store.LoadNodes(d.State.RadioID); err == nil {
 		for _, n := range cached {
 			state := mdl.StateOffline
 			if n.Muted {
@@ -169,12 +169,12 @@ func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
 
 	// Step 3 — stale-pending sweep. Done BEFORE history replay so
 	// LoadMessages reflects the freshly-flipped status.
-	if expired, err := d.Store.ExpireStalePendingMessages(d.State.RadioID, opts.PendingTTL); err == nil {
+	if expired, err := d.store.ExpireStalePendingMessages(d.State.RadioID, opts.PendingTTL); err == nil {
 		res.StalePendingExpired = expired
 	}
 
 	// Step 4 — message history + ghost-peer replay.
-	if pastModels, err := d.Store.LoadMessages(d.State.RadioID, "", opts.MessageLimit); err == nil {
+	if pastModels, err := d.store.LoadMessages(d.State.RadioID, "", opts.MessageLimit); err == nil {
 		baseIdx := len(d.State.Messages)
 		past := make([]mdl.MessageItem, 0, len(pastModels))
 		for _, mm := range pastModels {
@@ -242,6 +242,6 @@ func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
 	}
 	res.LastHeardBackfilled = len(touched)
 
-	res.BootNotes = d.Store.ConsumeBootNotes()
+	res.BootNotes = d.store.ConsumeBootNotes()
 	return res
 }

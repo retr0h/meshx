@@ -65,8 +65,8 @@ func (d *Driver) ApplyMyInfo(msg mdl.MyInfo) ApplyMyInfoResult {
 	defer d.Publish(Event{Kind: EventMyInfo, Data: msg})
 	res := ApplyMyInfoResult{OldRadioID: d.State.RadioID}
 	d.State.MyNodeNum = msg.NodeNum
-	if d.Store != nil {
-		if newID, err := d.Store.ClaimRadioIdentity(d.State.RadioID, msg.NodeNum); err == nil {
+	if d.store != nil {
+		if newID, err := d.store.ClaimRadioIdentity(d.State.RadioID, msg.NodeNum); err == nil {
 			d.State.RadioID = newID
 		}
 	}
@@ -256,8 +256,8 @@ func (d *Driver) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
 		LastHops:    msg.Hops,
 		HwModel:     msg.HwModel,
 	}
-	if d.Store != nil {
-		d.storeError(d.Store.SaveNode(d.State.RadioID, mdl.CachedNode{
+	if d.store != nil {
+		d.storeError(d.store.SaveNode(d.State.RadioID, mdl.CachedNode{
 			NodeNum:   msg.NodeNum,
 			LongName:  msg.LongName,
 			ShortName: msg.ShortName,
@@ -363,8 +363,8 @@ func (d *Driver) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) Ap
 			if prev.Status == mdl.StatusPending {
 				prev.Status = mdl.StatusAck
 			}
-			if d.Store != nil {
-				d.storeError(d.Store.SaveMessage(d.State.RadioID, channelName, prev.Message))
+			if d.store != nil {
+				d.storeError(d.store.SaveMessage(d.State.RadioID, channelName, prev.Message))
 			}
 			return ApplyTextResult{Index: existing, Skipped: true, FromMine: mine}
 		}
@@ -374,8 +374,8 @@ func (d *Driver) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) Ap
 	if body.PacketID != 0 {
 		d.State.MessagesByPacketID[body.PacketID] = idx
 	}
-	if d.Store != nil {
-		d.storeError(d.Store.SaveMessage(d.State.RadioID, channelName, item.Message))
+	if d.store != nil {
+		d.storeError(d.store.SaveMessage(d.State.RadioID, channelName, item.Message))
 	}
 	if ev.Channel < len(d.State.Channels) &&
 		d.State.Channels[ev.Channel].Name != d.State.CurrentChannel && !mine {
@@ -416,8 +416,8 @@ func (d *Driver) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 		} else {
 			d.State.Messages[i].Status = mdl.StatusFail
 		}
-		if d.Store != nil {
-			d.storeError(d.Store.SaveMessage(
+		if d.store != nil {
+			d.storeError(d.store.SaveMessage(
 				d.State.RadioID,
 				d.State.CurrentChannel,
 				d.State.Messages[i].Message,
@@ -521,8 +521,8 @@ func (d *Driver) RecordOutbound(opts RecordOutboundOptions) ApplyTextResult {
 	if opts.PacketID != 0 {
 		d.State.MessagesByPacketID[opts.PacketID] = idx
 	}
-	if d.Store != nil {
-		d.storeError(d.Store.SaveMessage(d.State.RadioID, channelName, item.Message))
+	if d.store != nil {
+		d.storeError(d.store.SaveMessage(d.State.RadioID, channelName, item.Message))
 	}
 	// Publish a synthesized mdl.Text so SSE subscribers get a
 	// live "new outbound message" event in lockstep with the

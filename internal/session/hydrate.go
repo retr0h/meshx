@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package driver
+package session
 
 import (
 	"strconv"
@@ -102,7 +102,7 @@ type HydrationOptions struct {
 }
 
 // HydrateFromStore replays the cached identity, NodeDB, and message
-// history from d.store into d.State so the consumer can render a
+// history from s.store into s.State so the consumer can render a
 // non-empty session immediately on launch — same shape every consumer
 // (local TUI on first paint, daemon on `meshx server start`, future
 // remote-as-server resyncs) needs.
@@ -128,9 +128,9 @@ type HydrationOptions struct {
 //
 // Returns counters for the caller to surface and the boot notes the
 // store accumulated during migration / open.
-func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
+func (s *Session) HydrateFromStore(opts HydrationOptions) HydrationResult {
 	var res HydrationResult
-	if d.store == nil {
+	if s.store == nil {
 		return res
 	}
 	if opts.MessageLimit <= 0 {
@@ -146,36 +146,36 @@ func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
 	if opts.Dest != "" && opts.ResolveRadioByConnection != nil && opts.ParseRadioDest != nil {
 		transport, addr := opts.ParseRadioDest(opts.Dest)
 		if rid, err := opts.ResolveRadioByConnection(transport, addr); err == nil {
-			d.State.RadioID = rid
+			s.State.RadioID = rid
 			if n, err := strconv.ParseUint(strings.TrimPrefix(rid, "0x"), 16, 32); err == nil {
-				d.State.MyNodeNum = uint32(n)
+				s.State.MyNodeNum = uint32(n)
 			}
 		}
 	}
 
 	// Step 2 — NodeDB cache. Loaded BEFORE message history so
 	// ghost-peer creation in step 4 can skip already-known peers.
-	if cached, err := d.store.LoadNodes(d.State.RadioID); err == nil {
+	if cached, err := s.store.LoadNodes(s.State.RadioID); err == nil {
 		for _, n := range cached {
 			state := mdl.StateOffline
 			if n.Muted {
 				state = mdl.StateMuted
 			}
-			d.State.NodesByNum[n.NodeNum] = len(d.State.Nodes)
-			d.State.Nodes = append(d.State.Nodes, mdl.NodeItemFromCached(n, state))
+			s.State.NodesByNum[n.NodeNum] = len(s.State.Nodes)
+			s.State.Nodes = append(s.State.Nodes, mdl.NodeItemFromCached(n, state))
 			res.NodesLoaded++
 		}
 	}
 
 	// Step 3 — stale-pending sweep. Done BEFORE history replay so
 	// LoadMessages reflects the freshly-flipped status.
-	if expired, err := d.store.ExpireStalePendingMessages(d.State.RadioID, opts.PendingTTL); err == nil {
+	if expired, err := s.store.ExpireStalePendingMessages(s.State.RadioID, opts.PendingTTL); err == nil {
 		res.StalePendingExpired = expired
 	}
 
 	// Step 4 — message history + ghost-peer replay.
-	if pastModels, err := d.store.LoadMessages(d.State.RadioID, "", opts.MessageLimit); err == nil {
-		baseIdx := len(d.State.Messages)
+	if pastModels, err := s.store.LoadMessages(s.State.RadioID, "", opts.MessageLimit); err == nil {
+		baseIdx := len(s.State.Messages)
 		past := make([]mdl.MessageItem, 0, len(pastModels))
 		for _, mm := range pastModels {
 			if opts.SanitizeText != nil {
@@ -183,7 +183,7 @@ func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
 			}
 			past = append(past, mdl.MessageItem{Message: mm})
 		}
-		d.State.Messages = append(d.State.Messages, past...)
+		s.State.Messages = append(s.State.Messages, past...)
 		res.MessagesLoaded = len(past)
 		// Seed MessagesByPacketID so the live ApplyText path can
 		// dedupe RAM-queue replays. PacketID==0 entries (system
@@ -193,7 +193,7 @@ func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
 			if msg.PacketID == 0 {
 				continue
 			}
-			d.State.MessagesByPacketID[msg.PacketID] = baseIdx + i
+			s.State.MessagesByPacketID[msg.PacketID] = baseIdx + i
 		}
 		// Ghost-peer replay — synthesize firmware-default callsigns
 		// for senders not in NodesByNum so /cqr / /whois / /ping can
@@ -202,11 +202,11 @@ func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
 			if msg.FromNum == 0 {
 				continue
 			}
-			if _, ok := d.State.NodesByNum[msg.FromNum]; ok {
+			if _, ok := s.State.NodesByNum[msg.FromNum]; ok {
 				continue
 			}
 			long, short := mdl.DefaultCallsign(msg.FromNum)
-			d.State.Nodes = append(d.State.Nodes, mdl.NodeItem{
+			s.State.Nodes = append(s.State.Nodes, mdl.NodeItem{
 				Callsign:   long,
 				ShortName:  short,
 				NodeNum:    msg.FromNum,
@@ -216,32 +216,32 @@ func (d *Driver) HydrateFromStore(opts HydrationOptions) HydrationResult {
 				LastSNR:    msg.SNR,
 				LastHops:   msg.Hops,
 			})
-			d.State.NodesByNum[msg.FromNum] = len(d.State.Nodes) - 1
+			s.State.NodesByNum[msg.FromNum] = len(s.State.Nodes) - 1
 			res.GhostsCreated++
 		}
 	}
 
 	// Step 5 — last-heard backfill from message history.
 	touched := map[uint32]struct{}{}
-	for _, past := range d.State.Messages {
+	for _, past := range s.State.Messages {
 		if past.FromNum == 0 || past.SentAt.IsZero() {
 			continue
 		}
-		idx, ok := d.State.NodesByNum[past.FromNum]
+		idx, ok := s.State.NodesByNum[past.FromNum]
 		if !ok {
 			continue
 		}
-		if past.SentAt.After(d.State.Nodes[idx].LastHeardAt) {
-			d.State.Nodes[idx].LastHeardAt = past.SentAt
-			d.State.Nodes[idx].LastHops = past.Hops
+		if past.SentAt.After(s.State.Nodes[idx].LastHeardAt) {
+			s.State.Nodes[idx].LastHeardAt = past.SentAt
+			s.State.Nodes[idx].LastHops = past.Hops
 			if past.SNR != "" {
-				d.State.Nodes[idx].LastSNR = past.SNR
+				s.State.Nodes[idx].LastSNR = past.SNR
 			}
 			touched[past.FromNum] = struct{}{}
 		}
 	}
 	res.LastHeardBackfilled = len(touched)
 
-	res.BootNotes = d.store.ConsumeBootNotes()
+	res.BootNotes = s.store.ConsumeBootNotes()
 	return res
 }

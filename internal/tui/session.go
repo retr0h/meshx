@@ -21,22 +21,22 @@
 package tui
 
 import (
-	"github.com/retr0h/meshx/internal/driver"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/session"
 )
 
-// radioDriver is the narrow surface the TUI model requires of the
+// radioSession is the narrow surface the TUI model requires of the
 // headless driver layer. Declared at the consumer seam per the
 // osapi-io pattern so a test double or a future in-process RPC
-// variant can satisfy it without dragging the concrete *driver.Driver
+// variant can satisfy it without dragging the concrete *session.Session
 // into scope.
 //
-// Concrete *driver.Driver satisfies this structurally — the compiler
+// Concrete *session.Session satisfies this structurally — the compiler
 // verifies at the assignment site in newModel and RunRadio.
-type radioDriver interface {
+type radioSession interface {
 	// Session returns the canonical per-radio state shared between
 	// the driver and the TUI. Nil when the driver is uninitialized.
-	Session() *driver.State
+	Snapshot() *session.State
 
 	// Send dispatches an outbound mdl.Command via the underlying pump.
 	// Returns the allocated MeshPacket.id (zero for fire-and-forget)
@@ -46,12 +46,12 @@ type radioDriver interface {
 	// PumpHandle returns the current Pump. Nil in demo mode or before
 	// the first dial. Callers that need to nil-check before sending
 	// use this; high-level send paths go through Send.
-	PumpHandle() driver.Pump
+	PumpHandle() session.Pump
 
 	// StoreHandle returns the current Store. Nil in in-memory mode.
 	// Used by call sites that call Store methods directly during the
 	// transition period before those calls move onto Driver methods.
-	StoreHandle() driver.Store
+	StoreHandle() session.Store
 
 	// Stop tears down the pump goroutines and transport. Idempotent.
 	Stop()
@@ -59,9 +59,9 @@ type radioDriver interface {
 	// Apply* mutates the canonical State in response to an inbound
 	// model event. Each method publishes to subscribers on its way
 	// out (defer Publish*), so consumers see the same events the
-	// state mutation produced. Local mode uses *driver.Driver which
+	// state mutation produced. Local mode uses *session.Session which
 	// also persists via Store; remote mode uses *sdk.Remote (which
-	// embeds *driver.Driver with nil Pump + nil Store) so Apply*
+	// embeds *session.Session with nil Pump + nil Store) so Apply*
 	// only mutates the local State projection — persistence and
 	// SSE fan-out happened daemon-side before the event arrived.
 	//
@@ -69,17 +69,17 @@ type radioDriver interface {
 	// the matching ApplyX, then layers TUI-only side effects (flash
 	// banner, ding, scrollback nudge). State mutation is single-
 	// source: there is exactly one implementation in driver/apply.go.
-	ApplyMyInfo(msg mdl.MyInfo) driver.ApplyMyInfoResult
+	ApplyMyInfo(msg mdl.MyInfo) session.ApplyMyInfoResult
 	ApplyMetadata(msg mdl.Metadata)
 	ApplyLoraConfig(msg mdl.LoraConfig)
 	ApplyDeviceConfig(msg mdl.DeviceConfig)
 	ApplyDeviceMetrics(msg mdl.DeviceMetrics)
 	ApplyEnvMetrics(msg mdl.EnvMetrics)
-	ApplyPosition(msg mdl.Position, grid string) driver.ApplyPositionResult
+	ApplyPosition(msg mdl.Position, grid string) session.ApplyPositionResult
 	ApplyChannelInfo(msg mdl.ChannelInfo)
-	ApplyNodeInfo(msg mdl.NodeInfo) driver.ApplyNodeInfoResult
-	ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) driver.ApplyTextResult
-	ApplyRouting(msg mdl.Routing) driver.ApplyRoutingResult
+	ApplyNodeInfo(msg mdl.NodeInfo) session.ApplyNodeInfoResult
+	ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) session.ApplyTextResult
+	ApplyRouting(msg mdl.Routing) session.ApplyRoutingResult
 	ApplyTraceroute(msg mdl.Traceroute)
 	ApplyPing(msg mdl.Ping)
 	ApplyConfigComplete() bool
@@ -89,7 +89,7 @@ type radioDriver interface {
 	// indexes by PacketID, and publishes a synthesized mdl.Text so
 	// SSE clients see the outbound row in lockstep with the daemon's
 	// State.Messages append.
-	RecordOutbound(opts driver.RecordOutboundOptions) driver.ApplyTextResult
+	RecordOutbound(opts session.RecordOutboundOptions) session.ApplyTextResult
 
 	// PutSetting persists a key/value pref through the Store. Failures
 	// surface via the driver's OnStoreError callback (default

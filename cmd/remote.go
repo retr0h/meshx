@@ -37,7 +37,7 @@ import (
 // remoteCmd opens the TUI as a client of a running meshx daemon.
 // Inverts the local model: the daemon owns the radio + storage; the
 // TUI consumes its HTTP+SSE API. Same key bindings, same modes, same
-// rendering — the radioDriver seam abstracts the difference.
+// rendering — the radioSession seam abstracts the difference.
 var remoteCmd = &cobra.Command{
 	Use:   "remote [radio]",
 	Short: "Open the TUI against a remote meshx daemon over HTTP+SSE",

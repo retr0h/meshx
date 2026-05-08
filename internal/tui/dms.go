@@ -192,18 +192,29 @@ func (m *model) hydrateDMThreadsFromHistory() {
 // digit isn't silently swallowed.
 //
 // Returns true when the slot resolved + the switch happened.
+//
+// Slot resolution walks the visible tab strip — DISABLED channel
+// slots are skipped (the renderer hides them so a continuous
+// 1..N count would lie about which `Alt+digit` lands where) and DM
+// threads come after every visible channel. Same order the tab
+// strip displays.
 func (m *model) switchToSlot(n int) bool {
-	idx := n - 1
-	if idx < 0 {
+	if n < 1 {
 		return false
 	}
-	if idx < len(m.Channels) {
-		m.switchChannelByIndex(idx)
-		return true
+	visible := n - 1
+	for i, ch := range m.Channels {
+		if ch.Role == roleDisabled {
+			continue
+		}
+		if visible == 0 {
+			m.switchChannelByIndex(i)
+			return true
+		}
+		visible--
 	}
-	dmIdx := idx - len(m.Channels)
-	if dmIdx < len(m.dmThreads) {
-		t := m.dmThreads[dmIdx]
+	if visible < len(m.dmThreads) {
+		t := m.dmThreads[visible]
 		m.switchToDMThread(t.NodeNum)
 		m.flash = "switched to @" + t.Callsign
 		return true

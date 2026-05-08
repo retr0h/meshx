@@ -63,16 +63,16 @@ meshx/
 │   ├── server.go                 # `meshx server` parent command
 │   ├── server_start.go           # `meshx server start` — headless HTTP+SSE daemon (declares daemonRunner; binds via viper server.bind default 127.0.0.1:4404)
 │   └── server_deps.go            # daemon-only adapters (daemonBLEScanner / daemonBLEPairer / daemonUSBScanner / openStore) wiring server.Config; every adapter delegates into internal/meshx/transport
-├── internal/driver/              # headless radio session layer — owns canonical State, wraps Pump + Store
-│   ├── driver.go                 # *driver.Driver type + New(state, pump, store) + Send / Stop / Session
-│   ├── state.go                  # *driver.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests, reconnect banner
+├── internal/session/              # headless radio session layer — owns canonical State, wraps Pump + Store
+│   ├── session.go                 # *session.Session type + New(state, pump, store) + Send / Stop / Session
+│   ├── state.go                  # *session.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests, reconnect banner
 │   ├── pump.go                   # consumer interface (Pump) for internal/meshx/pump
 │   └── store.go                  # consumer interface (Store) for internal/meshx/storage
 ├── internal/server/              # HTTP+SSE daemon (Huma framework) — middleman between driver + clients; multi-radio aware via Registry
 │   ├── server.go                 # *server.Server type + New(Config) + Run(ctx, addr) + Drivers(); slog-tagged with subsystem=http
 │   ├── registry.go               # *server.Registry — radio_id → Driver multiplex, mutex-guarded for concurrent HTTP handlers
 │   ├── middleware.go             # request-id (echoed as X-Request-ID) + structured request log (status-aware level) + panic recovery; wired via api.UseMiddleware
-│   ├── driver.go                 # consumer interface (Driver) at the seam — concrete *driver.Driver satisfies via Session() + Send()
+│   ├── session.go                 # consumer interface (Driver) at the seam — concrete *session.Session satisfies via Session() + Send()
 │   ├── store.go                  # Store / BLEScanner / BLEPairer / USBScanner consumer interfaces (osapi-io seam) + BLESighting + USBSighting wire shapes
 │   ├── routes.go                 # huma.Register calls — radio-scoped under /radios/{radio_id}/..., transports under /transports/{ble,usb}/...
 │   ├── handlers.go               # per-route handlers; channels/nodes/messages emit model types directly (single source of truth, no DTO duplication)
@@ -81,12 +81,12 @@ meshx/
 ├── internal/sdk/                 # generated Go HTTP client for the daemon's API
 │   └── gen/                      # api.yaml (curl /openapi-3.0.yaml from a running daemon) + cfg.yaml + generate.go + client.gen.go (oapi-codegen output)
 ├── internal/tui/                 # Bubble Tea rendering surface (model dispatches apply* directly today)
-│   #                             # GAP: TUI consumes *driver.Driver concretely (m.driver.Pump.Send, m.driver.Store.SaveMessage,
-│   #                             # m.driver.Pump = p). Should declare a narrow consumer interface per osapi-io once apply*
-│   #                             # handlers + outbound dispatch land as methods on driver.Driver — then TUI calls go through
+│   #                             # GAP: TUI consumes *session.Session concretely (m.session.Pump.Send, m.session.Store.SaveMessage,
+│   #                             # m.session.Pump = p). Should declare a narrow consumer interface per osapi-io once apply*
+│   #                             # handlers + outbound dispatch land as methods on session.Session — then TUI calls go through
 │   #                             # the interface (Send / SaveMessage / Subscribe) and a remote-driver-over-HTTP variant can
 │   #                             # satisfy the same seam for the (α) "TUI-as-HTTP-client" mode.
-│   ├── app.go                    # model + View() + Update wiring + RunRadio (model holds *driver.Driver)
+│   ├── app.go                    # model + View() + Update wiring + RunRadio (model holds *session.Session)
 │   ├── ui.go                     # View dispatcher, model getters, generic utils
 │   ├── commands.go               # /command dispatcher + ham bangs
 │   ├── input.go                  # key bindings, nav mode, tab completion entry
@@ -187,7 +187,7 @@ Three modes from one binary:
 2. **Headless** — `meshx server start` owns the radio over HTTP+SSE; no TUI.
 3. **Remote** (planned) — `meshx ble connect --server http://host:4404 <id>` runs TUI against a remote daemon.
 
-The seam is `internal/tui/driver.go::radioDriver`. `*driver.Driver` satisfies it locally; `*sdk.RemoteDriver` (planned) satisfies it over HTTP+SSE by projecting events onto a local `*driver.State` via the same apply path. The TUI doesn't know which it's holding.
+The seam is `internal/tui/session.go::radioSession`. `*session.Session` satisfies it locally; `*sdk.RemoteDriver` (planned) satisfies it over HTTP+SSE by projecting events onto a local `*session.State` via the same apply path. The TUI doesn't know which it's holding.
 
 Remote mode has two independent reconnect loops: radio↔daemon (pump backoff 1s→30s) and TUI↔daemon (SSE client re-fetches snapshot + re-subscribes on network blips). Kill the TUI for 20 minutes — daemon keeps retrying the radio and persisting traffic; relaunching reflects the full gap.
 
@@ -443,7 +443,7 @@ Operational: `/msg  /reply(/r)  /ping  /tr(/traceroute)  /whois(/w)
       (ASCII QR via half-block) + `/channel add <meshtastic://url>` (PSK import)
       + `/channel del` (disable). PSK is RAM-only — never persisted to
       `~/.meshx/meshx.db`. Hidden `/qrtest` for renderer iteration.
-- [x] `internal/driver/` extracted (canonical State + Pump/Store seams).
+- [x] `internal/session/` extracted (canonical State + Pump/Store seams).
 - [x] `meshx server start` daemon (Huma HTTP + multi-radio Registry,
       `/radios/{radio_id}/...` for radio-scoped reads + `/transports/{ble,usb}/*`
       for remote admin).
@@ -454,7 +454,7 @@ Operational: `/msg  /reply(/r)  /ping  /tr(/traceroute)  /whois(/w)
       transport+storage through cmd-local consumer interfaces — no daemon
       required for everyday CLI use.
 - [ ] **MR-3.5c**: relocate `apply*` handlers from `internal/tui/radio.go`
-      onto `*driver.Driver` so the daemon can mutate Session as packets
+      onto `*session.Session` so the daemon can mutate Session as packets
       arrive. Adds `Driver.Subscribe(...)` for the SSE fan-out seam.
 - [ ] **MR-4 (events)**: implement `/radios/{radio_id}/events` SSE stream
       (currently 501) on top of the new Subscribe seam.

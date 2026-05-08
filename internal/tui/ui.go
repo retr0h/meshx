@@ -22,7 +22,7 @@
 // Update, View, every pane Component, key bindings, /command
 // dispatcher, and the input bar. Today's TUI also drives the radio
 // (consumes pump events, writes to storage) — that responsibility
-// will move out into a session.Driver layer in a follow-up MR so the
+// will move out into a session.Session layer in a follow-up MR so the
 // TUI shrinks to "render Session + emit commands" and shares the
 // driver with the meshx serve daemon.
 //

@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package driver
+package session
 
 // apply.go is the canonical inbound-event handler — the single place
 // State mutates in response to a translated FromRadio event. Both
@@ -27,7 +27,7 @@ package driver
 // State stays consistent regardless of who's driving.
 //
 // Design split:
-//   - Driver.ApplyX  — STATE truth: collection mutations, persistence,
+//   - Session.ApplyX  — STATE truth: collection mutations, persistence,
 //                      Publish fan-out. Idempotent enough for replay.
 //   - TUI react*     — TUI-only consequences: flash text, scrollback
 //                      cursor follow-tail, terminal ding, systemBlock /
@@ -61,69 +61,69 @@ type ApplyMyInfoResult struct {
 // the storage row and every FK column atomically; on storage failure
 // we keep the old RadioID so apply* paths don't crash later trying
 // to scope by an empty key.
-func (d *Driver) ApplyMyInfo(msg mdl.MyInfo) ApplyMyInfoResult {
-	defer d.Publish(Event{Kind: EventMyInfo, Data: msg})
-	res := ApplyMyInfoResult{OldRadioID: d.State.RadioID}
-	d.State.MyNodeNum = msg.NodeNum
-	if d.store != nil {
-		if newID, err := d.store.ClaimRadioIdentity(d.State.RadioID, msg.NodeNum); err == nil {
-			d.State.RadioID = newID
+func (s *Session) ApplyMyInfo(msg mdl.MyInfo) ApplyMyInfoResult {
+	defer s.Publish(Event{Kind: EventMyInfo, Data: msg})
+	res := ApplyMyInfoResult{OldRadioID: s.State.RadioID}
+	s.State.MyNodeNum = msg.NodeNum
+	if s.store != nil {
+		if newID, err := s.store.ClaimRadioIdentity(s.State.RadioID, msg.NodeNum); err == nil {
+			s.State.RadioID = newID
 		}
 	}
-	res.NewRadioID = d.State.RadioID
+	res.NewRadioID = s.State.RadioID
 	res.Changed = res.OldRadioID != res.NewRadioID
 	return res
 }
 
 // ApplyMetadata stamps firmware + hw flags from the radio's one-shot
 // Metadata envelope. Surfaces in the status bar.
-func (d *Driver) ApplyMetadata(msg mdl.Metadata) {
-	defer d.Publish(Event{Kind: EventMetadata, Data: msg})
-	d.State.RadioFirmware = msg.FirmwareVersion
-	d.State.RadioDeviceState = msg.DeviceStateVer
-	d.State.RadioHasWifi = msg.HasWifi
-	d.State.RadioHasBT = msg.HasBluetooth
+func (s *Session) ApplyMetadata(msg mdl.Metadata) {
+	defer s.Publish(Event{Kind: EventMetadata, Data: msg})
+	s.State.RadioFirmware = msg.FirmwareVersion
+	s.State.RadioDeviceState = msg.DeviceStateVer
+	s.State.RadioHasWifi = msg.HasWifi
+	s.State.RadioHasBT = msg.HasBluetooth
 }
 
 // ApplyLoraConfig stamps the radio's tx_power, region, and modem
 // preset.
-func (d *Driver) ApplyLoraConfig(msg mdl.LoraConfig) {
-	defer d.Publish(Event{Kind: EventLoRaConfig, Data: msg})
-	d.State.RadioTxPower = msg.TxPowerDBm
-	d.State.RadioRegion = string(msg.Region)
-	d.State.RadioModemPreset = string(msg.ModemPreset)
+func (s *Session) ApplyLoraConfig(msg mdl.LoraConfig) {
+	defer s.Publish(Event{Kind: EventLoRaConfig, Data: msg})
+	s.State.RadioTxPower = msg.TxPowerDBm
+	s.State.RadioRegion = string(msg.Region)
+	s.State.RadioModemPreset = string(msg.ModemPreset)
 }
 
 // ApplyDeviceConfig stamps the radio's role (Client / Router /
 // Repeater / Tracker).
-func (d *Driver) ApplyDeviceConfig(msg mdl.DeviceConfig) {
-	defer d.Publish(Event{Kind: EventDeviceConfig, Data: msg})
-	d.State.RadioRole = string(msg.Role)
+func (s *Session) ApplyDeviceConfig(msg mdl.DeviceConfig) {
+	defer s.Publish(Event{Kind: EventDeviceConfig, Data: msg})
+	s.State.RadioRole = string(msg.Role)
 }
 
 // ApplyDeviceMetrics applies our-own-radio battery / channel / TX
 // telemetry. Peer metrics are ignored here for now (peer metrics
 // land in PeerEnv via ApplyEnvMetrics).
-func (d *Driver) ApplyDeviceMetrics(msg mdl.DeviceMetrics) {
-	defer d.Publish(Event{Kind: EventDeviceMetrics, Data: msg})
-	if msg.FromNodeNum == d.State.MyNodeNum || msg.FromNodeNum == 0 {
-		d.State.BatteryLevel = msg.BatteryLevel
-		d.State.BatteryVoltage = msg.Voltage
-		d.State.ChannelUtil = msg.ChannelUtil
-		d.State.AirUtilTx = msg.AirUtilTx
-		d.State.HasTelemetry = true
+func (s *Session) ApplyDeviceMetrics(msg mdl.DeviceMetrics) {
+	defer s.Publish(Event{Kind: EventDeviceMetrics, Data: msg})
+	if msg.FromNodeNum == s.State.MyNodeNum || msg.FromNodeNum == 0 {
+		s.State.BatteryLevel = msg.BatteryLevel
+		s.State.BatteryVoltage = msg.Voltage
+		s.State.ChannelUtil = msg.ChannelUtil
+		s.State.AirUtilTx = msg.AirUtilTx
+		s.State.HasTelemetry = true
 	}
 }
 
 // ApplyEnvMetrics records a peer's environmental telemetry —
 // temperature / humidity / pressure / gas. Indexed by FromNodeNum
 // so /env or per-peer dashboards can render the freshest reading.
-func (d *Driver) ApplyEnvMetrics(msg mdl.EnvMetrics) {
-	defer d.Publish(Event{Kind: EventEnvMetrics, Data: msg})
-	if d.State.PeerEnv == nil {
-		d.State.PeerEnv = make(map[uint32]PeerEnvMetrics)
+func (s *Session) ApplyEnvMetrics(msg mdl.EnvMetrics) {
+	defer s.Publish(Event{Kind: EventEnvMetrics, Data: msg})
+	if s.State.PeerEnv == nil {
+		s.State.PeerEnv = make(map[uint32]PeerEnvMetrics)
 	}
-	d.State.PeerEnv[msg.FromNodeNum] = PeerEnvMetrics{
+	s.State.PeerEnv[msg.FromNodeNum] = PeerEnvMetrics{
 		Temperature: msg.Temperature,
 		Humidity:    msg.Humidity,
 		Pressure:    msg.Pressure,
@@ -141,24 +141,24 @@ type ApplyPositionResult struct {
 
 // ApplyPosition mutates PeerPositions and (for self) MyLatitude /
 // MyLongitude / MyAltitude.
-func (d *Driver) ApplyPosition(msg mdl.Position, grid string) ApplyPositionResult {
-	defer d.PublishPosition(msg)
-	if d.State.PeerPositions == nil {
-		d.State.PeerPositions = make(map[uint32]PeerPosition)
+func (s *Session) ApplyPosition(msg mdl.Position, grid string) ApplyPositionResult {
+	defer s.PublishPosition(msg)
+	if s.State.PeerPositions == nil {
+		s.State.PeerPositions = make(map[uint32]PeerPosition)
 	}
-	d.State.PeerPositions[msg.FromNodeNum] = PeerPosition{
+	s.State.PeerPositions[msg.FromNodeNum] = PeerPosition{
 		Latitude:  msg.Latitude,
 		Longitude: msg.Longitude,
 		Altitude:  msg.Altitude,
 		Grid:      grid,
 		At:        msg.At,
 	}
-	res := ApplyPositionResult{IsSelf: msg.FromNodeNum == d.State.MyNodeNum}
+	res := ApplyPositionResult{IsSelf: msg.FromNodeNum == s.State.MyNodeNum}
 	if res.IsSelf {
-		d.State.MyLatitude = msg.Latitude
-		d.State.MyLongitude = msg.Longitude
-		d.State.MyAltitude = msg.Altitude
-		d.State.MyGrid = grid
+		s.State.MyLatitude = msg.Latitude
+		s.State.MyLongitude = msg.Longitude
+		s.State.MyAltitude = msg.Altitude
+		s.State.MyGrid = grid
 	}
 	return res
 }
@@ -170,15 +170,15 @@ func (d *Driver) ApplyPosition(msg mdl.Position, grid string) ApplyPositionResul
 // meshtastic:// URL without a second roundtrip. Preserves unread
 // counts across re-apply. Publishes after mutation so SSE
 // subscribers see the event in lockstep with State.
-func (d *Driver) ApplyChannelInfo(msg mdl.ChannelInfo) {
-	defer d.PublishChannelInfo(msg)
+func (s *Session) ApplyChannelInfo(msg mdl.ChannelInfo) {
+	defer s.PublishChannelInfo(msg)
 	const roleDisabled = "DISABLED"
-	for len(d.State.Channels) <= msg.Index {
-		d.State.Channels = append(d.State.Channels, mdl.ChannelItem{Role: roleDisabled})
+	for len(s.State.Channels) <= msg.Index {
+		s.State.Channels = append(s.State.Channels, mdl.ChannelItem{Role: roleDisabled})
 	}
 	if string(msg.Role) == roleDisabled {
-		prevUnread := d.State.Channels[msg.Index].Unread
-		d.State.Channels[msg.Index] = mdl.ChannelItem{
+		prevUnread := s.State.Channels[msg.Index].Unread
+		s.State.Channels[msg.Index] = mdl.ChannelItem{
 			Index:  msg.Index,
 			Role:   roleDisabled,
 			Unread: prevUnread,
@@ -201,10 +201,10 @@ func (d *Driver) ApplyChannelInfo(msg mdl.ChannelInfo) {
 		Role:    string(msg.Role),
 		PSK:     msg.PSK,
 	}
-	c.Unread = d.State.Channels[msg.Index].Unread
-	d.State.Channels[msg.Index] = c
-	if d.State.CurrentChannel == "" {
-		d.State.CurrentChannel = name
+	c.Unread = s.State.Channels[msg.Index].Unread
+	s.State.Channels[msg.Index] = c
+	if s.State.CurrentChannel == "" {
+		s.State.CurrentChannel = name
 	}
 }
 
@@ -221,8 +221,8 @@ type ApplyNodeInfoResult struct {
 // callsigns when the wire payload is content-free (peer the radio has
 // only forwarded for). Preserves user prefs (Fav) and the freshest
 // LastHeardAt across updates. Publishes after mutation.
-func (d *Driver) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
-	defer d.PublishNodeInfo(msg)
+func (s *Session) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
+	defer s.PublishNodeInfo(msg)
 	unresolved := false
 	if msg.LongName == "" && msg.ShortName == "" {
 		long, short := mdl.DefaultCallsign(msg.NodeNum)
@@ -256,8 +256,8 @@ func (d *Driver) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
 		LastHops:    msg.Hops,
 		HwModel:     msg.HwModel,
 	}
-	if d.store != nil {
-		d.storeError(d.store.SaveNode(d.State.RadioID, mdl.CachedNode{
+	if s.store != nil {
+		s.storeError(s.store.SaveNode(s.State.RadioID, mdl.CachedNode{
 			NodeNum:   msg.NodeNum,
 			LongName:  msg.LongName,
 			ShortName: msg.ShortName,
@@ -265,14 +265,14 @@ func (d *Driver) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
 		}))
 	}
 	res := ApplyNodeInfoResult{}
-	if idx, ok := d.State.NodesByNum[msg.NodeNum]; ok {
-		item.Fav = d.State.Nodes[idx].Fav
-		if d.State.Nodes[idx].LastHeardAt.After(item.LastHeardAt) {
-			item.LastHeardAt = d.State.Nodes[idx].LastHeardAt
+	if idx, ok := s.State.NodesByNum[msg.NodeNum]; ok {
+		item.Fav = s.State.Nodes[idx].Fav
+		if s.State.Nodes[idx].LastHeardAt.After(item.LastHeardAt) {
+			item.LastHeardAt = s.State.Nodes[idx].LastHeardAt
 		}
-		wasUnresolved := d.State.Nodes[idx].Unresolved
-		prevCallsign := d.State.Nodes[idx].Callsign
-		d.State.Nodes[idx] = item
+		wasUnresolved := s.State.Nodes[idx].Unresolved
+		prevCallsign := s.State.Nodes[idx].Callsign
+		s.State.Nodes[idx] = item
 		if wasUnresolved && !item.Unresolved && prevCallsign != item.Callsign {
 			res.GhostUpgrade = true
 			res.PrevCallsign = prevCallsign
@@ -280,8 +280,8 @@ func (d *Driver) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
 		}
 		return res
 	}
-	d.State.NodesByNum[msg.NodeNum] = len(d.State.Nodes)
-	d.State.Nodes = append(d.State.Nodes, item)
+	s.State.NodesByNum[msg.NodeNum] = len(s.State.Nodes)
+	s.State.Nodes = append(s.State.Nodes, item)
 	return res
 }
 
@@ -301,27 +301,27 @@ type ApplyTextResult struct {
 // channels, and persists if a Store is wired. Sanitization of the
 // text body is the caller's concern (lives in TUI today; daemon
 // passes pre-sanitized text or ignores cleanup).
-func (d *Driver) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) ApplyTextResult {
-	defer d.PublishText(ev)
+func (s *Session) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) ApplyTextResult {
+	defer s.PublishText(ev)
 	body := ev.Body
 	defaultLong, _ := mdl.DefaultCallsign(body.FromNum)
 	from := defaultLong
-	if idx, ok := d.State.NodesByNum[body.FromNum]; ok {
-		from = d.State.Nodes[idx].Callsign
-		d.State.Nodes[idx].LastHeardAt = time.Now()
-		d.State.Nodes[idx].HeardRank = 0
+	if idx, ok := s.State.NodesByNum[body.FromNum]; ok {
+		from = s.State.Nodes[idx].Callsign
+		s.State.Nodes[idx].LastHeardAt = time.Now()
+		s.State.Nodes[idx].HeardRank = 0
 		if body.SNR != "" {
-			d.State.Nodes[idx].LastSNR = body.SNR
+			s.State.Nodes[idx].LastSNR = body.SNR
 		}
 		if ev.RSSI != "" {
-			d.State.Nodes[idx].LastRSSI = ev.RSSI
+			s.State.Nodes[idx].LastRSSI = ev.RSSI
 		}
 		if body.Hops > 0 {
-			d.State.Nodes[idx].LastHops = body.Hops
+			s.State.Nodes[idx].LastHops = body.Hops
 		}
 	} else if body.FromNum != 0 {
 		long, short := mdl.DefaultCallsign(body.FromNum)
-		d.State.Nodes = append(d.State.Nodes, mdl.NodeItem{
+		s.State.Nodes = append(s.State.Nodes, mdl.NodeItem{
 			Callsign:    long,
 			ShortName:   short,
 			NodeNum:     body.FromNum,
@@ -331,10 +331,10 @@ func (d *Driver) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) Ap
 			LastRSSI:    ev.RSSI,
 			LastHops:    body.Hops,
 		})
-		d.State.NodesByNum[body.FromNum] = len(d.State.Nodes) - 1
+		s.State.NodesByNum[body.FromNum] = len(s.State.Nodes) - 1
 		from = long
 	}
-	mine := body.FromNum == d.State.MyNodeNum
+	mine := body.FromNum == s.State.MyNodeNum
 	item := mdl.MessageItem{Message: mdl.Message{
 		Time:      body.Time,
 		From:      from,
@@ -350,36 +350,36 @@ func (d *Driver) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) Ap
 		ToNum:     ev.ToNum,
 		SentAt:    body.SentAt,
 	}}
-	channelName := d.State.CurrentChannel
-	if ev.Channel < len(d.State.Channels) {
-		channelName = d.State.Channels[ev.Channel].Name
+	channelName := s.State.CurrentChannel
+	if ev.Channel < len(s.State.Channels) {
+		channelName = s.State.Channels[ev.Channel].Name
 	}
 	if body.PacketID != 0 {
-		if existing, ok := d.State.MessagesByPacketID[body.PacketID]; ok &&
-			existing >= 0 && existing < len(d.State.Messages) {
-			prev := &d.State.Messages[existing]
+		if existing, ok := s.State.MessagesByPacketID[body.PacketID]; ok &&
+			existing >= 0 && existing < len(s.State.Messages) {
+			prev := &s.State.Messages[existing]
 			prev.Hops = body.Hops
 			prev.SNR = body.SNR
 			if prev.Status == mdl.StatusPending {
 				prev.Status = mdl.StatusAck
 			}
-			if d.store != nil {
-				d.storeError(d.store.SaveMessage(d.State.RadioID, channelName, prev.Message))
+			if s.store != nil {
+				s.storeError(s.store.SaveMessage(s.State.RadioID, channelName, prev.Message))
 			}
 			return ApplyTextResult{Index: existing, Skipped: true, FromMine: mine}
 		}
 	}
-	d.State.Messages = append(d.State.Messages, item)
-	idx := len(d.State.Messages) - 1
+	s.State.Messages = append(s.State.Messages, item)
+	idx := len(s.State.Messages) - 1
 	if body.PacketID != 0 {
-		d.State.MessagesByPacketID[body.PacketID] = idx
+		s.State.MessagesByPacketID[body.PacketID] = idx
 	}
-	if d.store != nil {
-		d.storeError(d.store.SaveMessage(d.State.RadioID, channelName, item.Message))
+	if s.store != nil {
+		s.storeError(s.store.SaveMessage(s.State.RadioID, channelName, item.Message))
 	}
-	if ev.Channel < len(d.State.Channels) &&
-		d.State.Channels[ev.Channel].Name != d.State.CurrentChannel && !mine {
-		d.State.Channels[ev.Channel].Unread++
+	if ev.Channel < len(s.State.Channels) &&
+		s.State.Channels[ev.Channel].Name != s.State.CurrentChannel && !mine {
+		s.State.Channels[ev.Channel].Unread++
 	}
 	return ApplyTextResult{Index: idx, FromMine: mine}
 }
@@ -402,25 +402,25 @@ type ApplyRoutingResult struct {
 // Foreign Routing replies (request_id matches no row of ours) drop
 // silently. Ping-correlation lives in the TUI's reactRouting; this
 // path only handles the message-status flip.
-func (d *Driver) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
-	defer d.PublishRouting(msg)
+func (s *Session) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
+	defer s.PublishRouting(msg)
 	if msg.RequestID == 0 {
 		return ApplyRoutingResult{}
 	}
-	for i := range d.State.Messages {
-		if d.State.Messages[i].PacketID != msg.RequestID || !d.State.Messages[i].Mine {
+	for i := range s.State.Messages {
+		if s.State.Messages[i].PacketID != msg.RequestID || !s.State.Messages[i].Mine {
 			continue
 		}
 		if msg.OK {
-			d.State.Messages[i].Status = mdl.StatusAck
+			s.State.Messages[i].Status = mdl.StatusAck
 		} else {
-			d.State.Messages[i].Status = mdl.StatusFail
+			s.State.Messages[i].Status = mdl.StatusFail
 		}
-		if d.store != nil {
-			d.storeError(d.store.SaveMessage(
-				d.State.RadioID,
-				d.State.CurrentChannel,
-				d.State.Messages[i].Message,
+		if s.store != nil {
+			s.storeError(s.store.SaveMessage(
+				s.State.RadioID,
+				s.State.CurrentChannel,
+				s.State.Messages[i].Message,
 			))
 		}
 		return ApplyRoutingResult{
@@ -444,17 +444,17 @@ func (d *Driver) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 // that happens on every text packet, so a remote client doing
 // /whois on a peer that just answered a /ping reads the freshest
 // signal numbers without needing the TUI's correlation logic.
-func (d *Driver) ApplyPing(msg mdl.Ping) {
-	defer d.PublishPing(msg)
-	if idx, ok := d.State.NodesByNum[msg.FromNum]; ok && idx < len(d.State.Nodes) {
-		d.State.Nodes[idx].LastHops = msg.Hops
+func (s *Session) ApplyPing(msg mdl.Ping) {
+	defer s.PublishPing(msg)
+	if idx, ok := s.State.NodesByNum[msg.FromNum]; ok && idx < len(s.State.Nodes) {
+		s.State.Nodes[idx].LastHops = msg.Hops
 		if msg.SNR != "" {
-			d.State.Nodes[idx].LastSNR = msg.SNR
+			s.State.Nodes[idx].LastSNR = msg.SNR
 		}
 		if msg.RSSI != "" {
-			d.State.Nodes[idx].LastRSSI = msg.RSSI
+			s.State.Nodes[idx].LastRSSI = msg.RSSI
 		}
-		d.State.Nodes[idx].LastHeardAt = time.Now()
+		s.State.Nodes[idx].LastHeardAt = time.Now()
 	}
 }
 
@@ -463,16 +463,16 @@ func (d *Driver) ApplyPing(msg mdl.Ping) {
 // rendering (systemBlock with the resolved hop chain) lives in
 // the TUI — it's presentation, and the daemon doesn't know which
 // callsigns the consumer wants to see.
-func (d *Driver) ApplyTraceroute(msg mdl.Traceroute) {
-	defer d.PublishTraceroute(msg)
-	if idx, ok := d.State.NodesByNum[msg.FromNum]; ok && idx < len(d.State.Nodes) {
-		d.State.Nodes[idx].LastHops = len(msg.Route)
+func (s *Session) ApplyTraceroute(msg mdl.Traceroute) {
+	defer s.PublishTraceroute(msg)
+	if idx, ok := s.State.NodesByNum[msg.FromNum]; ok && idx < len(s.State.Nodes) {
+		s.State.Nodes[idx].LastHops = len(msg.Route)
 	}
 }
 
 // RecordOutboundOptions describes a locally-originated text packet
 // the caller has just handed to the pump (or POSTed to the daemon).
-// Fields mirror mdl.SendText with the Driver-allocated PacketID
+// Fields mirror mdl.SendText with the Session-allocated PacketID
 // included so the row's MessagesByPacketID index lines up with the
 // later Routing receipt.
 type RecordOutboundOptions struct {
@@ -495,10 +495,10 @@ type RecordOutboundOptions struct {
 // sendBangReply and the daemon's handleSendMessage both call this.
 // Without it, remote-mode TUIs would type a message, see it
 // disappear, and never know the daemon actually accepted it.
-func (d *Driver) RecordOutbound(opts RecordOutboundOptions) ApplyTextResult {
-	channelName := d.State.CurrentChannel
-	if opts.Channel >= 0 && opts.Channel < len(d.State.Channels) {
-		if name := d.State.Channels[opts.Channel].Name; name != "" {
+func (s *Session) RecordOutbound(opts RecordOutboundOptions) ApplyTextResult {
+	channelName := s.State.CurrentChannel
+	if opts.Channel >= 0 && opts.Channel < len(s.State.Channels) {
+		if name := s.State.Channels[opts.Channel].Name; name != "" {
 			channelName = name
 		}
 	}
@@ -512,22 +512,22 @@ func (d *Driver) RecordOutbound(opts RecordOutboundOptions) ApplyTextResult {
 		Status:   mdl.StatusPending,
 		PacketID: opts.PacketID,
 		ReplyID:  opts.ReplyID,
-		FromNum:  d.State.MyNodeNum,
+		FromNum:  s.State.MyNodeNum,
 		ToNum:    opts.ToNum,
 		SentAt:   now,
 	}}
-	d.State.Messages = append(d.State.Messages, item)
-	idx := len(d.State.Messages) - 1
+	s.State.Messages = append(s.State.Messages, item)
+	idx := len(s.State.Messages) - 1
 	if opts.PacketID != 0 {
-		d.State.MessagesByPacketID[opts.PacketID] = idx
+		s.State.MessagesByPacketID[opts.PacketID] = idx
 	}
-	if d.store != nil {
-		d.storeError(d.store.SaveMessage(d.State.RadioID, channelName, item.Message))
+	if s.store != nil {
+		s.storeError(s.store.SaveMessage(s.State.RadioID, channelName, item.Message))
 	}
 	// Publish a synthesized mdl.Text so SSE subscribers get a
 	// live "new outbound message" event in lockstep with the
 	// State.Messages append. Mirrors the inbound ApplyText path.
-	d.Publish(Event{Kind: EventText, Data: mdl.Text{
+	s.Publish(Event{Kind: EventText, Data: mdl.Text{
 		Body:    item.Message,
 		Channel: opts.Channel,
 		ToNum:   opts.ToNum,
@@ -549,9 +549,9 @@ func timeHHMM(t time.Time) string {
 // daemon's own State. Without publishing, a remote TUI watching the
 // daemon would only learn the radio dropped when text packets stop
 // arriving.
-func (d *Driver) ApplyReconnecting(ev mdl.Reconnecting) {
-	defer d.Publish(Event{Kind: EventReconnecting, Data: ev})
-	d.State.Reconnect = &ReconnectState{
+func (s *Session) ApplyReconnecting(ev mdl.Reconnecting) {
+	defer s.Publish(Event{Kind: EventReconnecting, Data: ev})
+	s.State.Reconnect = &ReconnectState{
 		Attempt: ev.Attempt,
 		ReadyAt: time.Now().Add(ev.After),
 		Err:     ev.Err,
@@ -561,21 +561,21 @@ func (d *Driver) ApplyReconnecting(ev mdl.Reconnecting) {
 // ApplyDisconnected flips Connected = false and publishes. The
 // reconnect banner is left intact; ApplyReconnecting owns its
 // lifecycle (clear happens on the next ApplyConfigComplete).
-func (d *Driver) ApplyDisconnected(ev mdl.Disconnected) {
-	defer d.Publish(Event{Kind: EventDisconnected, Data: ev})
-	d.State.Connected = false
+func (s *Session) ApplyDisconnected(ev mdl.Disconnected) {
+	defer s.Publish(Event{Kind: EventDisconnected, Data: ev})
+	s.State.Connected = false
 }
 
 // ApplyConfigComplete marks the handshake as complete — Connected
 // flips true, the reconnect banner clears. Returns whether this was
 // the first ConfigComplete (TUI uses it to decide whether to emit
 // the "sync complete" system line).
-func (d *Driver) ApplyConfigComplete() bool {
-	wasDisconnected := !d.State.Connected
-	d.State.Connected = true
-	d.State.Reconnect = nil
-	d.State.SyncReceived = 0
-	d.Publish(Event{Kind: EventConfigComplete, Data: mdl.ConfigComplete{}})
+func (s *Session) ApplyConfigComplete() bool {
+	wasDisconnected := !s.State.Connected
+	s.State.Connected = true
+	s.State.Reconnect = nil
+	s.State.SyncReceived = 0
+	s.Publish(Event{Kind: EventConfigComplete, Data: mdl.ConfigComplete{}})
 	return wasDisconnected
 }
 

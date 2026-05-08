@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package driver
+package session
 
 import (
 	"context"
@@ -71,9 +71,9 @@ const (
 const subscriberBuffer = 64
 
 // Subscribe returns a channel that receives every Event published
-// on this Driver until ctx is canceled. Multiple concurrent
+// on this Session until ctx is canceled. Multiple concurrent
 // subscribers are supported (one for each SSE client + the future
-// in-process TUI). When ctx cancels, Driver removes the channel
+// in-process TUI). When ctx cancels, Session removes the channel
 // from its fan-out and closes it; subscribers that range over the
 // channel exit cleanly.
 //
@@ -81,21 +81,21 @@ const subscriberBuffer = 64
 // can't keep up sees DROPPED events, not blocked publishers — fine
 // because the canonical state lives in *State and a fresh
 // snapshot is one HTTP GET away.
-func (d *Driver) Subscribe(ctx context.Context) <-chan Event {
+func (s *Session) Subscribe(ctx context.Context) <-chan Event {
 	ch := make(chan Event, subscriberBuffer)
-	d.subMu.Lock()
-	d.subs = append(d.subs, ch)
-	d.subMu.Unlock()
+	s.subMu.Lock()
+	s.subs = append(s.subs, ch)
+	s.subMu.Unlock()
 	go func() {
 		<-ctx.Done()
-		d.subMu.Lock()
-		for i, c := range d.subs {
+		s.subMu.Lock()
+		for i, c := range s.subs {
 			if c == ch {
-				d.subs = append(d.subs[:i], d.subs[i+1:]...)
+				s.subs = append(s.subs[:i], s.subs[i+1:]...)
 				break
 			}
 		}
-		d.subMu.Unlock()
+		s.subMu.Unlock()
 		close(ch)
 	}()
 	return ch
@@ -105,12 +105,12 @@ func (d *Driver) Subscribe(ctx context.Context) <-chan Event {
 // — a slow subscriber drops the event rather than back-pressuring
 // the apply* path. Today's call sites are the apply* handlers in
 // internal/tui/radio.go (one-line publish per handler); when those
-// migrate onto Driver in the apply* relocation MR, the call sites
+// migrate onto Session in the apply* relocation MR, the call sites
 // move with them.
-func (d *Driver) Publish(ev Event) {
-	d.subMu.RLock()
-	defer d.subMu.RUnlock()
-	for _, ch := range d.subs {
+func (s *Session) Publish(ev Event) {
+	s.subMu.RLock()
+	defer s.subMu.RUnlock()
+	for _, ch := range s.subs {
 		select {
 		case ch <- ev:
 		default:
@@ -122,56 +122,56 @@ func (d *Driver) Publish(ev Event) {
 }
 
 // PublishText is the typed shortcut for an mdl.Text event.
-func (d *Driver) PublishText(t mdl.Text) Event {
+func (s *Session) PublishText(t mdl.Text) Event {
 	ev := Event{Kind: EventText, Data: t}
-	d.Publish(ev)
+	s.Publish(ev)
 	return ev
 }
 
 // PublishNodeInfo is the typed shortcut for an mdl.NodeInfo event.
-func (d *Driver) PublishNodeInfo(n mdl.NodeInfo) Event {
+func (s *Session) PublishNodeInfo(n mdl.NodeInfo) Event {
 	ev := Event{Kind: EventNodeInfo, Data: n}
-	d.Publish(ev)
+	s.Publish(ev)
 	return ev
 }
 
 // PublishChannelInfo is the typed shortcut for an mdl.ChannelInfo event.
-func (d *Driver) PublishChannelInfo(c mdl.ChannelInfo) Event {
+func (s *Session) PublishChannelInfo(c mdl.ChannelInfo) Event {
 	ev := Event{Kind: EventChannelInfo, Data: c}
-	d.Publish(ev)
+	s.Publish(ev)
 	return ev
 }
 
 // PublishPosition is the typed shortcut for an mdl.Position event.
-func (d *Driver) PublishPosition(p mdl.Position) Event {
+func (s *Session) PublishPosition(p mdl.Position) Event {
 	ev := Event{Kind: EventPosition, Data: p}
-	d.Publish(ev)
+	s.Publish(ev)
 	return ev
 }
 
 // PublishRouting is the typed shortcut for an mdl.Routing event.
-func (d *Driver) PublishRouting(r mdl.Routing) Event {
+func (s *Session) PublishRouting(r mdl.Routing) Event {
 	ev := Event{Kind: EventRouting, Data: r}
-	d.Publish(ev)
+	s.Publish(ev)
 	return ev
 }
 
 // PublishTraceroute is the typed shortcut for an mdl.Traceroute event.
-func (d *Driver) PublishTraceroute(t mdl.Traceroute) Event {
+func (s *Session) PublishTraceroute(t mdl.Traceroute) Event {
 	ev := Event{Kind: EventTraceroute, Data: t}
-	d.Publish(ev)
+	s.Publish(ev)
 	return ev
 }
 
 // PublishPing is the typed shortcut for an mdl.Ping event.
-func (d *Driver) PublishPing(p mdl.Ping) Event {
+func (s *Session) PublishPing(p mdl.Ping) Event {
 	ev := Event{Kind: EventPing, Data: p}
-	d.Publish(ev)
+	s.Publish(ev)
 	return ev
 }
 
-// subState is the embedded fan-out registry on Driver. Kept as an
-// embedded struct (rather than fields directly on Driver) so the
+// subState is the embedded fan-out registry on Session. Kept as an
+// embedded struct (rather than fields directly on Session) so the
 // driver.go file stays focused on lifecycle and this file owns the
 // subscribe seam end-to-end.
 type subState struct {

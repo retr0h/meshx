@@ -333,31 +333,40 @@ func (c channelTabsRow) Render(box Box) string {
 	// carry the active marker (hot pink).
 	onChannel := m.currentDMNum == 0
 	var tabs []string
-	for i, ch := range m.Channels {
-		// applyChannel keeps DISABLED slots in the slice so /channel
-		// new can find a free index — skip them for display so empty
-		// slots don't clutter the tab strip.
+	// Display slot is the VISIBLE 1-based position (idx 0 + 1 = "1:"),
+	// counting only non-DISABLED channels and then DM threads. This
+	// keeps the displayed slot number in lockstep with switchToSlot's
+	// resolution so `Alt+N` always lands on the tab labelled "N: ...".
+	visible := 0
+	for _, ch := range m.Channels {
 		if ch.Role == roleDisabled {
 			continue
 		}
 		tabs = append(tabs, channelTabCell(
-			ch.Name, i, onChannel && ch.Name == m.CurrentChannel, ch.Private, false, ch.Unread,
+			ch.Name,
+			visible,
+			onChannel && ch.Name == m.CurrentChannel,
+			ch.Private,
+			false,
+			ch.Unread,
 		))
+		visible++
 	}
 	if len(tabs) == 0 {
 		tabs = append(tabs, channelTabCell("#default", 0, onChannel, false, false, 0))
+		visible = 1
 	}
 	// DM tabs render after channels with "@callsign" labels and a
 	// continued slot index. private=true keeps the unread badge alert-
 	// styled (orange "(N!)") and isDM=true tints the inactive tab name
 	// cyan so the @peer threads visually pop against the lavender
 	// channel strip.
-	dmStart := len(m.Channels)
-	for i, t := range m.dmThreads {
+	for _, t := range m.dmThreads {
 		active := !onChannel && t.NodeNum == m.currentDMNum
 		tabs = append(tabs, channelTabCell(
-			"@"+t.Callsign, dmStart+i, active, true, true, t.Unread,
+			"@"+t.Callsign, visible, active, true, true, t.Unread,
 		))
+		visible++
 	}
 	tabsStr := strings.Join(tabs, " ")
 

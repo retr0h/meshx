@@ -18,20 +18,20 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package driver
+package session
 
 import mdl "github.com/retr0h/meshx/internal/meshx/model"
 
-// Pump is the transport ↔ tea bridge surface the Driver consumes —
+// Pump is the transport ↔ tea bridge surface the Session consumes —
 // the concrete implementation lives in internal/meshx/pump as
 // *pump.Pump, cast to this interface at construction in cmd/. Defined
 // here (where it's consumed) per the osapi-io pattern: each consumer
 // declares only the methods it actually calls, so a future remote
 // client (MR-5) can declare its own (likely smaller) interface
-// without bloating the Driver's view of the bridge.
+// without bloating the Session's view of the bridge.
 //
 // Methods correspond 1:1 with *pump.Pump's exported methods used by
-// the Driver. The compile-time bind at the construction site catches
+// the Session. The compile-time bind at the construction site catches
 // drift the moment a method is added or renamed.
 //
 // Send takes typed mdl.Command values — meshx never touches

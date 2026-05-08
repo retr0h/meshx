@@ -23,9 +23,9 @@ package cmd
 import (
 	"log/slog"
 
-	"github.com/retr0h/meshx/internal/driver"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/server"
+	"github.com/retr0h/meshx/internal/session"
 )
 
 // daemonSink is the pump.Sink the meshx server attaches when it
@@ -39,7 +39,7 @@ import (
 // the Driver under the new key so /radios/0xNNNNNNNN starts working
 // immediately.
 type daemonSink struct {
-	drv      *driver.Driver
+	drv      *session.Session
 	registry *server.Registry
 	log      *slog.Logger
 }

@@ -23,8 +23,8 @@ package server
 import (
 	"context"
 
-	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/session"
 )
 
 // driver.go — the narrow Driver interface this package consumes,

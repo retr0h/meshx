@@ -21,9 +21,9 @@
 package sdk
 
 import (
-	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/sdk/gen"
+	"github.com/retr0h/meshx/internal/session"
 )
 
 // convert.go is the SDK boundary — gen.* are wire shapes (whatever

@@ -21,8 +21,8 @@
 package tui
 
 import (
-	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/session"
 )
 
 // radioSession is the narrow surface the TUI model requires of the

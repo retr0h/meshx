@@ -26,8 +26,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2/sse"
 
-	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/session"
 )
 
 // eventsTypeMap registers each Go type with the SSE event name that

@@ -42,8 +42,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/session"
 )
 
 // sanitizeMessageText scrubs peer-originated text so one bad packet

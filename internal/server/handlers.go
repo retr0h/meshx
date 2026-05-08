@@ -26,8 +26,8 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/session"
 )
 
 // Handlers translate HTTP requests into driver-state reads. Every

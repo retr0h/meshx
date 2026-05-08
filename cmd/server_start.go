@@ -30,10 +30,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/retr0h/meshx/internal/session"
 	"github.com/retr0h/meshx/internal/meshx/pump"
 	"github.com/retr0h/meshx/internal/meshx/storage"
 	"github.com/retr0h/meshx/internal/server"
+	"github.com/retr0h/meshx/internal/session"
 )
 
 // serverStartCmd boots the daemon — runs the HTTP+SSE server without

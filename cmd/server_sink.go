@@ -23,9 +23,9 @@ package cmd
 import (
 	"log/slog"
 
-	"github.com/retr0h/meshx/internal/session"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/server"
+	"github.com/retr0h/meshx/internal/session"
 )
 
 // daemonSink is the pump.Sink the meshx server attaches when it

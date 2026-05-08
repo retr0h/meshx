@@ -18,21 +18,16 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// Package driver is the headless radio session layer. It wraps the
+// Package session is the headless radio session layer. It wraps the
 // concrete pump (transport ↔ proto bridge) and storage (SQLite
-// persistence) along with a *driver.State value, exposing them
+// persistence) along with a *session.State value, exposing them
 // through narrow consumer interfaces (Pump, Store) declared in this
 // package per the osapi-io pattern.
 //
-// Today the TUI is the only consumer — its model holds a *Session and
-// dispatches inbound mdl.X events back to apply* handlers in
-// internal/tui/radio.go. MR-3.5c will move those handlers onto
-// methods of *Session so a future meshx serve daemon (MR-4) can drive
-// the same Session from HTTP+SSE handlers without dragging Bubble
-// Tea in. After that lands, internal/tui shrinks to "render Session
-// + emit commands" and the (α) endgame falls into place: standalone
-// meshx is a single binary that bundles the Session + an in-process
-// server, and the TUI is just one of its clients.
+// Both the TUI and the meshx serve daemon hold a *Session and route
+// inbound mdl.X events through Apply* methods that mutate the
+// canonical State + publish to subscribers, so render layers and
+// HTTP+SSE handlers see the same single source of truth.
 package session
 
 import (
@@ -165,10 +160,15 @@ func (s *Session) Stop() {
 	s.pump.Stop()
 }
 
-// Session returns the canonical state. Method (rather than direct
+// Snapshot returns the canonical State. Method (rather than direct
 // field access) lets consumers depend on a narrow interface at their
-// own seam — see internal/server/driver.go for the server's Session
-// interface.
+// own seam — see internal/server/session.go for the server's Driver
+// interface, internal/tui/session.go for the TUI's radioSession.
+//
+// Named Snapshot rather than Session() because *Session is embedded
+// in *sdk.Remote — `r.Session` would resolve to the embedded field
+// and shadow a Session() method, which Go silently allows but breaks
+// callers expecting the method.
 func (s *Session) Snapshot() *State {
 	return s.State
 }

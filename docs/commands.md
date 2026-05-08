@@ -59,18 +59,18 @@ the universal quit.
 
 ## Tab switching (channels + DMs)
 
-The tab strip at the bottom is `[1:#default]  2:#other  9: @peer (1!)` — channels
-first by slot, DM threads after. Tab numbers continue across both kinds, so
-`Alt+9` addresses whatever's in slot 9 regardless of type.
+The tab strip at the bottom is `[1:#default]  2:#other  9: @peer (1!)` —
+channels first by slot, DM threads after. Tab numbers continue across both
+kinds, so `Alt+9` addresses whatever's in slot 9 regardless of type.
 
-| Key                 | Action                                                          |
-| ------------------- | --------------------------------------------------------------- |
-| `Alt+1` … `Alt+9`   | jump to slot N (channels first, DM threads after)               |
-| `Ctrl+N` / `Ctrl+P` | cycle to next / prev tab — walks channels + DMs as one strip    |
-| `/join <channel>`   | switch to named channel                                         |
-| `/channels`         | open channels overlay (j/k walks, Enter opens)                  |
-| `/query <peer>`     | open or focus a DM tab for `<peer>`                             |
-| `/close`            | close the active DM tab and return to the prior channel         |
+| Key                 | Action                                                       |
+| ------------------- | ------------------------------------------------------------ |
+| `Alt+1` … `Alt+9`   | jump to slot N (channels first, DM threads after)            |
+| `Ctrl+N` / `Ctrl+P` | cycle to next / prev tab — walks channels + DMs as one strip |
+| `/join <channel>`   | switch to named channel                                      |
+| `/channels`         | open channels overlay (j/k walks, Enter opens)               |
+| `/query <peer>`     | open or focus a DM tab for `<peer>`                          |
+| `/close`            | close the active DM tab and return to the prior channel      |
 
 ## Window nav (between log and input)
 

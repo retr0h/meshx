@@ -441,20 +441,11 @@ components:
         corrupted:
           description: sanitization replaced/dropped bytes
           type: boolean
-        expire_at:
-          description: reap deadline for TTL-expiring notices
-          format: date-time
-          type: string
         from:
           description: sender callsign at receive time
           type: string
         from_num:
           description: sender node num
-          format: int64
-          minimum: 0
-          type: integer
-        group:
-          description: binds rows as one logical block for multi-line replies
           format: int64
           minimum: 0
           type: integer
@@ -470,9 +461,6 @@ components:
           format: int64
           minimum: 0
           type: integer
-        pinned:
-          description: user paused this row's TTL
-          type: boolean
         reply_id:
           description: PacketID this message answers
           format: int64

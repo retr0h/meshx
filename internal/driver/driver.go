@@ -51,12 +51,16 @@ type Driver struct {
 	// pointer with consumers; Driver is the sole writer.
 	State *State
 
-	// Pump is the outbound + reconnect bridge — Driver.Send forwards
-	// here. Nil when no transport is attached.
-	Pump Pump
+	// pump is the outbound + reconnect bridge — Driver.Send forwards
+	// here. Nil when no transport is attached. Unexported on purpose:
+	// every external caller goes through Send / AttachPump /
+	// PumpHandle so the field stays a Driver-private invariant.
+	pump Pump
 
-	// Store is the persistence handle. Nil = in-memory only.
-	Store Store
+	// store is the persistence handle. Nil = in-memory only.
+	// Unexported for the same reason as pump — callers route through
+	// PutSetting / SaveNodePrefs / HydrateFromStore / etc.
+	store Store
 
 	// OnStoreError fires once per failed Store call inside Apply*
 	// and RecordOutbound. Nil = errors are dropped (test fixtures,
@@ -86,20 +90,20 @@ func (d *Driver) storeError(err error) {
 // global-scope namespace (per-app prefs like "ding_muted"); a
 // radio_id keys per-radio prefs. No-op when Store is nil.
 func (d *Driver) PutSetting(radioID, key, value string) {
-	if d.Store == nil {
+	if d.store == nil {
 		return
 	}
-	d.storeError(d.Store.PutSetting(radioID, key, value))
+	d.storeError(d.store.PutSetting(radioID, key, value))
 }
 
 // SaveNodePrefs persists a peer's favorite / muted toggle through
 // the Store and surfaces the failure via OnStoreError. No-op when
 // Store is nil.
 func (d *Driver) SaveNodePrefs(radioID string, nodeNum uint32, favorite, muted bool) {
-	if d.Store == nil {
+	if d.store == nil {
 		return
 	}
-	d.storeError(d.Store.SaveNodePrefs(radioID, nodeNum, favorite, muted))
+	d.storeError(d.store.SaveNodePrefs(radioID, nodeNum, favorite, muted))
 }
 
 // AlertStorageError is the canonical OnStoreError implementation
@@ -136,7 +140,7 @@ func New(s *State, p Pump, st Store) *Driver {
 	if s == nil {
 		s = NewState()
 	}
-	return &Driver{State: s, Pump: p, Store: st}
+	return &Driver{State: s, pump: p, store: st}
 }
 
 // Send dispatches an outbound mdl.Command via the Pump. Returns the
@@ -144,10 +148,10 @@ func New(s *State, p Pump, st Store) *Driver {
 // ok=false when the pump is nil (demo mode) or the outbound buffer
 // is full.
 func (d *Driver) Send(cmd mdl.Command) (uint32, bool) {
-	if d.Pump == nil {
+	if d.pump == nil {
 		return 0, false
 	}
-	return d.Pump.Send(cmd)
+	return d.pump.Send(cmd)
 }
 
 // Stop tears down the live transport and pump goroutines. Idempotent
@@ -155,10 +159,10 @@ func (d *Driver) Send(cmd mdl.Command) (uint32, bool) {
 // the lifecycle of Store is the caller's concern (RunRadio's defer
 // owns it today).
 func (d *Driver) Stop() {
-	if d.Pump == nil {
+	if d.pump == nil {
 		return
 	}
-	d.Pump.Stop()
+	d.pump.Stop()
 }
 
 // Session returns the canonical state. Method (rather than direct
@@ -172,13 +176,13 @@ func (d *Driver) Session() *State {
 // AttachPump sets the pump handle. Called by the TUI once the tea
 // program is running and the transport has been dialed.
 func (d *Driver) AttachPump(p Pump) {
-	d.Pump = p
+	d.pump = p
 }
 
 // AttachStore sets the storage handle. Called by newModel after
 // storage.New succeeds.
 func (d *Driver) AttachStore(s Store) {
-	d.Store = s
+	d.store = s
 }
 
 // PumpHandle returns the current Pump, which may be nil (demo mode or
@@ -186,12 +190,12 @@ func (d *Driver) AttachStore(s Store) {
 // transition can call this; future follow-ups will replace these call
 // sites with higher-level methods on Driver.
 func (d *Driver) PumpHandle() Pump {
-	return d.Pump
+	return d.pump
 }
 
 // StoreHandle returns the current Store, which may be nil (in-memory
 // mode). Consumers that need direct Store access during the transition
 // call this; future follow-ups will replace these with driver methods.
 func (d *Driver) StoreHandle() Store {
-	return d.Store
+	return d.store
 }

@@ -300,6 +300,14 @@ type model struct {
 	// the session runs in-memory.
 	driver radioDriver
 
+	// attachPump wires the dialed pump back onto the underlying
+	// driver. Held as a callback rather than as an interface method
+	// so radioDriver can stay focused on running-TUI behavior — pump
+	// wiring is a once-per-session construction concern. Set in
+	// newModel from the concrete *driver.Driver's AttachPump method;
+	// nil-safe so demo / remote modes (no local pump) skip cleanly.
+	attachPump func(driver.Pump)
+
 	// remoteMode is true when the model is talking to a remote daemon
 	// over HTTP+SSE rather than owning the radio in-process. Init()
 	// branches on this — local mode fires openPumpMsg to spawn the
@@ -408,6 +416,11 @@ func RunRadio(dest string) error {
 	notices := hydrateLocalSession(drv, dest)
 
 	m := newModel(drv, notices...)
+	// Off-interface concrete-type wiring: AttachPump is a once-per-
+	// session construction step, not running-TUI behavior, so it
+	// stays off radioDriver. Bind the concrete method as a callback
+	// the tea loop can invoke when the dialed pump message arrives.
+	m.attachPump = drv.AttachPump
 	// Close the persistence handle when the tea loop exits. Nil-safe:
 	// if hydration didn't open a store, StoreHandle() is nil and the
 	// close is a no-op.
@@ -461,6 +474,10 @@ func RunRadioRemote(serverURL, radioID string) error {
 	}
 
 	m := newModel(r, notices...)
+	// Remote mode never opens a local pump, but bind anyway in case
+	// a future remote-with-fallback flow attaches one. *sdk.Remote
+	// embeds *driver.Driver, so AttachPump is method-promoted.
+	m.attachPump = r.AttachPump
 	slot := &programSlot{}
 	m.programSlot = slot
 	program := tea.NewProgram(m, tea.WithAltScreen())
@@ -836,11 +853,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// different signature, so Go's structural typing needs the
 		// trampoline.
 		var p driver.Pump = pump.New(msg.dest, teaProgramSink{p: m.programSlot.p})
-		m.driver.AttachPump(p)
+		if m.attachPump != nil {
+			m.attachPump(p)
+		}
 		return m, nil
 
 	case pumpAttachedMsg:
-		m.driver.AttachPump(msg.p)
+		if m.attachPump != nil {
+			m.attachPump(msg.p)
+		}
 		return m, nil
 
 	case mdl.MyInfo:

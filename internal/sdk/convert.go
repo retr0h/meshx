@@ -97,15 +97,10 @@ func messageFromGen(g gen.MessageItem) mdl.MessageItem {
 	if g.Acks != nil {
 		m.Acks = *g.Acks
 	}
-	if g.Group != nil {
-		m.Group = uint64(*g.Group)
-	}
-	if g.ExpireAt != nil {
-		m.ExpireAt = g.ExpireAt
-	}
-	if g.Pinned != nil {
-		m.Pinned = *g.Pinned
-	}
+	// Group, ExpireAt, and Pinned are render-only fields tagged
+	// json:"-" on MessageItem — they don't ship over the wire and
+	// don't appear in the generated client. The remote side recomputes
+	// them from local TUI state on receipt.
 	return m
 }
 

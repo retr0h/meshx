@@ -43,12 +43,6 @@ type radioDriver interface {
 	// and ok=false when the pump is nil or its outbound buffer is full.
 	Send(cmd mdl.Command) (uint32, bool)
 
-	// AttachPump sets the pump handle once the tea program is running.
-	AttachPump(p driver.Pump)
-
-	// AttachStore sets the storage handle after storage.New succeeds.
-	AttachStore(s driver.Store)
-
 	// PumpHandle returns the current Pump. Nil in demo mode or before
 	// the first dial. Callers that need to nil-check before sending
 	// use this; high-level send paths go through Send.

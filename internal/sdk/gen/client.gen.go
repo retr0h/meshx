@@ -261,17 +261,11 @@ type MessageItem struct {
 	// Corrupted sanitization replaced/dropped bytes
 	Corrupted *bool `json:"corrupted,omitempty"`
 
-	// ExpireAt reap deadline for TTL-expiring notices
-	ExpireAt *time.Time `json:"expire_at,omitempty"`
-
 	// From sender callsign at receive time
 	From string `json:"from"`
 
 	// FromNum sender node num
 	FromNum int64 `json:"from_num"`
-
-	// Group binds rows as one logical block for multi-line replies
-	Group *int64 `json:"group,omitempty"`
 
 	// Hops mesh hop count; 0 = direct
 	Hops int64 `json:"hops"`
@@ -281,9 +275,6 @@ type MessageItem struct {
 
 	// PacketId MeshPacket.id; 0 for system / demo rows
 	PacketId int64 `json:"packet_id"`
-
-	// Pinned user paused this row's TTL
-	Pinned *bool `json:"pinned,omitempty"`
 
 	// ReplyId PacketID this message answers
 	ReplyId *int64 `json:"reply_id,omitempty"`

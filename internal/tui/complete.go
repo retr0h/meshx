@@ -75,11 +75,11 @@ type tabState struct {
 // Keep alphabetical — users see this in the "N matches: …" flash
 // so order matters for predictability.
 var slashCommands = []string{
-	"73", "88", "channel", "channels", "clear", "config",
+	"73", "88", "channel", "channels", "clear", "close", "config",
 	"cq", "cqr", "exit", "grid", "h", "help", "ignore", "info", "join",
 	"k", "lastlog", "list", "me", "mesh", "msg", "mute", "nearby", "nick",
 	"nodes", "part", "pin", "ping", "q", "qrm", "qrz", "qsb", "qsl", "qth",
-	"quit", "r", "radar", "reboot", "reply", "rs", "search", "sk", "sync",
+	"query", "quit", "r", "radar", "reboot", "reply", "rs", "search", "sk", "sync",
 	"tr", "unignore", "version", "w", "who", "whoami", "whois", "wx",
 }
 
@@ -97,6 +97,7 @@ var callsignArgCommands = map[string]bool{
 	"ping": true,
 	"tr":   true, "trace": true, "traceroute": true,
 	"msg":   true,
+	"query": true,
 	"reply": true, "r": true,
 	"qrm":  true,
 	"qsb":  true,
@@ -137,6 +138,18 @@ func (m model) computeCompletions(text string, cursor int) (matches []matchItem,
 		start = cStart
 		end = len(text)
 		word := text[start:end]
+		// Honor the DM tab-strip's "@callsign" addressing form:
+		// `/query @SGV<Tab>` should match SGV_Shredder the same as
+		// `/query SGV<Tab>`. Strip for lookup, re-prefix on insert
+		// so the visual model stays consistent.
+		if strings.HasPrefix(word, "@") {
+			universe := m.nickUniverse(strings.TrimPrefix(word, "@"))
+			for i := range universe {
+				universe[i].insert = "@" + universe[i].insert
+				universe[i].display = "@" + universe[i].display
+			}
+			return universe, start, end
+		}
 		universe := m.nickUniverse(word)
 		return universe, start, end
 	}

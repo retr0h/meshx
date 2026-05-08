@@ -100,7 +100,15 @@ var helpEntries = map[string]helpEntry{
 	// Messaging.
 	"msg": {
 		usage:   "/msg <call> <text>",
-		summary: "direct text at a node (still a channel broadcast on the wire — Meshtastic DMs are not wired yet)",
+		summary: "send a direct message to <call> — opens a @peer DM tab; subsequent typing keeps replying to that peer",
+	},
+	"query": {
+		usage:   "/query <call>",
+		summary: "open (or focus) a DM tab for <call> without sending — irssi convention",
+	},
+	"close": {
+		usage:   "/close",
+		summary: "close the active DM tab and return to the prior channel (alias: /unquery)",
 	},
 	"reply": {
 		usage:   "/reply [call] [text]",

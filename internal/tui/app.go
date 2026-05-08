@@ -357,6 +357,15 @@ type model struct {
 
 	flash string
 
+	// dmThreads is the live list of virtual @peer DM tabs. Session-
+	// scoped — auto-populated on inbound DM and on /msg / /query, never
+	// persisted (the set re-derives from message history on next launch
+	// once we add startup hydration). currentDMNum names the active
+	// tab: zero means "on a channel" (CurrentChannel is authoritative);
+	// non-zero means we're focused on the DM thread for that peer.
+	dmThreads    []dmThread
+	currentDMNum uint32
+
 	// flashSeen / flashSeenAt drive the auto-clear timer for flash.
 	// 109 distinct sites set m.flash; refactoring all of them through
 	// a setter would be churn for nothing. Instead, the noticeTick
@@ -615,6 +624,11 @@ func newModel(d radioDriver, extraNotices ...string) model {
 	if n := len(m.Messages); n > 0 {
 		m.selectedMsg = n - 1
 	}
+	// Re-open every DM thread we exchanged messages with in past
+	// sessions so the @callsign tabs persist across launches —
+	// without this hydration, peers' threads silently disappear on
+	// restart even though their messages survive in SQLite.
+	m.hydrateDMThreadsFromHistory()
 
 	// Caller-supplied startup notices land BEFORE the splash so the
 	// BitchX greeter stays at the bottom of the log on launch (same

@@ -348,6 +348,39 @@ The main message log is always visible by default. `/channels` and
 `/nodes` (aliases: `/users`, `/names`) pop a full-pane overlay that
 replaces the log until ESC. No persistent side drawers.
 
+## Direct messages (virtual @peer tabs)
+
+DMs are real Meshtastic unicasts (`MeshPacket.to=peer.NodeNum` on
+`TEXT_MESSAGE_APP` — same port broadcasts use, only the `To` field
+differs; the firmware has no separate DM port). The TUI surfaces them
+as virtual `@callsign` tabs in the channel strip:
+
+- `/msg <peer> <text>` — sends a DM, opens (or focuses) the peer's
+  tab, switches focus so the next line types into the same thread.
+- `/query <peer>` — opens / focuses a tab without sending. irssi
+  convention.
+- `/close` (alias `/unquery`) — drops the active DM tab and lands on
+  the prior channel.
+- Inbound messages addressed to `MyNodeNum` auto-open a thread for
+  the sender and bump its unread count.
+- `Ctrl+N` / `Ctrl+P` cycles the combined channel+DM strip in order;
+  channel index 1..N stays addressable via `Alt+digit`.
+
+State lives on the model (`dmThreads []dmThread`, `currentDMNum
+uint32`) — session-scoped, but the set re-derives from persisted
+`m.Messages` at startup via `hydrateDMThreadsFromHistory`, so threads
+survive restarts as long as the messages do. Outbound DMs flow
+through `Driver.RecordOutbound` with `ToNum` set; inbound DMs land
+via the same `Driver.ApplyText` the broadcast path uses (the
+`ToNum=MyNodeNum` check happens TUI-side, since the daemon's
+canonical state doesn't care which UI surfaces a row).
+
+The messages pane filters to the active thread when `currentDMNum !=
+0`. `m.selectedMsg` stays in absolute `m.Messages` coordinates;
+`visibleMessageIndices()` translates between absolute and visible-
+relative for the renderer's selection-highlight check and j/k
+navigation.
+
 ## Key Technical Details
 
 - Bubble Tea alt-screen mode — no raw-term cursor wrangling

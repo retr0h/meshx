@@ -204,18 +204,15 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Blur()
 		m.flash = ""
 		return m, nil
-	case "alt+1":
-		m.switchChannelByIndex(0)
-		return m, nil
-	case "alt+2":
-		m.switchChannelByIndex(1)
-		return m, nil
-	case "alt+3":
-		m.switchChannelByIndex(2)
-		return m, nil
-	case "alt+4":
-		m.switchChannelByIndex(3)
-		return m, nil
+	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5",
+		"alt+6", "alt+7", "alt+8", "alt+9":
+		// Slot key maps 1-based into the combined channel+DM strip;
+		// slots beyond len(Channels) address DM threads in order.
+		// Out-of-range slots fall through so the textinput consumes
+		// the digit normally.
+		if n := int(key[len(key)-1] - '0'); m.switchToSlot(n) {
+			return m, nil
+		}
 	case "ctrl+n":
 		m.cycleChannel(+1)
 		m.tab = nil
@@ -500,23 +497,17 @@ func (m model) updateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.closeOverlayToInput()
-	// Channel hop is a global action — bind Alt+digit in nav mode
+	// Channel/DM hop is a global action — bind Alt+digit in nav mode
 	// too so the keys don't silently no-op when the user is reading
 	// /help or has an overlay open. Reuses the same closeOverlayToInput
 	// path /channels selection takes so the post-switch state matches
-	// (input bar focused, cursor blinking).
-	case "alt+1":
-		m.switchChannelByIndex(0)
-		return m, m.closeOverlayToInput()
-	case "alt+2":
-		m.switchChannelByIndex(1)
-		return m, m.closeOverlayToInput()
-	case "alt+3":
-		m.switchChannelByIndex(2)
-		return m, m.closeOverlayToInput()
-	case "alt+4":
-		m.switchChannelByIndex(3)
-		return m, m.closeOverlayToInput()
+	// (input bar focused, cursor blinking). Slot resolution mirrors
+	// the input-mode handler — channels first, DMs after.
+	case "alt+1", "alt+2", "alt+3", "alt+4", "alt+5",
+		"alt+6", "alt+7", "alt+8", "alt+9":
+		if n := int(key[len(key)-1] - '0'); m.switchToSlot(n) {
+			return m, m.closeOverlayToInput()
+		}
 	case "ctrl+n":
 		m.cycleChannel(+1)
 		return m, m.closeOverlayToInput()
@@ -833,23 +824,43 @@ func (m *model) switchChannelByIndex(i int) {
 	m.CurrentChannel = m.Channels[i].Name
 	m.Channels[i].Unread = 0
 	m.selectedCh = i
+	// Returning to a real channel exits whatever DM tab we were on —
+	// /1, /channel, the channels overlay all flow through here.
+	m.currentDMNum = 0
+	m.snapSelectionToTail()
 	m.flash = fmt.Sprintf("switched to %s", m.Channels[i].Name)
 }
 
-// cycleChannel moves to the previous (-1) or next (+1) channel.
+// cycleChannel moves to the previous (-1) or next (+1) tab. Tabs are
+// the channel list followed by the DM-thread list, so Ctrl+N/Ctrl+P
+// walks #default → #other → @KE7VWH → @AD0WG → #default in order.
+// When no DM threads are open it degrades to plain channel cycling.
 func (m *model) cycleChannel(dir int) {
-	if len(m.Channels) == 0 {
+	totalSlots := len(m.Channels) + len(m.dmThreads)
+	if totalSlots == 0 {
 		return
 	}
 	cur := 0
-	for i, c := range m.Channels {
-		if c.Name == m.CurrentChannel {
-			cur = i
-			break
+	if m.currentDMNum != 0 {
+		if i := m.dmIndexOfNum(m.currentDMNum); i >= 0 {
+			cur = len(m.Channels) + i
+		}
+	} else {
+		for i, c := range m.Channels {
+			if c.Name == m.CurrentChannel {
+				cur = i
+				break
+			}
 		}
 	}
-	next := (cur + dir + len(m.Channels)) % len(m.Channels)
-	m.switchChannelByIndex(next)
+	next := (cur + dir + totalSlots) % totalSlots
+	if next < len(m.Channels) {
+		m.switchChannelByIndex(next)
+		return
+	}
+	t := m.dmThreads[next-len(m.Channels)]
+	m.switchToDMThread(t.NodeNum)
+	m.flash = "switched to @" + t.Callsign
 }
 
 // actOnSelectedNode resolves the selection to the CURRENT sorted view
@@ -881,6 +892,29 @@ func (m *model) moveSelection(delta int) {
 	case paneChannels:
 		m.selectedCh = clamp(m.selectedCh+delta, 0, len(m.Channels)-1)
 	case paneMessages:
+		if m.currentDMNum != 0 {
+			// On a DM tab, walk only the absolute indices of messages
+			// in the active thread. Without this j/k advances through
+			// non-visible broadcast rows and the cursor "disappears."
+			idx := m.visibleMessageIndices()
+			if len(idx) == 0 {
+				return
+			}
+			cur := -1
+			for j, abs := range idx {
+				if abs == m.selectedMsg {
+					cur = j
+					break
+				}
+			}
+			if cur < 0 {
+				m.selectedMsg = idx[len(idx)-1]
+				return
+			}
+			next := clamp(cur+delta, 0, len(idx)-1)
+			m.selectedMsg = idx[next]
+			return
+		}
 		if m.nodeFilter != "" {
 			m.selectedMsg = m.nextFilteredMsgIndex(delta)
 			return

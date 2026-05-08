@@ -176,6 +176,35 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 		m.selectedMsg = res.Index
 	}
 
+	// Inbound DM addressed to us — auto-open a thread for the sender
+	// so the user gets a visible @callsign tab without typing /query.
+	// Skipped == true means we're upgrading an already-recorded row
+	// (radio replay after reconnect), so the thread is already open
+	// from the original arrival.
+	isToMe := ev.ToNum != 0 && ev.ToNum != broadcastNodeNum &&
+		m.MyNodeNum != 0 && ev.ToNum == m.MyNodeNum
+	if !res.Skipped && !res.FromMine && isToMe && ev.Body.FromNum != 0 {
+		idx := m.openDMThread(ev.Body.FromNum)
+		if idx >= 0 && m.currentDMNum != ev.Body.FromNum {
+			m.dmThreads[idx].Unread++
+		}
+	}
+
+	// Channel-unread fix-up for DM-tab mode. Driver.ApplyText
+	// suppresses the channel-unread bump when the inbound's channel
+	// matches State.CurrentChannel — assuming "user is looking at it,
+	// no need to flag." When the user is on a DM tab, that
+	// assumption is wrong: the channel pane is hidden, and they
+	// can't see the new broadcast at all. Bump the unread ourselves
+	// so the channel tab gets its yellow `(N)` badge while the user
+	// reads DMs.
+	isBroadcast := !isToMe
+	if !res.Skipped && !res.FromMine && m.currentDMNum != 0 && isBroadcast &&
+		ev.Channel >= 0 && ev.Channel < len(m.Channels) &&
+		m.Channels[ev.Channel].Name == m.CurrentChannel {
+		m.Channels[ev.Channel].Unread++
+	}
+
 	if !res.FromMine && !m.DingMuted {
 		return ringTerminalBellCmd()
 	}

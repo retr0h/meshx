@@ -37,14 +37,18 @@ type Command interface {
 	isCommand()
 }
 
-// SendText broadcasts a chat message on the given channel. ReplyID
-// non-zero threads the message to a parent packet (used by /reply,
-// /73, etc.). Send returns a freshly generated packetID the consumer
-// can stash on the local messageItem for ack correlation.
+// SendText sends a chat message. ToNum=0 is the broadcast default
+// (MeshPacket.to=0xFFFFFFFF, the firmware-canonical "everyone on
+// this channel"); a non-zero ToNum addresses a specific peer for a
+// direct message. ReplyID non-zero threads the message to a parent
+// packet (used by /reply, /73, etc.). Send returns a freshly
+// generated packetID the consumer can stash on the local
+// messageItem for ack correlation.
 type SendText struct {
 	Channel int
 	Text    string
 	ReplyID uint32
+	ToNum   uint32
 }
 
 func (SendText) isCommand() {}

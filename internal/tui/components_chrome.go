@@ -194,13 +194,19 @@ func (topDivider) Render(box Box) string {
 }
 
 // channelTabCell renders one channel tab in the bottom chanRow:
-// active tabs are bracketed in pink; inactive in dim lavender. An
-// unread > 0 emits a yellow `(N)` badge (orange `(N!)` for private
-// channels — encrypted DMs and secret rooms get a louder cue).
-func channelTabCell(name string, idx int, active, private bool, unread int) string {
+// active tabs are bracketed in pink; inactive channels in dim
+// lavender; inactive DM tabs in cyan so the @peer threads visually
+// pop against the channel strip. An unread > 0 emits a yellow `(N)`
+// badge (orange `(N!)` for private channels and DMs — both warrant a
+// louder cue than a routine broadcast catch-up).
+func channelTabCell(name string, idx int, active, private, isDM bool, unread int) string {
 	activeTab := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
 	activeBracket := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
-	other := lipgloss.NewStyle().Foreground(lipgloss.Color(mhLavender))
+	otherColor := mhLavender
+	if isDM {
+		otherColor = mhCyan
+	}
+	other := lipgloss.NewStyle().Foreground(lipgloss.Color(otherColor))
 	otherIdx := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	unreadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
 	alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
@@ -322,6 +328,10 @@ func (c channelTabsRow) Render(box Box) string {
 
 	// Left side: channel tabs (one per known channel; pre-sync
 	// placeholder when the radio's ChannelInfo packet hasn't landed).
+	// "Active" is a channel tab only when no DM is focused — once
+	// the user switches to a DM thread none of the channel tabs
+	// carry the active marker (hot pink).
+	onChannel := m.currentDMNum == 0
 	var tabs []string
 	for i, ch := range m.Channels {
 		// applyChannel keeps DISABLED slots in the slice so /channel
@@ -331,11 +341,23 @@ func (c channelTabsRow) Render(box Box) string {
 			continue
 		}
 		tabs = append(tabs, channelTabCell(
-			ch.Name, i, ch.Name == m.CurrentChannel, ch.Private, ch.Unread,
+			ch.Name, i, onChannel && ch.Name == m.CurrentChannel, ch.Private, false, ch.Unread,
 		))
 	}
 	if len(tabs) == 0 {
-		tabs = append(tabs, channelTabCell("#default", 0, true, false, 0))
+		tabs = append(tabs, channelTabCell("#default", 0, onChannel, false, false, 0))
+	}
+	// DM tabs render after channels with "@callsign" labels and a
+	// continued slot index. private=true keeps the unread badge alert-
+	// styled (orange "(N!)") and isDM=true tints the inactive tab name
+	// cyan so the @peer threads visually pop against the lavender
+	// channel strip.
+	dmStart := len(m.Channels)
+	for i, t := range m.dmThreads {
+		active := !onChannel && t.NodeNum == m.currentDMNum
+		tabs = append(tabs, channelTabCell(
+			"@"+t.Callsign, dmStart+i, active, true, true, t.Unread,
+		))
 	}
 	tabsStr := strings.Join(tabs, " ")
 
@@ -436,7 +458,13 @@ func (i inputBar) Render(box Box) string {
 	// off-by-one cursor: when the value is non-empty it returns
 	// Width+1 visible cells (cursor block emitted AFTER the typed
 	// text, not over it).
-	prefix := inputPromptCell(m.CurrentChannel)
+	label := m.CurrentChannel
+	if m.currentDMNum != 0 {
+		if i := m.dmIndexOfNum(m.currentDMNum); i >= 0 {
+			label = "@" + m.dmThreads[i].Callsign
+		}
+	}
+	prefix := inputPromptCell(label)
 	const leading = " "
 	const cursorPad = 1
 	tiW := box.Width - cells(leading) - cells(prefix) - cursorPad

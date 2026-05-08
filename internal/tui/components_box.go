@@ -44,6 +44,8 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/rivo/uniseg"
+
+	"github.com/retr0h/meshx/internal/tui/emoji"
 )
 
 // Box is the cell budget a Component is allowed to fill.
@@ -140,21 +142,28 @@ func renderAndCheck(c Component, box Box) string {
 // the right ║ pane border lands in the same column on every row.
 //
 // We start from ansi.StringWidth (handles ANSI CSI escapes + grapheme
-// clusters) and apply ONE correction: any grapheme cluster containing
-// VS16 (U+FE0F) or COMBINING ENCLOSING KEYCAP (U+20E3) — the keycap
-// emoji "1️⃣ 7️⃣ ⚠️" — is promoted to 2 cells. iTerm2 / Ghostty /
-// Terminal.app render those clusters as a wide boxed-digit glyph
-// (Unicode TR51 emoji-presentation rules), but every Go width library
-// in the dependency tree (ansi.StringWidth, uniseg, runewidth) reports
-// them as 1 cell. Without this correction a message body of "7️⃣"
-// gets padded with one extra space, the row is 1 visual cell wider
-// than declared, and the right ║ frame walks out of column.
+// clusters) and apply one correction: any grapheme cluster that
+// Unicode's Emoji_Presentation property says is wide-2 by default
+// (with or without a VS16 selector) is promoted to ≥ 2 cells when
+// ansi.StringWidth undercounts it.
+//
+// Why the correction exists: every Go width library in the dep tree
+// (ansi.StringWidth, uniseg, runewidth) decides cell width from East
+// Asian Width — wrong for emoji whose EAW is 'Neutral' but whose
+// TR51 Emoji_Presentation says wide-2. The bare hand emoji 🖐
+// (U+1F590) is the canonical example: EAW=N → 1 cell by every
+// library, but iTerm / Ghostty / Terminal.app all render it as 2
+// cells. Without this correction the row is 1 cell wider than
+// declared and the right ║ frame walks right.
+//
+// The Emoji_Presentation table comes from Unicode emoji-data.txt;
+// regenerate via `go generate ./internal/tui/...` after a Unicode
+// release. See internal/tui/cmd/genemoji.
 func ansiCells(s string) int {
 	if s == "" {
 		return 0
 	}
-	if !strings.ContainsRune(s, '️') &&
-		!strings.ContainsRune(s, '⃣') {
+	if !needsClusterPass(s) {
 		return ansi.StringWidth(s)
 	}
 	g := uniseg.NewGraphemes(ansi.Strip(s))
@@ -162,13 +171,43 @@ func ansiCells(s string) int {
 	for g.Next() {
 		cluster := g.Str()
 		w := ansi.StringWidth(cluster)
-		if (strings.ContainsRune(cluster, '️') ||
-			strings.ContainsRune(cluster, '⃣')) && w < 2 {
+		if w < 2 && clusterIsWideEmoji(cluster) {
 			w = 2
 		}
 		n += w
 	}
 	return n
+}
+
+// needsClusterPass is the cheap pre-check: ansiCells only walks the
+// grapheme iterator when the string contains a rune that might
+// trigger the wide-emoji promotion path. Plain ASCII / CJK strings
+// short-circuit to ansi.StringWidth.
+func needsClusterPass(s string) bool {
+	if strings.ContainsRune(s, '️') || strings.ContainsRune(s, '⃣') {
+		return true
+	}
+	for _, r := range s {
+		if emoji.IsEmojiPresentation(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// clusterIsWideEmoji reports whether a grapheme cluster should render
+// as ≥ 2 cells under TR51 emoji-presentation rules even though the
+// stock width libraries say 1. Two triggers: a VS16 / keycap mark in
+// the cluster, or a leading rune in the Emoji_Presentation set.
+func clusterIsWideEmoji(cluster string) bool {
+	if strings.ContainsRune(cluster, '️') ||
+		strings.ContainsRune(cluster, '⃣') {
+		return true
+	}
+	for _, r := range cluster {
+		return emoji.IsEmojiPresentation(r)
+	}
+	return false
 }
 
 // padCells right-pads s to exactly w cells using ansi.StringWidth as

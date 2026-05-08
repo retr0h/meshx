@@ -50,7 +50,7 @@ import (
 func (p *Pump) Send(cmd model.Command) (uint32, bool) {
 	switch c := cmd.(type) {
 	case model.SendText:
-		envelope, pid := buildText(c.Text, uint32(c.Channel), c.ReplyID)
+		envelope, pid := buildText(c.Text, uint32(c.Channel), c.ReplyID, c.ToNum)
 		return pid, p.enqueue(envelope)
 
 	case model.SendPing:
@@ -144,20 +144,27 @@ func randPacketID() uint32 {
 }
 
 // buildText builds the ToRadio envelope for a plain text chat
-// message on a named channel index. Broadcast (to = 0xFFFFFFFF) on
-// PortNum TEXT_MESSAGE_APP — the canonical Meshtastic chat path.
-// When replyID != 0 the packet threads to the referenced parent so
-// /reply / /73 etc. link to the originating message.
+// packet. toNum=0 routes broadcast (MeshPacket.to=0xFFFFFFFF, the
+// firmware-canonical "everyone on this channel"); a non-zero toNum
+// addresses a specific peer for a direct message — same packet,
+// same TEXT_MESSAGE_APP port, only the To field changes (Meshtastic
+// has no separate DM port). When replyID != 0 the packet threads
+// to the referenced parent so /reply / /73 etc. link to the
+// originating message.
 //
 // Returns both the envelope and the generated MeshPacket.id so the
 // caller can stash it on the local messageItem.packetID for ack
 // correlation when the ROUTING_APP receipt lands.
-func buildText(text string, channel, replyID uint32) (*pb.ToRadio, uint32) {
+func buildText(text string, channel, replyID, toNum uint32) (*pb.ToRadio, uint32) {
+	to := uint32(0xFFFFFFFF)
+	if toNum != 0 {
+		to = toNum
+	}
 	pid := randPacketID()
 	return &pb.ToRadio{
 		PayloadVariant: &pb.ToRadio_Packet{Packet: &pb.MeshPacket{
 			Id:      pid,
-			To:      0xFFFFFFFF,
+			To:      to,
 			Channel: channel,
 			WantAck: true,
 			PayloadVariant: &pb.MeshPacket_Decoded{Decoded: &pb.Data{

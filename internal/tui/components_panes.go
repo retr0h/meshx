@@ -804,10 +804,30 @@ func messagesPaneRender(m model, width, height int) string {
 		// will show a moment later.
 		chanName = "#default"
 	}
+	// DM tab focused — header reads "@callsign · DM" and the message
+	// view filters to that thread.
+	if m.currentDMNum != 0 {
+		if i := m.dmIndexOfNum(m.currentDMNum); i >= 0 {
+			chanName = "@" + m.dmThreads[i].Callsign + " · DM"
+		}
+	}
 	header := paneHeaderCell(chanName, m.focused == paneMessages)
+	// Project the message slice down to either the full log or just
+	// the active DM thread. The filtered slice is the source of truth
+	// for tail/start math AND the render loop, so a sparsely-spread
+	// thread doesn't get its tail-start clipped by the bulk of
+	// broadcast traffic surrounding it. visibleAbs holds the absolute
+	// m.Messages index for each visible row so the selection
+	// highlight check (below) compares against m.selectedMsg in the
+	// same coordinate system the input handler maintains it in.
+	absIdx := m.visibleMessageIndices()
+	visible := make([]messageItem, len(absIdx))
+	for i, j := range absIdx {
+		visible[i] = m.Messages[j]
+	}
 	hint := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
-		Render(fmt.Sprintf("  (%d msgs)", len(m.Messages)))
+		Render(fmt.Sprintf("  (%d msgs)", len(visible)))
 
 	// Total content budget inside the bordered pane: height − 2
 	// (border) − 2 (Padding(1,1)). The pane fills exactly that many
@@ -835,9 +855,22 @@ func messagesPaneRender(m model, width, height int) string {
 	// Ctrl+F / Ctrl+U, drop the viewport back so the selected row
 	// stays visible — otherwise nav feels broken because moving
 	// selectedMsg doesn't seem to move anything on screen.
-	naturalStart := tailStartList(m.Messages, rowsFree)
+	naturalStart := tailStartList(visible, rowsFree)
 	startIdx := naturalStart
-	scrollback := m.selectedMsg < naturalStart
+	// Translate the absolute m.selectedMsg into a visible-row index
+	// so the scrollback math compares apples to apples — without
+	// this, a DM tab with 5 messages but selectedMsg=200 (an
+	// absolute index pointing at a broadcast row outside the
+	// filter) would falsely declare scrollback and pin the viewport
+	// at the top of an empty pane.
+	selVis := -1
+	for j, abs := range absIdx {
+		if abs == m.selectedMsg {
+			selVis = j
+			break
+		}
+	}
+	scrollback := selVis >= 0 && selVis < naturalStart
 	if scrollback {
 		// Pin the cursor at the TOP of the viewport during scrollback
 		// so each `k` scrolls the message list up by exactly one row.
@@ -845,7 +878,7 @@ func messagesPaneRender(m model, width, height int) string {
 		// the first scroll-back press and freezes after; pin-at-top
 		// gives 1-for-1 keystroke-to-row movement that irssi/mutt/vim
 		// users expect.
-		startIdx = m.selectedMsg
+		startIdx = selVis
 		if startIdx < 0 {
 			startIdx = 0
 		}
@@ -856,8 +889,8 @@ func messagesPaneRender(m model, width, height int) string {
 	selected := m.focused == paneMessages && m.mode == modeNav
 	var lastGroup uint64
 	var groupBg string
-	for i := startIdx; i < len(m.Messages); i++ {
-		msg := m.Messages[i]
+	for i := startIdx; i < len(visible); i++ {
+		msg := visible[i]
 		// /ignore filter — drop chat rows from peers the user has
 		// silenced. System rows (status=="system") and our own
 		// messages always render so the user can see what they
@@ -913,9 +946,12 @@ func messagesPaneRender(m model, width, height int) string {
 
 		// Highlight the whole group when any row in it is selected —
 		// j/k lands the cursor on the header row, but visually the
-		// entire block shows as the current selection.
-		isSelected := i == m.selectedMsg && selected
-		if !isSelected && msg.Group != 0 && selected {
+		// entire block shows as the current selection. Selection is
+		// kept in m.Messages (absolute) coordinates; absIdx[i] maps
+		// the visible-row to its absolute index for comparison.
+		isSelected := absIdx[i] == m.selectedMsg && selected
+		if !isSelected && msg.Group != 0 && selected &&
+			m.selectedMsg >= 0 && m.selectedMsg < len(m.Messages) {
 			if sel := m.Messages[m.selectedMsg]; sel.Group == msg.Group {
 				isSelected = true
 			}
@@ -929,8 +965,8 @@ func messagesPaneRender(m model, width, height int) string {
 		pinFirst := false
 		pinLast := false
 		if msg.Pinned {
-			pinFirst = msg.Group == 0 || i == 0 || m.Messages[i-1].Group != msg.Group
-			pinLast = msg.Group == 0 || i+1 >= len(m.Messages) || m.Messages[i+1].Group != msg.Group
+			pinFirst = msg.Group == 0 || i == 0 || visible[i-1].Group != msg.Group
+			pinLast = msg.Group == 0 || i+1 >= len(visible) || visible[i+1].Group != msg.Group
 		}
 		// messageRow.Render owns the dispatch (notice/system →
 		// noticeRowRender, regular chat → chatRowRender) AND forces

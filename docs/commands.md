@@ -57,14 +57,20 @@ the universal quit.
 | `Tab`       | complete `/command`, `#channel`, or nick (cycles)       |
 | `Shift+Tab` | cycle completion backwards                              |
 
-## Channel switching
+## Tab switching (channels + DMs)
 
-| Key                                   | Action                                         |
-| ------------------------------------- | ---------------------------------------------- |
-| `Alt+1` / `Alt+2` / `Alt+3` / `Alt+4` | jump to channel by index                       |
-| `Ctrl+N` / `Ctrl+P`                   | cycle to next / prev channel                   |
-| `/join <channel>`                     | switch to named channel                        |
-| `/channels`                           | open channels overlay (j/k walks, Enter opens) |
+The tab strip at the bottom is `[1:#default]  2:#other  9: @peer (1!)` —
+channels first by slot, DM threads after. Tab numbers continue across both
+kinds, so `Alt+9` addresses whatever's in slot 9 regardless of type.
+
+| Key                 | Action                                                       |
+| ------------------- | ------------------------------------------------------------ |
+| `Alt+1` … `Alt+9`   | jump to slot N (channels first, DM threads after)            |
+| `Ctrl+N` / `Ctrl+P` | cycle to next / prev tab — walks channels + DMs as one strip |
+| `/join <channel>`   | switch to named channel                                      |
+| `/channels`         | open channels overlay (j/k walks, Enter opens)               |
+| `/query <peer>`     | open or focus a DM tab for `<peer>`                          |
+| `/close`            | close the active DM tab and return to the prior channel      |
 
 ## Window nav (between log and input)
 
@@ -168,14 +174,21 @@ renders when both ends are in the loaded scrollback.
 Target-taking commands default to the highlighted sender when called from nav
 mode with no argument.
 
-| Command                | Meaning                                       |
-| ---------------------- | --------------------------------------------- |
-| `/msg <call> <text>`   | direct message to node                        |
-| `/reply [call] [text]` | reply; uses highlighted sender when omitted   |
-| `/r`                   | alias for `/reply`                            |
-| `/ping <call>`         | RTT + signal check                            |
-| `/tr <call>`           | traceroute (aliases: `/traceroute`, `/trace`) |
-| `/whois <call>`        | node metadata (alias: `/w`)                   |
+| Command                | Meaning                                                                   |
+| ---------------------- | ------------------------------------------------------------------------- |
+| `/msg <call> <text>`   | send a direct message; opens (or focuses) a `@call` DM tab                |
+| `/query <call>`        | open (or focus) a DM tab for `<call>` without sending — irssi-style       |
+| `/close`               | close the active DM tab and return to the prior channel (also `/unquery`) |
+| `/reply [call] [text]` | reply; uses highlighted sender when omitted                               |
+| `/r`                   | alias for `/reply`                                                        |
+| `/ping <call>`         | RTT + signal check                                                        |
+| `/tr <call>`           | traceroute (aliases: `/traceroute`, `/trace`)                             |
+| `/whois <call>`        | node metadata (alias: `/w`)                                               |
+
+DM threads are virtual `@callsign` tabs in the bottom tab strip, addressable by
+`Ctrl+N` / `Ctrl+P` (cycles channels + DMs in one strip). Inbound messages
+addressed to your node auto-open a thread for the sender. Tabs persist across
+restarts via SQLite history hydration.
 
 ## Overlay and util /commands
 

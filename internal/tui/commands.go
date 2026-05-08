@@ -63,14 +63,57 @@ func (m *model) sendPlainMessage(text string) {
 	m.sendPlainReply(text, 0)
 }
 
+// sendDM sends a directed-message TEXT_MESSAGE_APP to a specific
+// peer with an optional Data.reply_id for threading. On the wire
+// it's the same packet as sendPlainReply — the only difference is
+// MeshPacket.to is the peer's node num instead of 0xFFFFFFFF. The
+// local row is recorded with ToNum set so the renderer + tab-strip
+// can distinguish DMs from broadcasts.
+//
+// targetNum=0 is a programming error (caller didn't resolve the
+// peer); guard with a flash rather than letting it broadcast.
+func (m *model) sendDM(targetNum uint32, targetCall, text string, replyToID uint32) {
+	if targetNum == 0 {
+		m.flash = "/msg: unknown peer"
+		return
+	}
+	channel := int(m.currentChannelIndex())
+	pid, _ := m.driver.Send(mdl.SendText{
+		Channel: channel,
+		Text:    text,
+		ReplyID: replyToID,
+		ToNum:   targetNum,
+	})
+	res := m.driver.RecordOutbound(driver.RecordOutboundOptions{
+		Channel:  channel,
+		Text:     text,
+		ReplyID:  replyToID,
+		PacketID: pid,
+		ToNum:    targetNum,
+	})
+	if res.Index >= 0 {
+		m.selectedMsg = res.Index
+	}
+	m.flash = fmt.Sprintf("DM sent to %s", targetCall)
+}
+
 // sendPlainReply is sendPlainMessage with an optional Data.reply_id
-// for threading. Used by /reply, /msg, /me — anything that's
-// semantically "regular chat with a directed flavor," NOT a /bang
-// command. Routes through the same TEXT_MESSAGE_APP path sendBang
-// uses; the only difference is msg.Bang stays empty so the chat row
-// renders with the magenta `›` "mine" marker instead of the yellow
-// `*` bang flag.
+// for threading. Used by /reply, /me — anything that's semantically
+// "regular chat with a directed flavor," NOT a /bang command. Routes
+// through the same TEXT_MESSAGE_APP path sendBang uses; the only
+// difference is msg.Bang stays empty so the chat row renders with
+// the magenta `›` "mine" marker instead of the yellow `*` bang flag.
+//
+// On a DM tab this becomes a unicast to the active peer — keeps the
+// `r` reply key + /reply command honest about where the message is
+// going (without this DM-tab `r reply` would broadcast back to the
+// channel with the peer's name prefixed).
 func (m *model) sendPlainReply(text string, replyToID uint32) {
+	if m.currentDMNum != 0 {
+		call := dmCallsignFor(m, m.currentDMNum)
+		m.sendDM(m.currentDMNum, call, text, replyToID)
+		return
+	}
 	channel := int(m.currentChannelIndex())
 	pid, _ := m.driver.Send(mdl.SendText{
 		Channel: channel,
@@ -1387,29 +1430,79 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.sendPlainReply(body, parent)
 		m.flash = fmt.Sprintf("reply sent to %s", target)
 	case "msg":
-		// /msg <call> <text> — directed message. Meshtastic has no
-		// formal DM on the public channel (this still broadcasts),
-		// so convention is to prefix the body with the target's name
-		// so humans see the addressing. Unlike /reply there's no
-		// parent to thread against, so replyID is zero.
+		// /msg <peer> <text> — real direct message. On the wire it's
+		// a TEXT_MESSAGE_APP unicast (MeshPacket.to=peer.NodeNum
+		// instead of 0xFFFFFFFF), the same path the official
+		// Meshtastic clients use for "Direct Messages." Meshtastic
+		// has NO separate port for DMs — broadcast vs DM is purely
+		// the To field on the wire. The leading "@" is stripped so
+		// `/msg @SGV_Shredder hi` works the same as
+		// `/msg SGV_Shredder hi` — the @ is tab-strip chrome, not
+		// part of the callsign.
 		sp := strings.IndexByte(rest, ' ')
 		if sp < 0 {
-			m.flash = "usage: /msg <callsign> <text>"
+			m.flash = "usage: /msg <peer> <text>"
 			return nil
 		}
-		target := rest[:sp]
+		target := strings.TrimPrefix(rest[:sp], "@")
 		body := strings.TrimSpace(rest[sp+1:])
 		if body == "" {
-			m.flash = "usage: /msg <callsign> <text>"
+			m.flash = "usage: /msg <peer> <text>"
 			return nil
 		}
-		// Plain chat with the target's nick prefixed in the body —
-		// NOT a /bang command. Renders with the magenta `›` flag so
-		// it reads as regular outbound chat (which it is — Meshtastic
-		// has no actual DM, this is still a channel broadcast with
-		// the addressing convention spelled out in the body).
-		m.sendPlainReply(target+": "+body, 0)
-		m.flash = fmt.Sprintf("DM sent to %s", target)
+		nodeNum := m.nodeNumOf(target)
+		if nodeNum == 0 {
+			m.flash = fmt.Sprintf("/msg: peer %q not found in nodes — try /nodes to list", target)
+			return nil
+		}
+		// Resolve the canonical callsign for the flash — accepts
+		// shortname or hex prefix on input but always echoes the
+		// longname back so the user sees what got sent.
+		call := target
+		if idx, ok := m.NodesByNum[nodeNum]; ok && idx < len(m.Nodes) {
+			call = m.Nodes[idx].Callsign
+		}
+		m.sendDM(nodeNum, call, body, 0)
+		// Switch into the DM thread so subsequent typing routes to
+		// this peer without retyping `/msg <peer>` every line.
+		// Mirrors irssi's `/msg target text` (focus follows query).
+		m.switchToDMThread(nodeNum)
+	case "query":
+		// /query <peer> opens (or focuses) a DM tab for peer without
+		// sending anything yet. Subsequent typing routes through
+		// sendPlainMessage → sendDM. Mirrors irssi's /query. Leading
+		// "@" is stripped so the user can type what they see in the
+		// tab strip ("@SGV_Shredder") verbatim.
+		target := strings.TrimPrefix(rest, "@")
+		if target == "" {
+			m.flash = "usage: /query <peer>"
+			return nil
+		}
+		nodeNum := m.nodeNumOf(target)
+		if nodeNum == 0 {
+			m.flash = fmt.Sprintf("/query: peer %q not found in nodes — try /nodes to list", target)
+			return nil
+		}
+		call := target
+		if idx, ok := m.NodesByNum[nodeNum]; ok && idx < len(m.Nodes) {
+			call = m.Nodes[idx].Callsign
+		}
+		m.switchToDMThread(nodeNum)
+		m.flash = fmt.Sprintf("DM thread @%s", call)
+	case "close", "unquery":
+		// /close (alias /unquery) drops the active DM tab and lands
+		// the user back on whichever channel they were on. No-op on a
+		// channel tab — channels live on the radio, not in the TUI's
+		// tab list. Mirrors irssi's /close + /unquery.
+		if m.currentDMNum == 0 {
+			m.flash = "/close: not on a DM tab"
+			return nil
+		}
+		closed := m.closeCurrentDMThread()
+		m.snapSelectionToTail()
+		if closed != "" {
+			m.flash = fmt.Sprintf("closed @%s — back to %s", closed, m.CurrentChannel)
+		}
 	case "join":
 		if rest == "" {
 			m.flash = "usage: /join <channel>"

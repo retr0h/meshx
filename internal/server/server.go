@@ -78,14 +78,15 @@ type Config struct {
 // to clients. Constructed via New(Config); the http.Server inside is
 // driven by Run.
 type Server struct {
-	radios     *Registry
-	store      Store
-	scanner    BLEScanner
-	pairer     BLEPairer
-	usbScanner USBScanner
-	http       *http.Server
-	api        huma.API
-	logger     *slog.Logger
+	radios      *Registry
+	store       Store
+	scanner     BLEScanner
+	pairer      BLEPairer
+	usbScanner  USBScanner
+	http        *http.Server
+	api         huma.API
+	logger      *slog.Logger
+	idempotency *idempotencyCache
 }
 
 // New wires a Server around the given Config. The Registry is
@@ -114,13 +115,14 @@ func New(cfg Config) *Server {
 	api := humago.New(mux, hc)
 
 	s := &Server{
-		radios:     cfg.Radios,
-		store:      cfg.Store,
-		scanner:    cfg.Scanner,
-		pairer:     cfg.Pairer,
-		usbScanner: cfg.USBScanner,
-		api:        api,
-		logger:     cfg.Logger.With(slog.String("subsystem", "http")),
+		radios:      cfg.Radios,
+		store:       cfg.Store,
+		scanner:     cfg.Scanner,
+		pairer:      cfg.Pairer,
+		usbScanner:  cfg.USBScanner,
+		api:         api,
+		logger:      cfg.Logger.With(slog.String("subsystem", "http")),
+		idempotency: newIdempotencyCache(),
 		http: &http.Server{
 			Handler: mux,
 			// ReadHeaderTimeout protects against slowloris-style attacks;

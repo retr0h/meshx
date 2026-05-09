@@ -744,6 +744,12 @@ type ListMessagesParams struct {
 	Limit *int64 `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// SendMessageParams defines parameters for SendMessage.
+type SendMessageParams struct {
+	// IdempotencyKey opaque request key (typically a UUID) for retry dedupe; identical key on the same radio within 60s returns the original result without re-dispatching to the radio
+	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
+}
+
 // MintChannelJSONRequestBody defines body for MintChannel for application/json ContentType.
 type MintChannelJSONRequestBody = MintChannelRequest
 
@@ -884,9 +890,9 @@ type ClientInterface interface {
 	ListMessages(ctx context.Context, radioId string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// SendMessageWithBody request with any body
-	SendMessageWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	SendMessageWithBody(ctx context.Context, radioId string, params *SendMessageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	SendMessage(ctx context.Context, radioId string, body SendMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	SendMessage(ctx context.Context, radioId string, params *SendMessageParams, body SendMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListNodes request
 	ListNodes(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1097,8 +1103,8 @@ func (c *Client) ListMessages(ctx context.Context, radioId string, params *ListM
 	return c.Client.Do(req)
 }
 
-func (c *Client) SendMessageWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewSendMessageRequestWithBody(c.Server, radioId, contentType, body)
+func (c *Client) SendMessageWithBody(ctx context.Context, radioId string, params *SendMessageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSendMessageRequestWithBody(c.Server, radioId, params, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1109,8 +1115,8 @@ func (c *Client) SendMessageWithBody(ctx context.Context, radioId string, conten
 	return c.Client.Do(req)
 }
 
-func (c *Client) SendMessage(ctx context.Context, radioId string, body SendMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewSendMessageRequest(c.Server, radioId, body)
+func (c *Client) SendMessage(ctx context.Context, radioId string, params *SendMessageParams, body SendMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSendMessageRequest(c.Server, radioId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1742,18 +1748,18 @@ func NewListMessagesRequest(server string, radioId string, params *ListMessagesP
 }
 
 // NewSendMessageRequest calls the generic SendMessage builder with application/json body
-func NewSendMessageRequest(server string, radioId string, body SendMessageJSONRequestBody) (*http.Request, error) {
+func NewSendMessageRequest(server string, radioId string, params *SendMessageParams, body SendMessageJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewSendMessageRequestWithBody(server, radioId, "application/json", bodyReader)
+	return NewSendMessageRequestWithBody(server, radioId, params, "application/json", bodyReader)
 }
 
 // NewSendMessageRequestWithBody generates requests for SendMessage with any type of body
-func NewSendMessageRequestWithBody(server string, radioId string, contentType string, body io.Reader) (*http.Request, error) {
+func NewSendMessageRequestWithBody(server string, radioId string, params *SendMessageParams, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1784,6 +1790,21 @@ func NewSendMessageRequestWithBody(server string, radioId string, contentType st
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		if params.IdempotencyKey != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", *params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Idempotency-Key", headerParam0)
+		}
+
+	}
 
 	return req, nil
 }
@@ -2234,9 +2255,9 @@ type ClientWithResponsesInterface interface {
 	ListMessagesWithResponse(ctx context.Context, radioId string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*ListMessagesResponse, error)
 
 	// SendMessageWithBodyWithResponse request with any body
-	SendMessageWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SendMessageResponse, error)
+	SendMessageWithBodyWithResponse(ctx context.Context, radioId string, params *SendMessageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SendMessageResponse, error)
 
-	SendMessageWithResponse(ctx context.Context, radioId string, body SendMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*SendMessageResponse, error)
+	SendMessageWithResponse(ctx context.Context, radioId string, params *SendMessageParams, body SendMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*SendMessageResponse, error)
 
 	// ListNodesWithResponse request
 	ListNodesWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*ListNodesResponse, error)
@@ -3081,16 +3102,16 @@ func (c *ClientWithResponses) ListMessagesWithResponse(ctx context.Context, radi
 }
 
 // SendMessageWithBodyWithResponse request with arbitrary body returning *SendMessageResponse
-func (c *ClientWithResponses) SendMessageWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SendMessageResponse, error) {
-	rsp, err := c.SendMessageWithBody(ctx, radioId, contentType, body, reqEditors...)
+func (c *ClientWithResponses) SendMessageWithBodyWithResponse(ctx context.Context, radioId string, params *SendMessageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SendMessageResponse, error) {
+	rsp, err := c.SendMessageWithBody(ctx, radioId, params, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
 	return ParseSendMessageResponse(rsp)
 }
 
-func (c *ClientWithResponses) SendMessageWithResponse(ctx context.Context, radioId string, body SendMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*SendMessageResponse, error) {
-	rsp, err := c.SendMessage(ctx, radioId, body, reqEditors...)
+func (c *ClientWithResponses) SendMessageWithResponse(ctx context.Context, radioId string, params *SendMessageParams, body SendMessageJSONRequestBody, reqEditors ...RequestEditorFn) (*SendMessageResponse, error) {
+	rsp, err := c.SendMessage(ctx, radioId, params, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}

@@ -1891,7 +1891,7 @@ paths:
       tags:
         - messages
     post:
-      description: Enqueues an outbound text message on the named channel. Returns the allocated MeshPacket.id; clients correlate this with subsequent ack / fail events from the SSE stream.
+      description: Enqueues an outbound text message on the named channel. Returns the allocated MeshPacket.id; clients correlate this with subsequent ack / fail events from the SSE stream. Pass an `Idempotency-Key` header (typically a UUID) for retry dedupe — identical key on the same radio within 60s returns the original result without dispatching to the radio a second time. Without the header, every request hits the radio (legacy behavior).
       operationId: send-message
       parameters:
         - description: canonical radio identifier — see GET /radios
@@ -1900,6 +1900,12 @@ paths:
           required: true
           schema:
             description: canonical radio identifier — see GET /radios
+            type: string
+        - description: opaque request key (typically a UUID) for retry dedupe; identical key on the same radio within 60s returns the original result without re-dispatching to the radio
+          in: header
+          name: Idempotency-Key
+          schema:
+            description: opaque request key (typically a UUID) for retry dedupe; identical key on the same radio within 60s returns the original result without re-dispatching to the radio
             type: string
       requestBody:
         content:

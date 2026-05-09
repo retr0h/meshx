@@ -149,6 +149,21 @@ type ChannelItem struct {
 	Unread int64 `json:"unread"`
 }
 
+// ChannelShareResult defines model for ChannelShareResult.
+type ChannelShareResult struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Index slot index 0..7
+	Index int64 `json:"index"`
+
+	// Name channel name
+	Name string `json:"name"`
+
+	// ShareUrl meshtastic:// universal link
+	ShareUrl string `json:"share_url"`
+}
+
 // ConfigComplete defines model for ConfigComplete.
 type ConfigComplete = map[string]interface{}
 
@@ -221,6 +236,32 @@ type HealthOutputBody struct {
 
 	// Status always 'ok' when the server is responsive
 	Status string `json:"status"`
+}
+
+// ImportChannelRequest defines model for ImportChannelRequest.
+type ImportChannelRequest struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Url meshtastic:// or https://meshtastic.org/e/ share URL
+	Url string `json:"url"`
+}
+
+// ImportChannelResult defines model for ImportChannelResult.
+type ImportChannelResult struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema   *string            `json:"$schema,omitempty"`
+	Imported *[]ImportedChannel `json:"imported"`
+	Skipped  *[]SkippedChannel  `json:"skipped"`
+}
+
+// ImportedChannel defines model for ImportedChannel.
+type ImportedChannel struct {
+	// Index slot the channel was placed into
+	Index int64 `json:"index"`
+
+	// Name channel name from the URL
+	Name string `json:"name"`
 }
 
 // ListBLEDevicesOutputBody defines model for ListBLEDevicesOutputBody.
@@ -370,6 +411,30 @@ type Metadata struct {
 	FirmwareVersion string `json:"FirmwareVersion"`
 	HasBluetooth    bool   `json:"HasBluetooth"`
 	HasWifi         bool   `json:"HasWifi"`
+}
+
+// MintChannelRequest defines model for MintChannelRequest.
+type MintChannelRequest struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Name channel name (1..11 bytes UTF-8); Meshtastic packs this into the share URL
+	Name string `json:"name"`
+}
+
+// MintChannelResult defines model for MintChannelResult.
+type MintChannelResult struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Index slot the channel was placed into (1..7)
+	Index int64 `json:"index"`
+
+	// Name channel name as dispatched
+	Name string `json:"name"`
+
+	// ShareUrl meshtastic:// universal link carrying this channel's name + PSK + id
+	ShareUrl string `json:"share_url"`
 }
 
 // MyInfo defines model for MyInfo.
@@ -597,6 +662,15 @@ type SessionSnapshot struct {
 	RadioRole      *string  `json:"radio_role,omitempty"`
 }
 
+// SkippedChannel defines model for SkippedChannel.
+type SkippedChannel struct {
+	// Name channel name from the URL
+	Name string `json:"name"`
+
+	// Reason why this slot was skipped
+	Reason string `json:"reason"`
+}
+
 // Text defines model for Text.
 type Text struct {
 	Body    Message `json:"Body"`
@@ -669,6 +743,12 @@ type ListMessagesParams struct {
 	// Limit max rows to return; 0 = no limit
 	Limit *int64 `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// MintChannelJSONRequestBody defines body for MintChannel for application/json ContentType.
+type MintChannelJSONRequestBody = MintChannelRequest
+
+// ImportChannelsJSONRequestBody defines body for ImportChannels for application/json ContentType.
+type ImportChannelsJSONRequestBody = ImportChannelRequest
 
 // UpdateConfigJSONRequestBody defines body for UpdateConfig for application/json ContentType.
 type UpdateConfigJSONRequestBody = UpdateConfigRequest
@@ -776,6 +856,22 @@ type ClientInterface interface {
 	// ListChannels request
 	ListChannels(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// MintChannelWithBody request with any body
+	MintChannelWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	MintChannel(ctx context.Context, radioId string, body MintChannelJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ImportChannelsWithBody request with any body
+	ImportChannelsWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ImportChannels(ctx context.Context, radioId string, body ImportChannelsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteChannel request
+	DeleteChannel(ctx context.Context, radioId string, index int64, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ShareChannel request
+	ShareChannel(ctx context.Context, radioId string, index int64, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// UpdateConfigWithBody request with any body
 	UpdateConfigWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -871,6 +967,78 @@ func (c *Client) GetRadio(ctx context.Context, radioId string, reqEditors ...Req
 
 func (c *Client) ListChannels(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListChannelsRequest(c.Server, radioId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) MintChannelWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMintChannelRequestWithBody(c.Server, radioId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) MintChannel(ctx context.Context, radioId string, body MintChannelJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMintChannelRequest(c.Server, radioId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ImportChannelsWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewImportChannelsRequestWithBody(c.Server, radioId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ImportChannels(ctx context.Context, radioId string, body ImportChannelsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewImportChannelsRequest(c.Server, radioId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteChannel(ctx context.Context, radioId string, index int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteChannelRequest(c.Server, radioId, index)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ShareChannel(ctx context.Context, radioId string, index int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewShareChannelRequest(c.Server, radioId, index)
 	if err != nil {
 		return nil, err
 	}
@@ -1238,6 +1406,182 @@ func NewListChannelsRequest(server string, radioId string) (*http.Request, error
 	}
 
 	operationPath := fmt.Sprintf("/radios/%s/channels", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewMintChannelRequest calls the generic MintChannel builder with application/json body
+func NewMintChannelRequest(server string, radioId string, body MintChannelJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewMintChannelRequestWithBody(server, radioId, "application/json", bodyReader)
+}
+
+// NewMintChannelRequestWithBody generates requests for MintChannel with any type of body
+func NewMintChannelRequestWithBody(server string, radioId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "radio_id", radioId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/%s/channels", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewImportChannelsRequest calls the generic ImportChannels builder with application/json body
+func NewImportChannelsRequest(server string, radioId string, body ImportChannelsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewImportChannelsRequestWithBody(server, radioId, "application/json", bodyReader)
+}
+
+// NewImportChannelsRequestWithBody generates requests for ImportChannels with any type of body
+func NewImportChannelsRequestWithBody(server string, radioId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "radio_id", radioId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/%s/channels/import", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteChannelRequest generates requests for DeleteChannel
+func NewDeleteChannelRequest(server string, radioId string, index int64) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "radio_id", radioId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "index", index, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "integer", Format: "int64"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/%s/channels/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewShareChannelRequest generates requests for ShareChannel
+func NewShareChannelRequest(server string, radioId string, index int64) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "radio_id", radioId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "index", index, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "integer", Format: "int64"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/%s/channels/%s/share", pathParam0, pathParam1)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1862,6 +2206,22 @@ type ClientWithResponsesInterface interface {
 	// ListChannelsWithResponse request
 	ListChannelsWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*ListChannelsResponse, error)
 
+	// MintChannelWithBodyWithResponse request with any body
+	MintChannelWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*MintChannelResponse, error)
+
+	MintChannelWithResponse(ctx context.Context, radioId string, body MintChannelJSONRequestBody, reqEditors ...RequestEditorFn) (*MintChannelResponse, error)
+
+	// ImportChannelsWithBodyWithResponse request with any body
+	ImportChannelsWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ImportChannelsResponse, error)
+
+	ImportChannelsWithResponse(ctx context.Context, radioId string, body ImportChannelsJSONRequestBody, reqEditors ...RequestEditorFn) (*ImportChannelsResponse, error)
+
+	// DeleteChannelWithResponse request
+	DeleteChannelWithResponse(ctx context.Context, radioId string, index int64, reqEditors ...RequestEditorFn) (*DeleteChannelResponse, error)
+
+	// ShareChannelWithResponse request
+	ShareChannelWithResponse(ctx context.Context, radioId string, index int64, reqEditors ...RequestEditorFn) (*ShareChannelResponse, error)
+
 	// UpdateConfigWithBodyWithResponse request with any body
 	UpdateConfigWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateConfigResponse, error)
 
@@ -2037,6 +2397,129 @@ func (r ListChannelsResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ListChannelsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type MintChannelResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON202                       *MintChannelResult
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r MintChannelResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r MintChannelResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r MintChannelResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ImportChannelsResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON202                       *ImportChannelResult
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r ImportChannelsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ImportChannelsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ImportChannelsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DeleteChannelResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteChannelResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteChannelResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DeleteChannelResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ShareChannelResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON200                       *ChannelShareResult
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r ShareChannelResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ShareChannelResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ShareChannelResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -2510,6 +2993,58 @@ func (c *ClientWithResponses) ListChannelsWithResponse(ctx context.Context, radi
 	return ParseListChannelsResponse(rsp)
 }
 
+// MintChannelWithBodyWithResponse request with arbitrary body returning *MintChannelResponse
+func (c *ClientWithResponses) MintChannelWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*MintChannelResponse, error) {
+	rsp, err := c.MintChannelWithBody(ctx, radioId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMintChannelResponse(rsp)
+}
+
+func (c *ClientWithResponses) MintChannelWithResponse(ctx context.Context, radioId string, body MintChannelJSONRequestBody, reqEditors ...RequestEditorFn) (*MintChannelResponse, error) {
+	rsp, err := c.MintChannel(ctx, radioId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMintChannelResponse(rsp)
+}
+
+// ImportChannelsWithBodyWithResponse request with arbitrary body returning *ImportChannelsResponse
+func (c *ClientWithResponses) ImportChannelsWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ImportChannelsResponse, error) {
+	rsp, err := c.ImportChannelsWithBody(ctx, radioId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseImportChannelsResponse(rsp)
+}
+
+func (c *ClientWithResponses) ImportChannelsWithResponse(ctx context.Context, radioId string, body ImportChannelsJSONRequestBody, reqEditors ...RequestEditorFn) (*ImportChannelsResponse, error) {
+	rsp, err := c.ImportChannels(ctx, radioId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseImportChannelsResponse(rsp)
+}
+
+// DeleteChannelWithResponse request returning *DeleteChannelResponse
+func (c *ClientWithResponses) DeleteChannelWithResponse(ctx context.Context, radioId string, index int64, reqEditors ...RequestEditorFn) (*DeleteChannelResponse, error) {
+	rsp, err := c.DeleteChannel(ctx, radioId, index, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteChannelResponse(rsp)
+}
+
+// ShareChannelWithResponse request returning *ShareChannelResponse
+func (c *ClientWithResponses) ShareChannelWithResponse(ctx context.Context, radioId string, index int64, reqEditors ...RequestEditorFn) (*ShareChannelResponse, error) {
+	rsp, err := c.ShareChannel(ctx, radioId, index, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseShareChannelResponse(rsp)
+}
+
 // UpdateConfigWithBodyWithResponse request with arbitrary body returning *UpdateConfigResponse
 func (c *ClientWithResponses) UpdateConfigWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateConfigResponse, error) {
 	rsp, err := c.UpdateConfigWithBody(ctx, radioId, contentType, body, reqEditors...)
@@ -2807,6 +3342,131 @@ func ParseListChannelsResponse(rsp *http.Response) (*ListChannelsResponse, error
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest ListChannelsOutputBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseMintChannelResponse parses an HTTP response from a MintChannelWithResponse call
+func ParseMintChannelResponse(rsp *http.Response) (*MintChannelResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &MintChannelResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest MintChannelResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseImportChannelsResponse parses an HTTP response from a ImportChannelsWithResponse call
+func ParseImportChannelsResponse(rsp *http.Response) (*ImportChannelsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ImportChannelsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ImportChannelResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteChannelResponse parses an HTTP response from a DeleteChannelWithResponse call
+func ParseDeleteChannelResponse(rsp *http.Response) (*DeleteChannelResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteChannelResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseShareChannelResponse parses an HTTP response from a ShareChannelWithResponse call
+func ParseShareChannelResponse(rsp *http.Response) (*ShareChannelResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ShareChannelResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ChannelShareResult
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

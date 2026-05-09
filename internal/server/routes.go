@@ -127,6 +127,45 @@ func (s *Server) registerRoutes() {
 		DefaultStatus: 202,
 	}, s.handleReboot)
 
+	huma.Register(s.api, huma.Operation{
+		OperationID:   "mint-channel",
+		Method:        http.MethodPost,
+		Path:          "/radios/{radio_id}/channels",
+		Summary:       "Mint a new secondary channel with a fresh PSK",
+		Description:   "Generates a 32-byte AES256 PSK and a random Channel.id, dispatches SetChannel into the first free secondary slot (1..7), and returns the meshtastic:// share URL so the caller can hand it off in person (QR rendering is a client concern). Raw PSK bytes never cross the wire — clients receive only the URL. Returns 202 Accepted; the radio's confirmation arrives later as the matching channel event on the SSE stream.",
+		Tags:          []string{"channels"},
+		DefaultStatus: 202,
+	}, s.handleMintChannel)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID:   "import-channels",
+		Method:        http.MethodPost,
+		Path:          "/radios/{radio_id}/channels/import",
+		Summary:       "Import channels from a meshtastic:// share URL",
+		Description:   "Parses a meshtastic:// (or https://meshtastic.org/e/) share URL and dispatches SetChannel for each channel inside that fits a free slot. Multi-channel URLs are handled per-slot — collisions and full-slot-table conditions are recorded in skipped[] rather than failing the whole call. Returns 202 Accepted with imported / skipped lists.",
+		Tags:          []string{"channels"},
+		DefaultStatus: 202,
+	}, s.handleImportChannel)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID:   "delete-channel",
+		Method:        http.MethodDelete,
+		Path:          "/radios/{radio_id}/channels/{index}",
+		Summary:       "Disable a secondary channel slot",
+		Description:   "Dispatches DeleteChannel to free the named slot — radio sets the slot's role to DISABLED and wipes the PSK. Refuses slot 0 (PRIMARY) since the firmware requires one to operate. Returns 202 Accepted; the radio's confirmation arrives later as the matching channel event on the SSE stream.",
+		Tags:          []string{"channels"},
+		DefaultStatus: 202,
+	}, s.handleDeleteChannel)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "share-channel",
+		Method:      http.MethodGet,
+		Path:        "/radios/{radio_id}/channels/{index}/share",
+		Summary:     "Get the meshtastic:// share URL for a channel slot",
+		Description: "Builds a meshtastic:// universal-link share URL for the named channel slot, carrying name + PSK + id. Useful for clients that want to render their own QR for in-person handoff.",
+		Tags:        []string{"channels"},
+	}, s.handleShareChannel)
+
 	sse.Register(s.api, huma.Operation{
 		OperationID: "events-stream",
 		Method:      http.MethodGet,

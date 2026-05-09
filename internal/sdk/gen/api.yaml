@@ -128,6 +128,30 @@ components:
         - role
         - has_psk
       type: object
+    ChannelShareResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ChannelShareResult.json
+          format: uri
+          readOnly: true
+          type: string
+        index:
+          description: slot index 0..7
+          format: int64
+          type: integer
+        name:
+          description: channel name
+          type: string
+        share_url:
+          description: meshtastic:// universal link
+          type: string
+      required:
+        - index
+        - name
+        - share_url
+      type: object
     ConfigComplete:
       additionalProperties: false
       type: object
@@ -261,6 +285,59 @@ components:
           type: string
       required:
         - status
+      type: object
+    ImportChannelRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ImportChannelRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        url:
+          description: meshtastic:// or https://meshtastic.org/e/ share URL
+          minLength: 1
+          type: string
+      required:
+        - url
+      type: object
+    ImportChannelResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/ImportChannelResult.json
+          format: uri
+          readOnly: true
+          type: string
+        imported:
+          items:
+            $ref: "#/components/schemas/ImportedChannel"
+          nullable: true
+          type: array
+        skipped:
+          items:
+            $ref: "#/components/schemas/SkippedChannel"
+          nullable: true
+          type: array
+      required:
+        - imported
+        - skipped
+      type: object
+    ImportedChannel:
+      additionalProperties: false
+      properties:
+        index:
+          description: slot the channel was placed into
+          format: int64
+          type: integer
+        name:
+          description: channel name from the URL
+          type: string
+      required:
+        - index
+        - name
       type: object
     ListBLEDevicesOutputBody:
       additionalProperties: false
@@ -531,6 +608,46 @@ components:
         - DeviceStateVer
         - HasWifi
         - HasBluetooth
+      type: object
+    MintChannelRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/MintChannelRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        name:
+          description: channel name (1..11 bytes UTF-8); Meshtastic packs this into the share URL
+          minLength: 1
+          type: string
+      required:
+        - name
+      type: object
+    MintChannelResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/MintChannelResult.json
+          format: uri
+          readOnly: true
+          type: string
+        index:
+          description: slot the channel was placed into (1..7)
+          format: int64
+          type: integer
+        name:
+          description: channel name as dispatched
+          type: string
+        share_url:
+          description: meshtastic:// universal link carrying this channel's name + PSK + id
+          type: string
+      required:
+        - index
+        - name
+        - share_url
       type: object
     MyInfo:
       additionalProperties: false
@@ -984,6 +1101,19 @@ components:
         - current_channel
         - connect_dest
       type: object
+    SkippedChannel:
+      additionalProperties: false
+      properties:
+        name:
+          description: channel name from the URL
+          type: string
+        reason:
+          description: why this slot was skipped
+          type: string
+      required:
+        - name
+        - reason
+      type: object
     Text:
       additionalProperties: false
       properties:
@@ -1210,6 +1340,145 @@ paths:
                 $ref: "#/components/schemas/ErrorModel"
           description: Error
       summary: List configured channel slots for one radio
+      tags:
+        - channels
+    post:
+      description: Generates a 32-byte AES256 PSK and a random Channel.id, dispatches SetChannel into the first free secondary slot (1..7), and returns the meshtastic:// share URL so the caller can hand it off in person (QR rendering is a client concern). Raw PSK bytes never cross the wire — clients receive only the URL. Returns 202 Accepted; the radio's confirmation arrives later as the matching channel event on the SSE stream.
+      operationId: mint-channel
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MintChannelRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MintChannelResult"
+          description: Accepted
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Mint a new secondary channel with a fresh PSK
+      tags:
+        - channels
+  /radios/{radio_id}/channels/import:
+    post:
+      description: Parses a meshtastic:// (or https://meshtastic.org/e/) share URL and dispatches SetChannel for each channel inside that fits a free slot. Multi-channel URLs are handled per-slot — collisions and full-slot-table conditions are recorded in skipped[] rather than failing the whole call. Returns 202 Accepted with imported / skipped lists.
+      operationId: import-channels
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportChannelRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportChannelResult"
+          description: Accepted
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Import channels from a meshtastic:// share URL
+      tags:
+        - channels
+  /radios/{radio_id}/channels/{index}:
+    delete:
+      description: Dispatches DeleteChannel to free the named slot — radio sets the slot's role to DISABLED and wipes the PSK. Refuses slot 0 (PRIMARY) since the firmware requires one to operate. Returns 202 Accepted; the radio's confirmation arrives later as the matching channel event on the SSE stream.
+      operationId: delete-channel
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+        - description: slot index 1..7 (slot 0 is PRIMARY and cannot be deleted)
+          in: path
+          name: index
+          required: true
+          schema:
+            description: slot index 1..7 (slot 0 is PRIMARY and cannot be deleted)
+            format: int64
+            maximum: 7
+            minimum: 1
+            type: integer
+      responses:
+        "202":
+          description: Accepted
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Disable a secondary channel slot
+      tags:
+        - channels
+  /radios/{radio_id}/channels/{index}/share:
+    get:
+      description: Builds a meshtastic:// universal-link share URL for the named channel slot, carrying name + PSK + id. Useful for clients that want to render their own QR for in-person handoff.
+      operationId: share-channel
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+        - description: slot index 0..7
+          in: path
+          name: index
+          required: true
+          schema:
+            description: slot index 0..7
+            format: int64
+            maximum: 7
+            minimum: 0
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChannelShareResult"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get the meshtastic:// share URL for a channel slot
       tags:
         - channels
   /radios/{radio_id}/config:

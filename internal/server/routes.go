@@ -107,6 +107,26 @@ func (s *Server) registerRoutes() {
 		Tags:        []string{"messages"},
 	}, s.handleSendMessage)
 
+	huma.Register(s.api, huma.Operation{
+		OperationID:   "update-config",
+		Method:        http.MethodPatch,
+		Path:          "/radios/{radio_id}/config",
+		Summary:       "Update radio config (sparse)",
+		Description:   "Partial-update for the radio's User record (longname / shortname / is_licensed) and ExternalNotification buzzer. Body fields are optional; omitted keys are left untouched. Dispatched fire-and-forget — confirmation arrives later as the matching Apply* event on the SSE stream. Returns 202 Accepted; the Applied array names exactly which fields were forwarded to the radio.",
+		Tags:          []string{"config"},
+		DefaultStatus: 202,
+	}, s.handleUpdateConfig)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID:   "reboot-radio",
+		Method:        http.MethodPost,
+		Path:          "/radios/{radio_id}/reboot",
+		Summary:       "Reboot the radio",
+		Description:   "Schedules a firmware reboot N seconds out (default 5 to mirror the TUI's /reboot grace). The radio drops carrier during reboot — clients should expect the SSE stream to disconnect and the daemon to auto-reconnect once the radio comes back. Returns 202 Accepted with the acknowledged delay.",
+		Tags:          []string{"config"},
+		DefaultStatus: 202,
+	}, s.handleReboot)
+
 	sse.Register(s.api, huma.Operation{
 		OperationID: "events-stream",
 		Method:      http.MethodGet,

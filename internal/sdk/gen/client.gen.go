@@ -477,6 +477,24 @@ type RadioSummary struct {
 	RadioId string `json:"radio_id"`
 }
 
+// RebootRequest defines model for RebootRequest.
+type RebootRequest struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Seconds delay before reboot in seconds; 0 = now (default 5 matches the TUI's /reboot grace)
+	Seconds *int32 `json:"seconds,omitempty"`
+}
+
+// RebootResult defines model for RebootResult.
+type RebootResult struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Seconds delay (in seconds) the radio acknowledged
+	Seconds int32 `json:"seconds"`
+}
+
 // Reconnecting defines model for Reconnecting.
 type Reconnecting struct {
 	After   int64       `json:"After"`
@@ -619,14 +637,47 @@ type USBSighting struct {
 	ShortName *string `json:"short_name,omitempty"`
 }
 
+// UpdateConfigRequest defines model for UpdateConfigRequest.
+type UpdateConfigRequest struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Buzzer toggle the radio's external-notification buzzer (true = on, false = off)
+	Buzzer *bool `json:"buzzer,omitempty"`
+
+	// IsLicensed FCC-licensed flag on the User record; preserved when omitted
+	IsLicensed *bool `json:"is_licensed,omitempty"`
+
+	// Longname radio operator longname (1..36 bytes UTF-8)
+	Longname *string `json:"longname,omitempty"`
+
+	// Shortname radio operator shortname (1..4 bytes UTF-8 — emoji counts as its byte length)
+	Shortname *string `json:"shortname,omitempty"`
+}
+
+// UpdateConfigResult defines model for UpdateConfigResult.
+type UpdateConfigResult struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Applied names of config fields dispatched to the radio (subset of the request body)
+	Applied *[]string `json:"applied"`
+}
+
 // ListMessagesParams defines parameters for ListMessages.
 type ListMessagesParams struct {
 	// Limit max rows to return; 0 = no limit
 	Limit *int64 `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// UpdateConfigJSONRequestBody defines body for UpdateConfig for application/json ContentType.
+type UpdateConfigJSONRequestBody = UpdateConfigRequest
+
 // SendMessageJSONRequestBody defines body for SendMessage for application/json ContentType.
 type SendMessageJSONRequestBody = SendMessageRequest
+
+// RebootRadioJSONRequestBody defines body for RebootRadio for application/json ContentType.
+type RebootRadioJSONRequestBody = RebootRequest
 
 // PairBleJSONRequestBody defines body for PairBle for application/json ContentType.
 type PairBleJSONRequestBody = PairBLEInputBody
@@ -725,6 +776,11 @@ type ClientInterface interface {
 	// ListChannels request
 	ListChannels(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// UpdateConfigWithBody request with any body
+	UpdateConfigWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateConfig(ctx context.Context, radioId string, body UpdateConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// EventsStream request
 	EventsStream(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -738,6 +794,11 @@ type ClientInterface interface {
 
 	// ListNodes request
 	ListNodes(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RebootRadioWithBody request with any body
+	RebootRadioWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	RebootRadio(ctx context.Context, radioId string, body RebootRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListBleDevices request
 	ListBleDevices(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -820,6 +881,30 @@ func (c *Client) ListChannels(ctx context.Context, radioId string, reqEditors ..
 	return c.Client.Do(req)
 }
 
+func (c *Client) UpdateConfigWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateConfigRequestWithBody(c.Server, radioId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateConfig(ctx context.Context, radioId string, body UpdateConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateConfigRequest(c.Server, radioId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) EventsStream(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewEventsStreamRequest(c.Server, radioId)
 	if err != nil {
@@ -870,6 +955,30 @@ func (c *Client) SendMessage(ctx context.Context, radioId string, body SendMessa
 
 func (c *Client) ListNodes(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListNodesRequest(c.Server, radioId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RebootRadioWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRebootRadioRequestWithBody(c.Server, radioId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RebootRadio(ctx context.Context, radioId string, body RebootRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRebootRadioRequest(c.Server, radioId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1146,6 +1255,53 @@ func NewListChannelsRequest(server string, radioId string) (*http.Request, error
 	return req, nil
 }
 
+// NewUpdateConfigRequest calls the generic UpdateConfig builder with application/json body
+func NewUpdateConfigRequest(server string, radioId string, body UpdateConfigJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateConfigRequestWithBody(server, radioId, "application/json", bodyReader)
+}
+
+// NewUpdateConfigRequestWithBody generates requests for UpdateConfig with any type of body
+func NewUpdateConfigRequestWithBody(server string, radioId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "radio_id", radioId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/%s/config", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewEventsStreamRequest generates requests for EventsStream
 func NewEventsStreamRequest(server string, radioId string) (*http.Request, error) {
 	var err error
@@ -1318,6 +1474,53 @@ func NewListNodesRequest(server string, radioId string) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewRebootRadioRequest calls the generic RebootRadio builder with application/json body
+func NewRebootRadioRequest(server string, radioId string, body RebootRadioJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewRebootRadioRequestWithBody(server, radioId, "application/json", bodyReader)
+}
+
+// NewRebootRadioRequestWithBody generates requests for RebootRadio with any type of body
+func NewRebootRadioRequestWithBody(server string, radioId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "radio_id", radioId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/%s/reboot", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -1659,6 +1862,11 @@ type ClientWithResponsesInterface interface {
 	// ListChannelsWithResponse request
 	ListChannelsWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*ListChannelsResponse, error)
 
+	// UpdateConfigWithBodyWithResponse request with any body
+	UpdateConfigWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateConfigResponse, error)
+
+	UpdateConfigWithResponse(ctx context.Context, radioId string, body UpdateConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateConfigResponse, error)
+
 	// EventsStreamWithResponse request
 	EventsStreamWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*EventsStreamResponse, error)
 
@@ -1672,6 +1880,11 @@ type ClientWithResponsesInterface interface {
 
 	// ListNodesWithResponse request
 	ListNodesWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*ListNodesResponse, error)
+
+	// RebootRadioWithBodyWithResponse request with any body
+	RebootRadioWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RebootRadioResponse, error)
+
+	RebootRadioWithResponse(ctx context.Context, radioId string, body RebootRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*RebootRadioResponse, error)
 
 	// ListBleDevicesWithResponse request
 	ListBleDevicesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListBleDevicesResponse, error)
@@ -1830,6 +2043,37 @@ func (r ListChannelsResponse) ContentType() string {
 	return ""
 }
 
+type UpdateConfigResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON202                       *UpdateConfigResult
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateConfigResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateConfigResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpdateConfigResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type EventsStreamResponse struct {
 	Body                          []byte
 	HTTPResponse                  *http.Response
@@ -1947,6 +2191,37 @@ func (r ListNodesResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ListNodesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type RebootRadioResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON202                       *RebootResult
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r RebootRadioResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RebootRadioResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r RebootRadioResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -2235,6 +2510,23 @@ func (c *ClientWithResponses) ListChannelsWithResponse(ctx context.Context, radi
 	return ParseListChannelsResponse(rsp)
 }
 
+// UpdateConfigWithBodyWithResponse request with arbitrary body returning *UpdateConfigResponse
+func (c *ClientWithResponses) UpdateConfigWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateConfigResponse, error) {
+	rsp, err := c.UpdateConfigWithBody(ctx, radioId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateConfigResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateConfigWithResponse(ctx context.Context, radioId string, body UpdateConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateConfigResponse, error) {
+	rsp, err := c.UpdateConfig(ctx, radioId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateConfigResponse(rsp)
+}
+
 // EventsStreamWithResponse request returning *EventsStreamResponse
 func (c *ClientWithResponses) EventsStreamWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*EventsStreamResponse, error) {
 	rsp, err := c.EventsStream(ctx, radioId, reqEditors...)
@@ -2277,6 +2569,23 @@ func (c *ClientWithResponses) ListNodesWithResponse(ctx context.Context, radioId
 		return nil, err
 	}
 	return ParseListNodesResponse(rsp)
+}
+
+// RebootRadioWithBodyWithResponse request with arbitrary body returning *RebootRadioResponse
+func (c *ClientWithResponses) RebootRadioWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RebootRadioResponse, error) {
+	rsp, err := c.RebootRadioWithBody(ctx, radioId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRebootRadioResponse(rsp)
+}
+
+func (c *ClientWithResponses) RebootRadioWithResponse(ctx context.Context, radioId string, body RebootRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*RebootRadioResponse, error) {
+	rsp, err := c.RebootRadio(ctx, radioId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRebootRadioResponse(rsp)
 }
 
 // ListBleDevicesWithResponse request returning *ListBleDevicesResponse
@@ -2515,6 +2824,39 @@ func ParseListChannelsResponse(rsp *http.Response) (*ListChannelsResponse, error
 	return response, nil
 }
 
+// ParseUpdateConfigResponse parses an HTTP response from a UpdateConfigWithResponse call
+func ParseUpdateConfigResponse(rsp *http.Response) (*UpdateConfigResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateConfigResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest UpdateConfigResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseEventsStreamResponse parses an HTTP response from a EventsStreamWithResponse call
 func ParseEventsStreamResponse(rsp *http.Response) (*EventsStreamResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -2627,6 +2969,39 @@ func ParseListNodesResponse(rsp *http.Response) (*ListNodesResponse, error) {
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRebootRadioResponse parses an HTTP response from a RebootRadioWithResponse call
+func ParseRebootRadioResponse(rsp *http.Response) (*RebootRadioResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RebootRadioResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest RebootResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
 		var dest ErrorModel

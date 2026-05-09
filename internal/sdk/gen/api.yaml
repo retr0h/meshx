@@ -735,6 +735,38 @@ components:
         - connected
         - connect_dest
       type: object
+    RebootRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/RebootRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        seconds:
+          description: delay before reboot in seconds; 0 = now (default 5 matches the TUI's /reboot grace)
+          format: int32
+          maximum: 3600
+          minimum: 0
+          type: integer
+      type: object
+    RebootResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/RebootResult.json
+          format: uri
+          readOnly: true
+          type: string
+        seconds:
+          description: delay (in seconds) the radio acknowledged
+          format: int32
+          type: integer
+      required:
+        - seconds
+      type: object
     Reconnecting:
       additionalProperties: false
       properties:
@@ -1038,6 +1070,46 @@ components:
         - port
         - is_meshtastic
       type: object
+    UpdateConfigRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/UpdateConfigRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        buzzer:
+          description: toggle the radio's external-notification buzzer (true = on, false = off)
+          type: boolean
+        is_licensed:
+          description: FCC-licensed flag on the User record; preserved when omitted
+          type: boolean
+        longname:
+          description: radio operator longname (1..36 bytes UTF-8)
+          type: string
+        shortname:
+          description: radio operator shortname (1..4 bytes UTF-8 — emoji counts as its byte length)
+          type: string
+      type: object
+    UpdateConfigResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/UpdateConfigResult.json
+          format: uri
+          readOnly: true
+          type: string
+        applied:
+          description: names of config fields dispatched to the radio (subset of the request body)
+          items:
+            type: string
+          nullable: true
+          type: array
+      required:
+        - applied
+      type: object
 info:
   description: meshx mesh-radio HTTP API — channels, nodes, messages, transports, and live events from one or more Meshtastic-compatible LoRa radios. Radio-scoped resources live under /radios/{radio_id}/…; transport-management endpoints under /transports/…
   title: meshx
@@ -1140,6 +1212,40 @@ paths:
       summary: List configured channel slots for one radio
       tags:
         - channels
+  /radios/{radio_id}/config:
+    patch:
+      description: Partial-update for the radio's User record (longname / shortname / is_licensed) and ExternalNotification buzzer. Body fields are optional; omitted keys are left untouched. Dispatched fire-and-forget — confirmation arrives later as the matching Apply* event on the SSE stream. Returns 202 Accepted; the Applied array names exactly which fields were forwarded to the radio.
+      operationId: update-config
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateConfigRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateConfigResult"
+          description: Accepted
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Update radio config (sparse)
+      tags:
+        - config
   /radios/{radio_id}/events:
     get:
       description: Live SSE stream of mesh activity for the named radio — text packets, node-info beacons, channel changes, position fixes, routing acks, traceroute / ping replies. Clients consume this for real-time UI updates.
@@ -1576,6 +1682,40 @@ paths:
       summary: List known mesh peers for one radio
       tags:
         - nodes
+  /radios/{radio_id}/reboot:
+    post:
+      description: Schedules a firmware reboot N seconds out (default 5 to mirror the TUI's /reboot grace). The radio drops carrier during reboot — clients should expect the SSE stream to disconnect and the daemon to auto-reconnect once the radio comes back. Returns 202 Accepted with the acknowledged delay.
+      operationId: reboot-radio
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RebootRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RebootResult"
+          description: Accepted
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Reboot the radio
+      tags:
+        - config
   /transports/ble/devices:
     get:
       description: Returns every BLE device the daemon has saved for auto-connect. Favorite devices are flagged.

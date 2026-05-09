@@ -421,6 +421,8 @@ type Reconnecting struct {
 // Routing defines model for Routing.
 type Routing struct {
 	ErrorName string `json:"ErrorName"`
+	FromNum   int64  `json:"FromNum"`
+	Hops      int64  `json:"Hops"`
 	OK        bool   `json:"OK"`
 	Reason    string `json:"Reason"`
 	RequestID int64  `json:"RequestID"`

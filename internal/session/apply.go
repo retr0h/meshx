@@ -40,6 +40,8 @@ package session
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
@@ -399,9 +401,16 @@ type ApplyRoutingResult struct {
 // stays correct across restarts (without this, expireStalePending
 // would re-mark a delivered row "fail" on next launch).
 //
+// On a successful (OK) reply, also aggregates per-peer acks into
+// MessageItem.Acks — each Routing reply with the same RequestID
+// adds the sending peer to Ackers (deduped by NodeNum, so a peer
+// re-acking via a second path doesn't double-count). The local
+// radio's own ack-of-send (FromNum == MyNodeNum) is excluded; only
+// genuine mesh peer echoes contribute.
+//
 // Foreign Routing replies (request_id matches no row of ours) drop
 // silently. Ping-correlation lives in the TUI's reactRouting; this
-// path only handles the message-status flip.
+// path only handles the message-status flip + ack roll-up.
 func (s *Session) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 	defer s.PublishRouting(msg)
 	if msg.RequestID == 0 {
@@ -411,16 +420,18 @@ func (s *Session) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 		if s.State.Messages[i].PacketID != msg.RequestID || !s.State.Messages[i].Mine {
 			continue
 		}
+		row := &s.State.Messages[i]
 		if msg.OK {
-			s.State.Messages[i].Status = mdl.StatusAck
+			row.Status = mdl.StatusAck
+			s.recordAck(row, msg)
 		} else {
-			s.State.Messages[i].Status = mdl.StatusFail
+			row.Status = mdl.StatusFail
 		}
 		if s.store != nil {
 			s.storeError(s.store.SaveMessage(
 				s.State.RadioID,
 				s.State.CurrentChannel,
-				s.State.Messages[i].Message,
+				row.Message,
 			))
 		}
 		return ApplyRoutingResult{
@@ -431,6 +442,90 @@ func (s *Session) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 		}
 	}
 	return ApplyRoutingResult{}
+}
+
+// recordAck folds a successful Routing reply into the row's per-
+// peer ack roll-up. Skips the local-radio ack (FromNum == 0 or
+// MyNodeNum) — that's "I queued/sent it," not "a peer echoed it."
+// Dedups by NodeNum so a peer reaching us via two paths counts
+// once. Refreshes the rendered Acks string from the live Ackers
+// map every call — N acks is small (single-digit typical, dozen-
+// ish on a busy channel), so re-rendering on every reply is fine.
+func (s *Session) recordAck(row *mdl.MessageItem, msg mdl.Routing) {
+	if msg.FromNum == 0 || msg.FromNum == s.State.MyNodeNum {
+		return
+	}
+	if row.Ackers == nil {
+		row.Ackers = map[uint32]int{}
+	}
+	if existing, seen := row.Ackers[msg.FromNum]; seen && existing <= msg.Hops {
+		// Already heard from this peer at an equal-or-shorter
+		// path — keep the shorter hop count, no display change.
+		return
+	}
+	row.Ackers[msg.FromNum] = msg.Hops
+	row.Acks = s.renderAcksLine(row.Ackers)
+}
+
+// renderAcksLine formats an Ackers map as the "↳ 3 acks — call1
+// (1h), call2 (2h)" sub-line consumers display. Sorted by hop
+// count (closer peers first) so the row reads as "the message
+// reached these neighbors first, then these further-out peers."
+// Ties broken by NodeNum for deterministic output.
+func (s *Session) renderAcksLine(ackers map[uint32]int) string {
+	if len(ackers) == 0 {
+		return ""
+	}
+	type entry struct {
+		num  uint32
+		hops int
+	}
+	rows := make([]entry, 0, len(ackers))
+	for num, hops := range ackers {
+		rows = append(rows, entry{num: num, hops: hops})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].hops != rows[j].hops {
+			return rows[i].hops < rows[j].hops
+		}
+		return rows[i].num < rows[j].num
+	})
+	parts := make([]string, 0, len(rows))
+	for _, r := range rows {
+		call := s.callsignForAck(r.num)
+		if r.hops > 0 {
+			parts = append(parts, fmt.Sprintf("%s (%dh)", call, r.hops))
+		} else {
+			parts = append(parts, call)
+		}
+	}
+	return fmt.Sprintf(
+		"↳ %d ack%s — %s",
+		len(rows),
+		plural(len(rows)),
+		strings.Join(parts, ", "),
+	)
+}
+
+// callsignForAck resolves an ack sender's NodeNum to its display
+// callsign. Falls back to the canonical "!<8-hex>" placeholder
+// when the peer isn't in the NodeDB yet — better than dropping the
+// ack just because their NodeInfo hasn't arrived.
+func (s *Session) callsignForAck(num uint32) string {
+	if idx, ok := s.State.NodesByNum[num]; ok && idx < len(s.State.Nodes) {
+		if n := s.State.Nodes[idx]; n.Callsign != "" {
+			return n.Callsign
+		}
+	}
+	long, _ := mdl.DefaultCallsign(num)
+	return long
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // ApplyPing records a REPLY_APP echo's telemetry against the

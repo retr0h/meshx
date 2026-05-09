@@ -410,6 +410,8 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
 			Reason:    model.RoutingError(reason),
 			ErrorName: reason,
 			OK:        reason == string(model.RoutingNone),
+			FromNum:   pkt.GetFrom(),
+			Hops:      int(pkt.GetHopStart()) - int(pkt.GetHopLimit()),
 		}}
 	}
 	return nil

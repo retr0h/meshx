@@ -149,6 +149,18 @@ type Routing struct {
 	Reason    RoutingError
 	ErrorName string
 	OK        bool
+	// FromNum is the NodeNum of the peer that sent this routing
+	// reply. The local radio's own ack-of-send carries FromNum =
+	// MyNodeNum (the radio identifies itself in the response); a
+	// mesh-relay or destination ack carries FromNum = the relaying
+	// or receiving peer. ApplyRouting uses this to aggregate per-
+	// peer acks into MessageItem.Acks without double-counting our
+	// own local ack.
+	FromNum uint32 `format:"int64" minimum:"0"`
+	// Hops is the hop count the routing reply traversed back to us
+	// (HopStart - HopLimit on the wire). Zero for the local ack;
+	// non-zero for replies that crossed at least one repeater.
+	Hops int
 }
 
 // Metadata delivers firmware_version + hw identity details from the

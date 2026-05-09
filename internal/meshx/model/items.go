@@ -86,7 +86,7 @@ func (n *NodeItem) CurrentState() NodeState {
 type MessageItem struct {
 	Message
 
-	Acks string `json:"acks,omitempty" doc:"child line ('↳ 3 acks — ...') under outgoing messages"`
+	Acks string `json:"acks,omitempty" doc:"per-peer mesh-relay ack roll-up rendered as '↳ N acks — call1 (1h), call2 (2h)' under outgoing messages. POPULATES FOR DMs ONLY — Meshtastic peers generate Routing replies for unicasts (MeshPacket.to=peer.NodeNum) but not for broadcasts (to=0xFFFFFFFF), so this field stays empty for channel messages even after delivery. The local-radio confirmation is on the 'status' field, which flips to 'ack' for both broadcasts and DMs once the radio sends the packet."`
 	// Ackers tracks per-peer ack receipts as Routing replies arrive
 	// from the mesh. Keyed by acker NodeNum so each peer counts at
 	// most once, even when their reply takes multiple paths.

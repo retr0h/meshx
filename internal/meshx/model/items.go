@@ -86,10 +86,20 @@ func (n *NodeItem) CurrentState() NodeState {
 type MessageItem struct {
 	Message
 
-	Acks            string        `json:"acks,omitempty" doc:"child line ('↳ 3 acks — ...') under outgoing messages"`
-	Group           uint64        `json:"-"`
-	Style           any           `json:"-"`
-	ExpireAt        *time.Time    `json:"-"`
-	Pinned          bool          `json:"-"`
-	PinnedRemaining time.Duration `json:"-"`
+	Acks string `json:"acks,omitempty" doc:"child line ('↳ 3 acks — ...') under outgoing messages"`
+	// Ackers tracks per-peer ack receipts as Routing replies arrive
+	// from the mesh. Keyed by acker NodeNum so each peer counts at
+	// most once, even when their reply takes multiple paths.
+	// Stays out of the JSON wire shape — Acks is the rendered
+	// display string consumers actually want; Ackers is the
+	// session-only bookkeeping ApplyRouting refreshes Acks from.
+	// Lost on restart: ack collection is a real-time signal anyway,
+	// and the row's status field captures the durable ack/fail
+	// outcome.
+	Ackers          map[uint32]int `json:"-"`
+	Group           uint64         `json:"-"`
+	Style           any            `json:"-"`
+	ExpireAt        *time.Time     `json:"-"`
+	Pinned          bool           `json:"-"`
+	PinnedRemaining time.Duration  `json:"-"`
 }

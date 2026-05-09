@@ -741,6 +741,13 @@ components:
       properties:
         ErrorName:
           type: string
+        FromNum:
+          format: int64
+          minimum: 0
+          type: integer
+        Hops:
+          format: int64
+          type: integer
         OK:
           type: boolean
         Reason:
@@ -754,6 +761,8 @@ components:
         - Reason
         - ErrorName
         - OK
+        - FromNum
+        - Hops
       type: object
     ScanBLEInputBody:
       additionalProperties: false

@@ -862,6 +862,11 @@ components:
           description: message body
           minLength: 1
           type: string
+        to_num:
+          description: recipient NodeNum for a DM (peer-addressed unicast); 0 = broadcast on the channel. Look up the numeric NodeNum via GET /radios/{radio_id}/nodes — callsigns are not resolved server-side.
+          format: int64
+          minimum: 0
+          type: integer
       required:
         - channel
         - text

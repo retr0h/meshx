@@ -539,6 +539,9 @@ type SendMessageRequest struct {
 
 	// Text message body
 	Text string `json:"text"`
+
+	// ToNum recipient NodeNum for a DM (peer-addressed unicast); 0 = broadcast on the channel. Look up the numeric NodeNum via GET /radios/{radio_id}/nodes — callsigns are not resolved server-side.
+	ToNum *int64 `json:"to_num,omitempty"`
 }
 
 // SendMessageResult defines model for SendMessageResult.

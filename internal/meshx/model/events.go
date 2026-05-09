@@ -161,6 +161,11 @@ type Routing struct {
 	// (HopStart - HopLimit on the wire). Zero for the local ack;
 	// non-zero for replies that crossed at least one repeater.
 	Hops int
+	// At is the time the routing reply was applied locally — i.e.
+	// when the ack landed in our process. Surfaces on the
+	// MessageItem.Ackers entry so consumers can render "ack from X
+	// 14s ago" without re-timing it themselves.
+	At time.Time
 }
 
 // Metadata delivers firmware_version + hw identity details from the

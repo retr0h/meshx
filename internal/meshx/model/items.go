@@ -76,6 +76,17 @@ func (n *NodeItem) CurrentState() NodeState {
 	return StateOffline
 }
 
+// Acker is one entry in MessageItem.Ackers — a single peer's
+// confirmation that an outbound DM reached them. The structured
+// shape replaces the legacy formatted-string display so consumers
+// (TUI, web UI, MCP, plugins) get raw data and format it themselves.
+type Acker struct {
+	NodeNum  uint32    `json:"node_num" doc:"acker NodeNum (mesh peer that echoed the Routing reply)"                                             format:"int64" minimum:"0"`
+	Callsign string    `json:"callsign" doc:"resolved callsign at the time the ack arrived; empty when the peer's NodeInfo hasn't reached us yet"`
+	Hops     int       `json:"hops"     doc:"hop count this Routing reply traversed back to the sender (0 = direct)"`
+	At       time.Time `json:"at"       doc:"time the Routing reply landed locally"`
+}
+
 // MessageItem embeds Message (the wire/persisted shape) and adds
 // runtime overlay fields. Group / ExpireAt / Pinned / PinnedRemaining
 // / Style are TUI-only state — daemon and remote clients have no
@@ -86,20 +97,23 @@ func (n *NodeItem) CurrentState() NodeState {
 type MessageItem struct {
 	Message
 
-	Acks string `json:"acks,omitempty" doc:"per-peer mesh-relay ack roll-up rendered as '↳ N acks — call1 (1h), call2 (2h)' under outgoing messages. POPULATES FOR DMs ONLY — Meshtastic peers generate Routing replies for unicasts (MeshPacket.to=peer.NodeNum) but not for broadcasts (to=0xFFFFFFFF), so this field stays empty for channel messages even after delivery. The local-radio confirmation is on the 'status' field, which flips to 'ack' for both broadcasts and DMs once the radio sends the packet."`
-	// Ackers tracks per-peer ack receipts as Routing replies arrive
-	// from the mesh. Keyed by acker NodeNum so each peer counts at
-	// most once, even when their reply takes multiple paths.
-	// Stays out of the JSON wire shape — Acks is the rendered
-	// display string consumers actually want; Ackers is the
-	// session-only bookkeeping ApplyRouting refreshes Acks from.
-	// Lost on restart: ack collection is a real-time signal anyway,
-	// and the row's status field captures the durable ack/fail
-	// outcome.
-	Ackers          map[uint32]int `json:"-"`
-	Group           uint64         `json:"-"`
-	Style           any            `json:"-"`
-	ExpireAt        *time.Time     `json:"-"`
-	Pinned          bool           `json:"-"`
-	PinnedRemaining time.Duration  `json:"-"`
+	// Ackers carries per-peer Routing-reply receipts as DMs propagate
+	// through the mesh. POPULATES FOR DMs ONLY — Meshtastic peers
+	// generate Routing replies for unicasts (MeshPacket.to=peer.NodeNum)
+	// but not for broadcasts (to=0xFFFFFFFF), so this slice stays empty
+	// for channel messages even after delivery. The local-radio
+	// confirmation is on the 'status' field, which flips to 'ack' for
+	// both broadcasts and DMs once the radio sends the packet.
+	//
+	// Sorted by Hops ascending (closer peers first), tied broken by
+	// NodeNum, deduped per peer (a peer reaching us via two paths
+	// counts once at the shorter hop count). Lost on daemon restart —
+	// ack collection is a real-time signal; the row's Status field
+	// captures the durable ack/fail outcome.
+	Ackers          []Acker       `json:"ackers,omitempty"`
+	Group           uint64        `json:"-"`
+	Style           any           `json:"-"`
+	ExpireAt        *time.Time    `json:"-"`
+	Pinned          bool          `json:"-"`
+	PinnedRemaining time.Duration `json:"-"`
 }

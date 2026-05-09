@@ -84,7 +84,7 @@ type Message struct {
 	From      string        `json:"from"                doc:"sender callsign at receive time"`
 	Text      string        `json:"text"                doc:"message body, post-sanitization"`
 	Mine      bool          `json:"mine"                doc:"true when local user composed this row"`
-	Bang      string        `json:"bang,omitempty"      doc:"leading verb for ham-bang messages"`
+	Bang      string        `json:"-"`
 	Status    MessageStatus `json:"status"              doc:"row delivery state. (empty) = inbound chat (no delivery indicator). 'ack' = local radio confirmed transmission — fires within ~1s of send for both broadcasts and DMs (the everyday 'did it leave my radio?' signal). 'pending' = queued locally, ack not yet received. 'fail' = radio rejected the send or the ack timed out. 'system' / 'notice' = synthetic rows the TUI generates for status banners; never persisted to SQLite. For per-peer mesh acks (DMs only), see the 'acks' field." enum:",ack,pending,fail,system,notice"`
 	Hops      int           `json:"hops"                doc:"mesh hop count; 0 = direct"`
 	SNR       string        `json:"snr,omitempty"       doc:"signal-to-noise ratio at receive"`

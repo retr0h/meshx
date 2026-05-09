@@ -335,15 +335,44 @@ func chatContinuationLine(parts chatRowParts, body string, bodyStyler styler, co
 // chatAckLine renders the optional acks subline that hangs under a
 // chat row, indented to the body column so it reads as commentary
 // on the row above. The body cell is rendered with the lavender
-// italic system style.
-func chatAckLine(parts chatRowParts, acks string, sysStyler styler, contentW int) string {
+// italic system style. Takes the structured Ackers slice and
+// formats it locally — formatting is presentation, not state.
+func chatAckLine(
+	parts chatRowParts,
+	ackers []mdl.Acker,
+	sysStyler styler,
+	contentW int,
+) string {
 	bg := lipgloss.NewStyle().Background(lipgloss.Color(parts.rowBg))
 	indent := bg.Render(strings.Repeat(" ", chatRowLeftFixed))
 	cells := []Cell{
 		{Content: indent, Width: chatRowLeftFixed},
-		{Content: sysStyler.Render(acks), Width: -1, PadStyle: bg},
+		{Content: sysStyler.Render(formatAckers(ackers)), Width: -1, PadStyle: bg},
 	}
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
+}
+
+// formatAckers turns the structured Ackers slice into the legacy
+// "↳ N acks — call1 (1h), call2 (2h)" subline. Apply.go keeps the
+// slice sorted by hops then NodeNum, so this just walks it.
+// Empty ackers → empty string (caller should len-check first).
+func formatAckers(ackers []mdl.Acker) string {
+	if len(ackers) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(ackers))
+	for _, a := range ackers {
+		if a.Hops > 0 {
+			parts = append(parts, fmt.Sprintf("%s (%dh)", a.Callsign, a.Hops))
+		} else {
+			parts = append(parts, a.Callsign)
+		}
+	}
+	suffix := "s"
+	if len(ackers) == 1 {
+		suffix = ""
+	}
+	return fmt.Sprintf("↳ %d ack%s — %s", len(ackers), suffix, strings.Join(parts, ", "))
 }
 
 // chatThreadingQuote renders the dim one-line "┌ from time \"text\""

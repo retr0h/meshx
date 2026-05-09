@@ -77,6 +77,21 @@ func (e MessageItemStatus) Valid() bool {
 	}
 }
 
+// Acker defines model for Acker.
+type Acker struct {
+	// At time the Routing reply landed locally
+	At time.Time `json:"at"`
+
+	// Callsign resolved callsign at the time the ack arrived; empty when the peer's NodeInfo hasn't reached us yet
+	Callsign string `json:"callsign"`
+
+	// Hops hop count this Routing reply traversed back to the sender (0 = direct)
+	Hops int64 `json:"hops"`
+
+	// NodeNum acker NodeNum (mesh peer that echoed the Routing reply)
+	NodeNum int64 `json:"node_num"`
+}
+
 // AutoUSBInputBody defines model for AutoUSBInputBody.
 type AutoUSBInputBody struct {
 	// Schema A URL to the JSON Schema for this object.
@@ -308,9 +323,6 @@ type LoraConfig struct {
 
 // Message defines model for Message.
 type Message struct {
-	// Bang leading verb for ham-bang messages
-	Bang *string `json:"bang,omitempty"`
-
 	// Corrupted sanitization replaced/dropped bytes
 	Corrupted *bool `json:"corrupted,omitempty"`
 
@@ -356,11 +368,7 @@ type MessageStatus string
 
 // MessageItem defines model for MessageItem.
 type MessageItem struct {
-	// Acks per-peer mesh-relay ack roll-up rendered as '↳ N acks — call1 (1h), call2 (2h)' under outgoing messages. POPULATES FOR DMs ONLY — Meshtastic peers generate Routing replies for unicasts (MeshPacket.to=peer.NodeNum) but not for broadcasts (to=0xFFFFFFFF), so this field stays empty for channel messages even after delivery. The local-radio confirmation is on the 'status' field, which flips to 'ack' for both broadcasts and DMs once the radio sends the packet.
-	Acks *string `json:"acks,omitempty"`
-
-	// Bang leading verb for ham-bang messages
-	Bang *string `json:"bang,omitempty"`
+	Ackers *[]Acker `json:"ackers,omitempty"`
 
 	// Corrupted sanitization replaced/dropped bytes
 	Corrupted *bool `json:"corrupted,omitempty"`
@@ -569,12 +577,13 @@ type Reconnecting struct {
 
 // Routing defines model for Routing.
 type Routing struct {
-	ErrorName string `json:"ErrorName"`
-	FromNum   int64  `json:"FromNum"`
-	Hops      int64  `json:"Hops"`
-	OK        bool   `json:"OK"`
-	Reason    string `json:"Reason"`
-	RequestID int64  `json:"RequestID"`
+	At        time.Time `json:"At"`
+	ErrorName string    `json:"ErrorName"`
+	FromNum   int64     `json:"FromNum"`
+	Hops      int64     `json:"Hops"`
+	OK        bool      `json:"OK"`
+	Reason    string    `json:"Reason"`
+	RequestID int64     `json:"RequestID"`
 }
 
 // ScanBLEInputBody defines model for ScanBLEInputBody.

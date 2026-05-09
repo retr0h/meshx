@@ -118,8 +118,13 @@ func dmCallsignFor(m *model, nodeNum uint32) string {
 }
 
 // visibleMessageIndices returns the absolute m.Messages indices that
-// the messages pane will currently render — the full slice when on a
-// channel tab, only the active DM thread's messages when on a DM tab.
+// the messages pane will currently render. On a DM tab, only the
+// active thread's messages. On a channel tab, broadcasts + system
+// rows — DMs are filtered out so the channel log never interleaves
+// directed traffic with channel chatter (the user couldn't otherwise
+// tell whether "what area are you located?" was a DM aimed at them
+// or a question to the channel).
+//
 // Used by both the renderer (to translate index-into-filter back to
 // absolute for selection-highlight comparison) and j/k nav (to walk
 // through what the user can actually see).
@@ -131,9 +136,12 @@ func (m *model) visibleMessageIndices() []int {
 		return nil
 	}
 	if m.currentDMNum == 0 {
-		idx := make([]int, len(m.Messages))
-		for i := range m.Messages {
-			idx[i] = i
+		idx := make([]int, 0, len(m.Messages))
+		for i, msg := range m.Messages {
+			if msgIsDM(msg) {
+				continue
+			}
+			idx = append(idx, i)
 		}
 		return idx
 	}
@@ -144,6 +152,18 @@ func (m *model) visibleMessageIndices() []int {
 		}
 	}
 	return idx
+}
+
+// msgIsDM reports whether msg is a directed message (not a channel
+// broadcast). On the wire DMs carry MeshPacket.to=peer.NodeNum;
+// broadcasts carry to=0xFFFFFFFF. Locally-recorded outbound
+// broadcasts have ToNum=0 (RecordOutbound passes opts.ToNum unset).
+// System / notice rows are never DMs regardless of their ToNum.
+func msgIsDM(msg mdl.MessageItem) bool {
+	if msg.Status == mdl.StatusSystem || msg.Status == mdl.StatusNotice {
+		return false
+	}
+	return msg.ToNum != 0 && msg.ToNum != broadcastNodeNum
 }
 
 // snapSelectionToTail moves m.selectedMsg to the last currently-

@@ -103,7 +103,7 @@ func (s *Server) registerRoutes() {
 		Method:      http.MethodPost,
 		Path:        "/radios/{radio_id}/messages",
 		Summary:     "Send a chat message via one radio",
-		Description: "Enqueues an outbound text message on the named channel. Returns the allocated MeshPacket.id; clients correlate this with subsequent ack / fail events from the SSE stream.",
+		Description: "Enqueues an outbound text message on the named channel. Returns the allocated MeshPacket.id; clients correlate this with subsequent ack / fail events from the SSE stream. Pass an `Idempotency-Key` header (typically a UUID) for retry dedupe — identical key on the same radio within 60s returns the original result without dispatching to the radio a second time. Without the header, every request hits the radio (legacy behavior).",
 		Tags:        []string{"messages"},
 	}, s.handleSendMessage)
 

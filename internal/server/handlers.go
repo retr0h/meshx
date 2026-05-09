@@ -288,8 +288,9 @@ func (s *Server) handleListMessages(
 }
 
 type sendMessageInput struct {
-	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
-	Body    SendMessageRequest
+	RadioID        string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
+	IdempotencyKey string `                doc:"opaque request key (typically a UUID) for retry dedupe; identical key on the same radio within 60s returns the original result without re-dispatching to the radio" header:"Idempotency-Key"`
+	Body           SendMessageRequest
 }
 
 type sendMessageOutput struct {
@@ -303,6 +304,15 @@ func (s *Server) handleSendMessage(
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
 		return nil, err
+	}
+	// Idempotency-Key dedupe — return the original result for retries
+	// of the same logical send within the TTL window so a network
+	// blip + client retry doesn't double-broadcast on RF. Key is
+	// per-radio so independent radios don't share a key namespace.
+	if cached, ok := s.idempotency.Get(in.RadioID, in.IdempotencyKey); ok {
+		out := &sendMessageOutput{}
+		out.Body = cached
+		return out, nil
 	}
 	pid, ok := d.Send(mdl.SendText{
 		Channel: in.Body.Channel,
@@ -323,6 +333,7 @@ func (s *Server) handleSendMessage(
 	})
 	out := &sendMessageOutput{}
 	out.Body = SendMessageResult{PacketID: pid, OK: ok}
+	s.idempotency.Put(in.RadioID, in.IdempotencyKey, out.Body)
 	return out, nil
 }
 

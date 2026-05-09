@@ -197,7 +197,11 @@ func (r *Remote) Send(cmd mdl.Command) (uint32, bool) {
 		// failure surfaces as a flash within one or two ticks.
 		ctx, cancel := context.WithTimeout(context.Background(), sendTimeout)
 		defer cancel()
-		resp, err := r.client.SendMessageWithResponse(ctx, r.radioID, body)
+		// nil params — the daemon-side Idempotency-Key dedupe is opt-in;
+		// the local-mode TUI's outbound flow has its own sequencing
+		// and doesn't retry POSTs, so legacy "every send hits the
+		// radio" behavior is correct here.
+		resp, err := r.client.SendMessageWithResponse(ctx, r.radioID, nil, body)
 		if err != nil || resp.JSON200 == nil {
 			return 0, false
 		}

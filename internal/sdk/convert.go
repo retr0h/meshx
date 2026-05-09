@@ -82,9 +82,6 @@ func messageFromGen(g gen.MessageItem) mdl.MessageItem {
 			SentAt:   g.SentAt,
 		},
 	}
-	if g.Bang != nil {
-		m.Bang = *g.Bang
-	}
 	if g.Snr != nil {
 		m.SNR = *g.Snr
 	}
@@ -94,13 +91,23 @@ func messageFromGen(g gen.MessageItem) mdl.MessageItem {
 	if g.Corrupted != nil {
 		m.Corrupted = *g.Corrupted
 	}
-	if g.Acks != nil {
-		m.Acks = *g.Acks
+	if g.Ackers != nil {
+		m.Ackers = make([]mdl.Acker, 0, len(*g.Ackers))
+		for _, a := range *g.Ackers {
+			m.Ackers = append(m.Ackers, mdl.Acker{
+				NodeNum:  uint32(a.NodeNum),
+				Callsign: a.Callsign,
+				Hops:     int(a.Hops),
+				At:       a.At,
+			})
+		}
 	}
-	// Group, ExpireAt, and Pinned are render-only fields tagged
-	// json:"-" on MessageItem — they don't ship over the wire and
-	// don't appear in the generated client. The remote side recomputes
-	// them from local TUI state on receipt.
+	// Bang is a TUI render hint (json:"-" on Message) and does not
+	// ride the API wire; remote clients re-derive it from the
+	// leading word of Text if they want ham-bang detection.
+	// Group, ExpireAt, and Pinned are similarly render-only fields
+	// tagged json:"-". The remote side recomputes them from local
+	// TUI state on receipt.
 	return m
 }
 

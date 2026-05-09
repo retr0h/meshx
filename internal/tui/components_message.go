@@ -270,8 +270,8 @@ func chatRowRender(
 			row += "\n" + chatContinuationLine(parts, bl, bodyText, contentW)
 		}
 	}
-	if msg.Acks != "" {
-		row += "\n" + chatAckLine(parts, msg.Acks, sys, contentW)
+	if len(msg.Ackers) > 0 {
+		row += "\n" + chatAckLine(parts, msg.Ackers, sys, contentW)
 	}
 	if msg.ReplyID != 0 {
 		if parent := m.findMessageByPacketID(msg.ReplyID); parent != nil {
@@ -296,7 +296,7 @@ func chatRowRender(
 // — visible as a phantom gap between two unrelated messages).
 func messageRowVisualHeight(m model, msg messageItem) int {
 	h := 1 + strings.Count(msg.Text, "\n")
-	if msg.Acks != "" {
+	if len(msg.Ackers) > 0 {
 		h++
 	}
 	if msg.ReplyID != 0 && m.findMessageByPacketID(msg.ReplyID) != nil {

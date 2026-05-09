@@ -1,5 +1,30 @@
 components:
   schemas:
+    Acker:
+      additionalProperties: false
+      properties:
+        at:
+          description: time the Routing reply landed locally
+          format: date-time
+          type: string
+        callsign:
+          description: resolved callsign at the time the ack arrived; empty when the peer's NodeInfo hasn't reached us yet
+          type: string
+        hops:
+          description: hop count this Routing reply traversed back to the sender (0 = direct)
+          format: int64
+          type: integer
+        node_num:
+          description: acker NodeNum (mesh peer that echoed the Routing reply)
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+        - node_num
+        - callsign
+        - hops
+        - at
+      type: object
     AutoUSBInputBody:
       additionalProperties: false
       properties:
@@ -442,9 +467,6 @@ components:
     Message:
       additionalProperties: false
       properties:
-        bang:
-          description: leading verb for ham-bang messages
-          type: string
         corrupted:
           description: sanitization replaced/dropped bytes
           type: boolean
@@ -516,12 +538,11 @@ components:
     MessageItem:
       additionalProperties: false
       properties:
-        acks:
-          description: per-peer mesh-relay ack roll-up rendered as '↳ N acks — call1 (1h), call2 (2h)' under outgoing messages. POPULATES FOR DMs ONLY — Meshtastic peers generate Routing replies for unicasts (MeshPacket.to=peer.NodeNum) but not for broadcasts (to=0xFFFFFFFF), so this field stays empty for channel messages even after delivery. The local-radio confirmation is on the 'status' field, which flips to 'ack' for both broadcasts and DMs once the radio sends the packet.
-          type: string
-        bang:
-          description: leading verb for ham-bang messages
-          type: string
+        ackers:
+          items:
+            $ref: "#/components/schemas/Acker"
+          nullable: true
+          type: array
         corrupted:
           description: sanitization replaced/dropped bytes
           type: boolean
@@ -902,6 +923,9 @@ components:
     Routing:
       additionalProperties: false
       properties:
+        At:
+          format: date-time
+          type: string
         ErrorName:
           type: string
         FromNum:
@@ -926,6 +950,7 @@ components:
         - OK
         - FromNum
         - Hops
+        - At
       type: object
     ScanBLEInputBody:
       additionalProperties: false

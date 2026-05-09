@@ -41,7 +41,6 @@ package session
 import (
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
@@ -445,66 +444,52 @@ func (s *Session) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 }
 
 // recordAck folds a successful Routing reply into the row's per-
-// peer ack roll-up. Skips the local-radio ack (FromNum == 0 or
+// peer Ackers slice. Skips the local-radio ack (FromNum == 0 or
 // MyNodeNum) — that's "I queued/sent it," not "a peer echoed it."
 // Dedups by NodeNum so a peer reaching us via two paths counts
-// once. Refreshes the rendered Acks string from the live Ackers
-// map every call — N acks is small (single-digit typical, dozen-
-// ish on a busy channel), so re-rendering on every reply is fine.
+// once at the shorter hop count. Slice stays sorted by Hops then
+// NodeNum so consumers can render directly without re-sorting.
 func (s *Session) recordAck(row *mdl.MessageItem, msg mdl.Routing) {
 	if msg.FromNum == 0 || msg.FromNum == s.State.MyNodeNum {
 		return
 	}
-	if row.Ackers == nil {
-		row.Ackers = map[uint32]int{}
-	}
-	if existing, seen := row.Ackers[msg.FromNum]; seen && existing <= msg.Hops {
-		// Already heard from this peer at an equal-or-shorter
-		// path — keep the shorter hop count, no display change.
+	for i, a := range row.Ackers {
+		if a.NodeNum != msg.FromNum {
+			continue
+		}
+		if a.Hops <= msg.Hops {
+			// Already heard from this peer at an equal-or-shorter
+			// path — keep the shorter hop count, no shape change.
+			return
+		}
+		row.Ackers[i].Hops = msg.Hops
+		row.Ackers[i].At = msg.At
+		// Refresh callsign in case the peer's NodeInfo arrived
+		// between the first and second ack.
+		if call := s.callsignForAck(msg.FromNum); call != "" {
+			row.Ackers[i].Callsign = call
+		}
+		sortAckers(row.Ackers)
 		return
 	}
-	row.Ackers[msg.FromNum] = msg.Hops
-	row.Acks = s.renderAcksLine(row.Ackers)
+	row.Ackers = append(row.Ackers, mdl.Acker{
+		NodeNum:  msg.FromNum,
+		Callsign: s.callsignForAck(msg.FromNum),
+		Hops:     msg.Hops,
+		At:       msg.At,
+	})
+	sortAckers(row.Ackers)
 }
 
-// renderAcksLine formats an Ackers map as the "↳ 3 acks — call1
-// (1h), call2 (2h)" sub-line consumers display. Sorted by hop
-// count (closer peers first) so the row reads as "the message
-// reached these neighbors first, then these further-out peers."
-// Ties broken by NodeNum for deterministic output.
-func (s *Session) renderAcksLine(ackers map[uint32]int) string {
-	if len(ackers) == 0 {
-		return ""
-	}
-	type entry struct {
-		num  uint32
-		hops int
-	}
-	rows := make([]entry, 0, len(ackers))
-	for num, hops := range ackers {
-		rows = append(rows, entry{num: num, hops: hops})
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].hops != rows[j].hops {
-			return rows[i].hops < rows[j].hops
+// sortAckers orders by Hops ascending (closer peers first), tied
+// broken by NodeNum for deterministic output.
+func sortAckers(ackers []mdl.Acker) {
+	sort.Slice(ackers, func(i, j int) bool {
+		if ackers[i].Hops != ackers[j].Hops {
+			return ackers[i].Hops < ackers[j].Hops
 		}
-		return rows[i].num < rows[j].num
+		return ackers[i].NodeNum < ackers[j].NodeNum
 	})
-	parts := make([]string, 0, len(rows))
-	for _, r := range rows {
-		call := s.callsignForAck(r.num)
-		if r.hops > 0 {
-			parts = append(parts, fmt.Sprintf("%s (%dh)", call, r.hops))
-		} else {
-			parts = append(parts, call)
-		}
-	}
-	return fmt.Sprintf(
-		"↳ %d ack%s — %s",
-		len(rows),
-		plural(len(rows)),
-		strings.Join(parts, ", "),
-	)
 }
 
 // callsignForAck resolves an ack sender's NodeNum to its display
@@ -519,13 +504,6 @@ func (s *Session) callsignForAck(num uint32) string {
 	}
 	long, _ := mdl.DefaultCallsign(num)
 	return long
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
 }
 
 // ApplyPing records a REPLY_APP echo's telemetry against the

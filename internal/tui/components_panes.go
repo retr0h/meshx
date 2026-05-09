@@ -778,7 +778,7 @@ func tailStartList(msgs []messageItem, rowsBudget int) int {
 	rows := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
 		cost := 1 + strings.Count(msgs[i].Text, "\n")
-		if msgs[i].Acks != "" {
+		if len(msgs[i].Ackers) > 0 {
 			cost++
 		}
 		if rows+cost > rowsBudget {

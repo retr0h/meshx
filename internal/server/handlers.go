@@ -66,10 +66,16 @@ type SessionSnapshot struct {
 }
 
 // SendMessageRequest is the inbound POST body for sending text.
+// ToNum=0 sends a broadcast on the named channel — every peer
+// listening on that channel slot decodes it. ToNum=peer.NodeNum
+// sends a unicast DM to that peer; the channel still selects the
+// PSK keyset the firmware uses to encrypt the packet, so DMs
+// remain scoped to peers who share that channel's key.
 type SendMessageRequest struct {
 	Channel int    `json:"channel"            doc:"target channel slot index (0..7); the current channel's slot is the default"`
-	Text    string `json:"text"               doc:"message body"                                                                minLength:"1"`
+	Text    string `json:"text"               doc:"message body"                                                                                                                                                                              minLength:"1"`
 	ReplyID uint32 `json:"reply_id,omitempty" doc:"PacketID this message replies to"`
+	ToNum   uint32 `json:"to_num,omitempty"   doc:"recipient NodeNum for a DM (peer-addressed unicast); 0 = broadcast on the channel. Look up the numeric NodeNum via GET /radios/{radio_id}/nodes — callsigns are not resolved server-side."               format:"int64" minimum:"0"`
 }
 
 // SendMessageResult echoes the allocated PacketID so clients can
@@ -302,6 +308,7 @@ func (s *Server) handleSendMessage(
 		Channel: in.Body.Channel,
 		Text:    in.Body.Text,
 		ReplyID: in.Body.ReplyID,
+		ToNum:   in.Body.ToNum,
 	})
 	// Record the outbound row in State.Messages + persist + publish
 	// even when ok=false (demo mode / pump disconnected): the row
@@ -312,6 +319,7 @@ func (s *Server) handleSendMessage(
 		Text:     in.Body.Text,
 		ReplyID:  in.Body.ReplyID,
 		PacketID: pid,
+		ToNum:    in.Body.ToNum,
 	})
 	out := &sendMessageOutput{}
 	out.Body = SendMessageResult{PacketID: pid, OK: ok}

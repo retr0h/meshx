@@ -21,22 +21,18 @@
 package server
 
 import (
-	"context"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
-// TestAPISpecMatchesVendoredCopy is the drift gate — spins up the
-// real Server in-process, fetches its OpenAPI 3.0 spec, and asserts
-// the on-disk vendored copy at internal/sdk/gen/api.yaml matches
-// byte-for-byte. A PR that changes a route, handler, or request /
-// response type without regenerating the SDK will fail here with
-// "spec drift — run `just generate`."
+// TestAPISpecMatchesVendoredCopy is the drift gate — extracts the
+// daemon's OpenAPI 3.0 spec directly from Huma (no listener, no
+// port) and asserts the on-disk vendored copy at
+// internal/sdk/gen/api.yaml matches byte-for-byte. A PR that
+// changes a route, handler, or request / response type without
+// regenerating the SDK will fail here with "spec drift — run
+// `just generate`."
 //
 // Catches the most common SDK-rot failure mode: someone tweaks a
 // schema field, doesn't regen, the generated client.gen.go grows
@@ -49,8 +45,6 @@ import (
 func TestAPISpecMatchesVendoredCopy(t *testing.T) {
 	t.Parallel()
 
-	// On-disk vendored copy. Path is relative to this test file's
-	// package — internal/sdk/gen/api.yaml.
 	specPath := filepath.Join("..", "sdk", "gen", "api.yaml")
 	onDisk, err := os.ReadFile(specPath)
 	if err != nil {
@@ -58,36 +52,18 @@ func TestAPISpecMatchesVendoredCopy(t *testing.T) {
 	}
 
 	s := New(Config{Radios: NewRegistry()})
-	srv := httptest.NewServer(s.http.Handler)
-	t.Cleanup(srv.Close)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/openapi-3.0.yaml", nil)
+	live, err := s.OpenAPISpec()
 	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("fetch spec: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	live, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
+		t.Fatalf("extract spec: %v", err)
 	}
 
 	if string(onDisk) != string(live) {
-		// Write the live copy to a temp file so the developer can
-		// `diff` it locally without needing to spawn the daemon
-		// themselves. The repro recipe is `just generate`.
+		// Write the live copy so the developer can `diff` locally.
+		// The repro recipe is `just generate`.
 		tmp := filepath.Join(t.TempDir(), "live-api.yaml")
 		if writeErr := os.WriteFile(tmp, live, 0o600); writeErr == nil {
 			t.Fatalf(
-				"vendored spec drift — on-disk %s does not match the daemon's live spec.\n"+
+				"vendored spec drift — on-disk %s does not match the in-process spec.\n"+
 					"  fresh dump: %s\n"+
 					"  fix: run `just generate` to refresh internal/sdk/gen/api.yaml + client.gen.go and commit",
 				specPath, tmp,

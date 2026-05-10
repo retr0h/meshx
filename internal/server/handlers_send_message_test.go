@@ -199,7 +199,10 @@ func TestEndpointSendMessage(t *testing.T) {
 		// Pump must have seen exactly ONE dispatch — the second call
 		// should return cached without re-broadcasting on RF.
 		if got := len(p.snapshot()); got != 1 {
-			t.Fatalf("dispatched %d commands across two retries; want 1 (Idempotency-Key dedupe)", got)
+			t.Fatalf(
+				"dispatched %d commands across two retries; want 1 (Idempotency-Key dedupe)",
+				got,
+			)
 		}
 	})
 }

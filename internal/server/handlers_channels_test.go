@@ -48,9 +48,27 @@ func channelHarness(t *testing.T) (*httptest.Server, *fakePump) {
 	sess.State.RadioID = "0xabcdef01"
 	sess.State.MyNodeNum = 0xdeadbeef
 	sess.State.Channels = []mdl.ChannelItem{
-		{Index: 0, Name: "", Role: string(mdl.ChannelPrimary), HasPSK: true, PSK: []byte("default-psk-bytes-32-byte-fixture")},
-		{Index: 1, Name: "ham", Role: string(mdl.ChannelSecondary), HasPSK: true, PSK: []byte("ham-psk-bytes-32-byte-fixture-aa")},
-		{Index: 2, Name: "field", Role: string(mdl.ChannelSecondary), HasPSK: true, PSK: []byte("field-psk-bytes-32-byte-fixture-")},
+		{
+			Index:  0,
+			Name:   "",
+			Role:   string(mdl.ChannelPrimary),
+			HasPSK: true,
+			PSK:    []byte("default-psk-bytes-32-byte-fixture"),
+		},
+		{
+			Index:  1,
+			Name:   "ham",
+			Role:   string(mdl.ChannelSecondary),
+			HasPSK: true,
+			PSK:    []byte("ham-psk-bytes-32-byte-fixture-aa"),
+		},
+		{
+			Index:  2,
+			Name:   "field",
+			Role:   string(mdl.ChannelSecondary),
+			HasPSK: true,
+			PSK:    []byte("field-psk-bytes-32-byte-fixture-"),
+		},
 	}
 	s.radios.Add(sess.State.RadioID, sess)
 	srv := httptest.NewServer(s.http.Handler)
@@ -239,7 +257,11 @@ func TestEndpointMintChannel(t *testing.T) {
 					}
 					_ = json.NewDecoder(resp.Body).Decode(&errBody)
 					if !strings.Contains(errBody.Detail, tc.wantInError) {
-						t.Fatalf("error.detail = %q, want substring %q", errBody.Detail, tc.wantInError)
+						t.Fatalf(
+							"error.detail = %q, want substring %q",
+							errBody.Detail,
+							tc.wantInError,
+						)
 					}
 				}
 				return

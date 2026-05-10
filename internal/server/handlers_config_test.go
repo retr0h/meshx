@@ -48,7 +48,8 @@ func TestEndpointUpdateConfig(t *testing.T) {
 			t.Helper()
 			for _, c := range cmds {
 				if o, ok := c.(mdl.SetOwner); ok {
-					if o.LongName != longname || o.ShortName != shortname || o.IsLicensed != licensed {
+					if o.LongName != longname || o.ShortName != shortname ||
+						o.IsLicensed != licensed {
 						t.Fatalf(
 							"SetOwner = %+v; want {Long:%q Short:%q Licensed:%v}",
 							o, longname, shortname, licensed,

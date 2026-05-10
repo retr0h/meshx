@@ -287,15 +287,24 @@ The daemon emits its OpenAPI spec at `/openapi.{json,yaml}` (3.1) and a
 downgraded version at `/openapi-3.0.{json,yaml}`. oapi-codegen still can't
 consume 3.1 (oapi-codegen #373) so the codegen pipeline pulls the 3.0 spec.
 
-```bash
-# regen spec from a freshly-built daemon
-go run . server start --bind :19199 &
-curl -sS localhost:19199/openapi-3.0.yaml > internal/sdk/gen/api.yaml
-kill %1
+Two-stage regen, both invoked by `just generate` — no daemon required:
 
-# regen Go client (client.gen.go)
-just generate                # wraps `go generate ./internal/sdk/gen/...`
+1. `internal/sdk/gen/main.go` (build-tagged `ignore`, same pattern as
+   `internal/tui/emoji/main.go`) imports `internal/server`, calls
+   `Server.OpenAPISpec()` to pull the spec straight from Huma in-process, writes
+   `api.yaml`.
+2. `oapi-codegen` runs against `api.yaml` + `cfg.yaml` to produce
+   `client.gen.go`.
+
+```bash
+just generate                # runs both stages via `go generate ./...`
 ```
+
+Drift is enforced by `TestAPISpecMatchesVendoredCopy` (in
+`internal/server/spec_test.go`), which fails `just test` if the on-disk
+`api.yaml` doesn't match what the in-process daemon would emit. Breaking changes
+are caught in CI by `oasdiff` between the PR branch's `api.yaml` and main's —
+see `.github/workflows/go.yml`.
 
 `internal/sdk/gen/cfg.yaml` configures oapi-codegen
 (`generate.models: true, client: true`); `client.gen.go` is checked in so

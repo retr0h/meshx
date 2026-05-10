@@ -74,6 +74,19 @@ type Config struct {
 	Logger *slog.Logger
 }
 
+// OpenAPISpec returns the daemon's OpenAPI 3.0 spec as YAML bytes —
+// the exact same output the daemon serves at /openapi-3.0.yaml,
+// extracted directly from Huma without spinning up a listener. Used
+// by the spec-regen generator (internal/sdk/gen/dumpspec) to refresh
+// the vendored api.yaml without the daemon-dance, and by the drift
+// test to compare the in-process spec against the on-disk copy.
+func (s *Server) OpenAPISpec() ([]byte, error) {
+	if s == nil || s.api == nil {
+		return nil, errors.New("server: api uninitialized")
+	}
+	return s.api.OpenAPI().DowngradeYAML()
+}
+
 // Server is the HTTP+SSE daemon that multiplexes one or more radios
 // to clients. Constructed via New(Config); the http.Server inside is
 // driven by Run.

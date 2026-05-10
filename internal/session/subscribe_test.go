@@ -31,179 +31,251 @@ func newTestSession() *Session {
 	return New(nil, nil, nil)
 }
 
-// TestPublishAssignsMonotonicIDs covers the foundational invariant of
-// the resumption-cursor design: every Publish gets a fresh, strictly
-// increasing ID starting at 1. Cursors break if IDs collide or move
-// backwards, so this is the first thing to nail down.
-func TestPublishAssignsMonotonicIDs(t *testing.T) {
-	s := newTestSession()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ch := s.Subscribe(ctx)
-
-	const n = 10
-	for i := 0; i < n; i++ {
+// TestSessionSubscribe exercises Session.Subscribe — the legacy
+// live-only fan-out path the local TUI uses. Each scenario has
+// genuinely divergent mechanics (channel-drain timing, ctx cancel
+// races, fan-out multiplexing) so they live as t.Run sub-tests under
+// one parent rather than rows in a single table.
+func TestSessionSubscribe(t *testing.T) {
+	t.Run("live-only-skips-pre-subscribe", func(t *testing.T) {
+		s := newTestSession()
 		s.Publish(Event{Kind: EventText})
-	}
+		s.Publish(Event{Kind: EventText})
 
-	for i := uint64(1); i <= n; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch := s.Subscribe(ctx)
+
 		select {
 		case ev := <-ch:
-			if ev.ID != i {
-				t.Fatalf("event %d: got ID=%d, want %d", i, ev.ID, i)
+			t.Fatalf("Subscribe leaked historical event: %+v", ev)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		s.Publish(Event{Kind: EventText})
+		select {
+		case ev := <-ch:
+			if ev.ID != 3 {
+				t.Fatalf("got ID=%d, want 3 (live event after 2 historical)", ev.ID)
 			}
 		case <-time.After(time.Second):
-			t.Fatalf("timed out waiting for event %d", i)
+			t.Fatal("live event never arrived")
 		}
-	}
-}
+	})
 
-// TestSubscribeIsLiveOnly verifies the legacy Subscribe path skips the
-// ring entirely — events published before subscription are not
-// replayed. The TUI's local-mode consumer relies on this; flipping it
-// would silently re-deliver historical events on every reconnect.
-func TestSubscribeIsLiveOnly(t *testing.T) {
-	s := newTestSession()
-	s.Publish(Event{Kind: EventText})
-	s.Publish(Event{Kind: EventText})
+	t.Run("publish-assigns-monotonic-ids-from-1", func(t *testing.T) {
+		s := newTestSession()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		ch := s.Subscribe(ctx)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ch := s.Subscribe(ctx)
-
-	select {
-	case ev := <-ch:
-		t.Fatalf("Subscribe leaked historical event: %+v", ev)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	s.Publish(Event{Kind: EventText})
-	select {
-	case ev := <-ch:
-		if ev.ID != 3 {
-			t.Fatalf("got ID=%d, want 3 (live event after 2 historical)", ev.ID)
+		const n = 10
+		for i := 0; i < n; i++ {
+			s.Publish(Event{Kind: EventText})
 		}
-	case <-time.After(time.Second):
-		t.Fatal("live event never arrived")
-	}
-}
+		for i := uint64(1); i <= n; i++ {
+			select {
+			case ev := <-ch:
+				if ev.ID != i {
+					t.Fatalf("event %d: got ID=%d, want %d", i, ev.ID, i)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("timed out waiting for event %d", i)
+			}
+		}
+	})
 
-// TestSubscribeWithReplayFromZero replays everything in the ring —
-// the ?since=0 contract for "I've never seen any events before."
-func TestSubscribeWithReplayFromZero(t *testing.T) {
-	s := newTestSession()
-	for i := 0; i < 5; i++ {
+	t.Run("fans-out-to-multiple-subscribers", func(t *testing.T) {
+		s := newTestSession()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		chA := s.Subscribe(ctx)
+		chB := s.Subscribe(ctx)
+
+		const n = 5
+		for i := 0; i < n; i++ {
+			s.Publish(Event{Kind: EventText})
+		}
+
+		collect := func(ch <-chan Event) []uint64 {
+			var ids []uint64
+			for i := 0; i < n; i++ {
+				select {
+				case ev := <-ch:
+					ids = append(ids, ev.ID)
+				case <-time.After(time.Second):
+					t.Fatalf("subscriber timed out at event %d/%d", i+1, n)
+				}
+			}
+			return ids
+		}
+
+		idsA := collect(chA)
+		idsB := collect(chB)
+		for i, id := range idsA {
+			if id != uint64(i+1) {
+				t.Fatalf("A[%d] = %d, want %d", i, id, i+1)
+			}
+			if idsB[i] != id {
+				t.Fatalf("B[%d] = %d, A[%d] = %d (must match)", i, idsB[i], i, id)
+			}
+		}
+	})
+
+	t.Run("ctx-cancel-detaches-channel", func(t *testing.T) {
+		s := newTestSession()
+		ctx, cancel := context.WithCancel(context.Background())
+		ch := s.Subscribe(ctx)
+
 		s.Publish(Event{Kind: EventText})
-	}
+		<-ch
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	snapshot, _ := s.SubscribeWithReplay(ctx, 0)
-
-	if got := len(snapshot); got != 5 {
-		t.Fatalf("snapshot len = %d, want 5", got)
-	}
-	for i, ev := range snapshot {
-		if ev.ID != uint64(i+1) {
-			t.Fatalf("snapshot[%d].ID = %d, want %d", i, ev.ID, i+1)
+		cancel()
+		// Wait for the unsubscribe goroutine to remove ch.
+		deadline := time.Now().Add(time.Second)
+		for {
+			s.subMu.Lock()
+			n := len(s.subs)
+			s.subMu.Unlock()
+			if n == 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("subscribers not detached after cancel; %d remain", n)
+			}
+			time.Sleep(time.Millisecond)
 		}
-	}
-}
 
-// TestSubscribeWithReplayFiltersByCursor — the core resumption case.
-// Cursor at N means "I've seen 1..N already; give me N+1 onwards."
-func TestSubscribeWithReplayFiltersByCursor(t *testing.T) {
-	s := newTestSession()
-	for i := 0; i < 10; i++ {
+		// Publish after cancel; the closed channel should drain without
+		// further events.
 		s.Publish(Event{Kind: EventText})
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	snapshot, _ := s.SubscribeWithReplay(ctx, 7)
-
-	if got := len(snapshot); got != 3 {
-		t.Fatalf("snapshot len = %d, want 3 (events 8, 9, 10)", got)
-	}
-	wantIDs := []uint64{8, 9, 10}
-	for i, ev := range snapshot {
-		if ev.ID != wantIDs[i] {
-			t.Fatalf("snapshot[%d].ID = %d, want %d", i, ev.ID, wantIDs[i])
+		count := 0
+		for range ch {
+			count++
 		}
-	}
+		if count != 0 {
+			t.Fatalf("got %d post-cancel events, want 0", count)
+		}
+	})
 }
 
-// TestSubscribeWithReplayCursorBeyondHead — cursor newer than any
-// published event. Snapshot is empty; live channel still works. The
-// home-server case where a client says "since=999999" because it's
-// reconnecting after a daemon restart that reset the counter.
-func TestSubscribeWithReplayCursorBeyondHead(t *testing.T) {
-	s := newTestSession()
-	s.Publish(Event{Kind: EventText})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	snapshot, ch := s.SubscribeWithReplay(ctx, 999_999)
-
-	if got := len(snapshot); got != 0 {
-		t.Fatalf("snapshot len = %d, want 0 (cursor beyond head)", got)
+// TestSessionSubscribeWithReplay covers the resumable path the SSE
+// stream uses. Mechanics are uniform across rows — pre-publish N
+// events, subscribe with a cursor, assert snapshot contents — so each
+// scenario is a row, not a sub-test.
+func TestSessionSubscribeWithReplay(t *testing.T) {
+	cases := []struct {
+		name        string
+		prePublish  int    // events to publish before subscribing
+		cursor      uint64 // cursor passed to SubscribeWithReplay
+		wantLen     int    // expected len(snapshot)
+		wantFirstID uint64 // expected snapshot[0].ID (skipped if wantLen == 0)
+		wantLastID  uint64 // expected snapshot[len-1].ID (skipped if wantLen == 0)
+	}{
+		{
+			name:        "cursor-zero-replays-everything-in-ring",
+			prePublish:  5,
+			cursor:      0,
+			wantLen:     5,
+			wantFirstID: 1,
+			wantLastID:  5,
+		},
+		{
+			name:        "cursor-mid-stream-returns-tail-only",
+			prePublish:  10,
+			cursor:      7,
+			wantLen:     3,
+			wantFirstID: 8,
+			wantLastID:  10,
+		},
+		{
+			name:       "cursor-beyond-head-returns-empty-snapshot",
+			prePublish: 1,
+			cursor:     999_999,
+			wantLen:    0,
+		},
+		{
+			name:        "ring-overflow-keeps-newest-cap-events",
+			prePublish:  eventRingCap + 50,
+			cursor:      0,
+			wantLen:     eventRingCap,
+			wantFirstID: 51, // events 1..50 evicted
+			wantLastID:  uint64(eventRingCap + 50),
+		},
 	}
 
-	s.Publish(Event{Kind: EventText})
-	select {
-	case ev := <-ch:
-		if ev.ID != 2 {
-			t.Fatalf("got live ID=%d, want 2", ev.ID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("live event never arrived after cursor-beyond-head subscribe")
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestSession()
+			for i := 0; i < tc.prePublish; i++ {
+				s.Publish(Event{Kind: EventText})
+			}
 
-// TestRingOverflowKeepsNewest — when more than eventRingCap events
-// have been published, only the newest cap survive. The "client was
-// offline longer than the buffer" path: cursor that lands before the
-// surviving window returns whatever is still there, and the client
-// detects the gap by comparing its requested cursor to the first
-// replayed event's id.
-func TestRingOverflowKeepsNewest(t *testing.T) {
-	s := newTestSession()
-	const overflow = 50
-	const total = eventRingCap + overflow
-	for i := 0; i < total; i++ {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			snapshot, _ := s.SubscribeWithReplay(ctx, tc.cursor)
+
+			if got := len(snapshot); got != tc.wantLen {
+				t.Fatalf("snapshot len = %d, want %d", got, tc.wantLen)
+			}
+			if tc.wantLen == 0 {
+				return
+			}
+			if snapshot[0].ID != tc.wantFirstID {
+				t.Fatalf("snapshot[0].ID = %d, want %d", snapshot[0].ID, tc.wantFirstID)
+			}
+			if snapshot[len(snapshot)-1].ID != tc.wantLastID {
+				t.Fatalf(
+					"snapshot[last].ID = %d, want %d",
+					snapshot[len(snapshot)-1].ID, tc.wantLastID,
+				)
+			}
+			for i, ev := range snapshot {
+				want := tc.wantFirstID + uint64(i)
+				if ev.ID != want {
+					t.Fatalf("snapshot[%d].ID = %d, want %d", i, ev.ID, want)
+				}
+			}
+		})
+	}
+
+	// Cursor-beyond-head must still let live events through after the
+	// empty-snapshot return — the home-server "since=999999 after a
+	// daemon restart that reset the counter" path. Distinct mechanics
+	// (asserts on the live channel, not the snapshot) so it's a sub-
+	// test under the same parent.
+	t.Run("cursor-beyond-head-still-delivers-live-events", func(t *testing.T) {
+		s := newTestSession()
 		s.Publish(Event{Kind: EventText})
-	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	snapshot, _ := s.SubscribeWithReplay(ctx, 0)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		_, ch := s.SubscribeWithReplay(ctx, 999_999)
 
-	if got := len(snapshot); got != eventRingCap {
-		t.Fatalf("snapshot len = %d, want %d", got, eventRingCap)
-	}
-	wantFirstID := uint64(overflow + 1)
-	if snapshot[0].ID != wantFirstID {
-		t.Fatalf(
-			"oldest survivor ID = %d, want %d (events 1..%d should be evicted)",
-			snapshot[0].ID, wantFirstID, overflow,
-		)
-	}
-	wantLastID := uint64(total)
-	if snapshot[len(snapshot)-1].ID != wantLastID {
-		t.Fatalf("newest survivor ID = %d, want %d", snapshot[len(snapshot)-1].ID, wantLastID)
-	}
+		s.Publish(Event{Kind: EventText})
+		select {
+		case ev := <-ch:
+			if ev.ID != 2 {
+				t.Fatalf("got live ID=%d, want 2", ev.ID)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("live event never arrived after cursor-beyond-head subscribe")
+		}
+	})
 }
 
-// TestSubscribeAtomicityNoDuplicatesOrLoss — the safety property the
-// implementation rests on. A publish racing a SubscribeWithReplay
-// must land in EXACTLY ONE of (snapshot, channel): never both
-// (duplicate) and never neither (lost event). Verifies by running
-// many concurrent publish/subscribe pairs and asserting union ==
-// dispatched, intersection == empty.
+// TestSessionPublishSubscribeAtomicity is the safety property the
+// resumable-stream design rests on: a publish racing a
+// SubscribeWithReplay must land in EXACTLY ONE of (snapshot, channel)
+// — never both (duplicate) and never neither (lost). Race detector
+// catches sloppy reads on s.subs / s.ring; this test pins the
+// application-level contract by running many concurrent
+// publish/subscribe pairs and asserting per-event count == 1 across
+// the union.
 //
-// Race detector catches sloppy reads on s.subs / s.ring; this test
-// pins the application-level contract.
-func TestSubscribeAtomicityNoDuplicatesOrLoss(t *testing.T) {
+// Kept separate from TestSessionSubscribeWithReplay because it's a
+// race-property fuzz, not a scenario-shaped table row.
+func TestSessionPublishSubscribeAtomicity(t *testing.T) {
 	const trials = 50
 	for trial := 0; trial < trials; trial++ {
 		s := newTestSession()
@@ -231,10 +303,8 @@ func TestSubscribeAtomicityNoDuplicatesOrLoss(t *testing.T) {
 			seen[ev.ID]++
 		}
 
-		// Wait for the publisher to finish then drain the live channel.
 		wg.Wait()
 
-		// Drain whatever's already buffered without waiting for more.
 	drain:
 		for {
 			select {
@@ -246,12 +316,11 @@ func TestSubscribeAtomicityNoDuplicatesOrLoss(t *testing.T) {
 		}
 		cancel()
 
-		// Every published event must appear in the union; no event
-		// should appear twice. We can't assert that EVERY event
-		// arrives — the channel buffer is finite so a
-		// permanently-stuck consumer can drop. But for this test the
-		// publisher and consumer are both fast, so dropping is
-		// unlikely and a count of 1 is the per-event invariant.
+		// Every observed event must appear exactly once across the
+		// union. We can't assert every event is observed — the
+		// channel buffer is finite so a permanently-stuck consumer
+		// can drop — but for fast publishers + consumers like this
+		// test, count != 1 is a real bug.
 		for id, count := range seen {
 			if count != 1 {
 				t.Fatalf(
@@ -260,89 +329,5 @@ func TestSubscribeAtomicityNoDuplicatesOrLoss(t *testing.T) {
 				)
 			}
 		}
-	}
-}
-
-// TestPublishFanOutToMultipleSubscribers — the basic correctness check
-// for multi-subscriber semantics. Two subscribers, both should see
-// every published event. Without this, a future "I'll switch RWMutex
-// for sync.Map" refactor could silently break fan-out for one of the
-// two subscriber slots.
-func TestPublishFanOutToMultipleSubscribers(t *testing.T) {
-	s := newTestSession()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	chA := s.Subscribe(ctx)
-	chB := s.Subscribe(ctx)
-
-	const n = 5
-	for i := 0; i < n; i++ {
-		s.Publish(Event{Kind: EventText})
-	}
-
-	collect := func(ch <-chan Event) []uint64 {
-		var ids []uint64
-		for i := 0; i < n; i++ {
-			select {
-			case ev := <-ch:
-				ids = append(ids, ev.ID)
-			case <-time.After(time.Second):
-				t.Fatalf("subscriber timed out at event %d/%d", i+1, n)
-			}
-		}
-		return ids
-	}
-
-	idsA := collect(chA)
-	idsB := collect(chB)
-
-	for i, id := range idsA {
-		if id != uint64(i+1) {
-			t.Fatalf("A[%d] = %d, want %d", i, id, i+1)
-		}
-		if idsB[i] != id {
-			t.Fatalf("B[%d] = %d, A[%d] = %d (must match)", i, idsB[i], i, id)
-		}
-	}
-}
-
-// TestUnsubscribeRemovesChannel — ctx cancellation must detach the
-// channel from the fan-out so a slow consumer that's gone away
-// doesn't get its buffer kept full of events forever. Verifies by
-// canceling, publishing more, and asserting the channel receives no
-// further events.
-func TestUnsubscribeRemovesChannel(t *testing.T) {
-	s := newTestSession()
-	ctx, cancel := context.WithCancel(context.Background())
-	ch := s.Subscribe(ctx)
-
-	s.Publish(Event{Kind: EventText})
-	<-ch // drain the one event
-
-	cancel()
-	// Wait for the unsubscribe goroutine to remove ch.
-	deadline := time.Now().Add(time.Second)
-	for {
-		s.subMu.Lock()
-		n := len(s.subs)
-		s.subMu.Unlock()
-		if n == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("subscribers not detached after cancel; %d remain", n)
-		}
-		time.Sleep(time.Millisecond)
-	}
-
-	// Publish after cancel; the closed channel should drain without
-	// further events (ranging exits when channel is closed).
-	s.Publish(Event{Kind: EventText})
-	count := 0
-	for range ch {
-		count++
-	}
-	if count != 0 {
-		t.Fatalf("got %d post-cancel events, want 0", count)
 	}
 }

@@ -23,7 +23,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,18 +32,18 @@ import (
 	"github.com/retr0h/meshx/internal/session"
 )
 
-// newMessagesHarness mirrors newSSEHarness but pre-seeds State.Messages
-// with a fixed DM-vs-broadcast mix so tests can assert on the ?dm=
-// filter without driving ApplyText.
+// newMessagesHarness pre-seeds State.Messages with a fixed
+// DM-vs-broadcast mix so tests can assert on the ?dm= filter without
+// driving ApplyText.
 //
-// Layout (in chronological order):
+// Layout (chronological):
 //
 //	row 0: broadcast inbound from peer A
 //	row 1: DM to me (inbound)
 //	row 2: my outbound broadcast
 //	row 3: my outbound DM to peer B
-//	row 4: DM between two other peers (e.g. relayed traffic we observe)
-func newMessagesHarness(t *testing.T) (*httptest.Server, *session.Session) {
+//	row 4: DM between two other peers (relayed traffic we observe)
+func newMessagesHarness(t *testing.T) *httptest.Server {
 	t.Helper()
 	s := New(Config{Radios: NewRegistry()})
 	sess := session.New(nil, nil, nil)
@@ -74,52 +73,28 @@ func newMessagesHarness(t *testing.T) (*httptest.Server, *session.Session) {
 	s.radios.Add(sess.State.RadioID, sess)
 	srv := httptest.NewServer(s.http.Handler)
 	t.Cleanup(srv.Close)
-	return srv, sess
+	return srv
 }
 
-func getMessagesBody(t *testing.T, url string) []mdl.MessageItem {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d: %s", resp.StatusCode, body)
-	}
-	var out struct {
-		Messages []mdl.MessageItem `json:"messages"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	return out.Messages
-}
-
-// TestListMessagesDMFilter is the single behavior-as-table covering
-// the new ?dm= query param. Each row states the filter value and
-// the message texts we expect back, in order. Adding a new filter
-// mode is one row.
-func TestListMessagesDMFilter(t *testing.T) {
+// TestEndpointListMessages — GET /radios/{id}/messages with the ?dm=
+// and ?limit= query params. One row per scenario; rows that expect
+// 200 OK assert the returned message texts in order, rows that
+// expect a non-2xx skip the body check.
+func TestEndpointListMessages(t *testing.T) {
 	t.Parallel()
 
-	srv, _ := newMessagesHarness(t)
+	srv := newMessagesHarness(t)
 
 	cases := []struct {
-		name     string
-		query    string
-		wantText []string
+		name       string
+		query      string
+		wantStatus int
+		wantText   []string // ignored when wantStatus != 200
 	}{
 		{
-			name:  "empty-filter-returns-all",
-			query: "",
+			name:       "empty-filter-returns-everything-in-order",
+			query:      "",
+			wantStatus: http.StatusOK,
 			wantText: []string{
 				"broadcast from A",
 				"DM from A to me",
@@ -129,71 +104,71 @@ func TestListMessagesDMFilter(t *testing.T) {
 			},
 		},
 		{
-			name:     "dm-1-returns-every-peer-addressed-row",
-			query:    "?dm=1",
-			wantText: []string{"DM from A to me", "my DM to B", "DM peer C → peer B"},
+			name:       "dm-1-returns-every-peer-addressed-row",
+			query:      "?dm=1",
+			wantStatus: http.StatusOK,
+			wantText:   []string{"DM from A to me", "my DM to B", "DM peer C → peer B"},
 		},
 		{
-			name:     "dm-mine-returns-only-my-thread",
-			query:    "?dm=mine",
-			wantText: []string{"DM from A to me", "my DM to B"},
+			name:       "dm-mine-returns-only-my-thread",
+			query:      "?dm=mine",
+			wantStatus: http.StatusOK,
+			wantText:   []string{"DM from A to me", "my DM to B"},
+		},
+		{
+			// limit applies AFTER the dm filter — otherwise a noisy
+			// channel could push DMs out of the tail even though the
+			// caller asked specifically for DMs.
+			name:       "limit-applies-after-dm-filter",
+			query:      "?dm=1&limit=2",
+			wantStatus: http.StatusOK,
+			wantText:   []string{"my DM to B", "DM peer C → peer B"},
+		},
+		{
+			// Huma's enum:",1,mine" rejects anything else with 422
+			// before the handler runs.
+			name:       "rejects-unknown-dm-value-with-422",
+			query:      "?dm=bogus",
+			wantStatus: http.StatusUnprocessableEntity,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := getMessagesBody(t, srv.URL+"/radios/0xabcdef01/messages"+tc.query)
-			if len(got) != len(tc.wantText) {
-				t.Fatalf("len(got) = %d, want %d", len(got), len(tc.wantText))
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(
+				ctx, http.MethodGet,
+				srv.URL+"/radios/0xabcdef01/messages"+tc.query, nil,
+			)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("do: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.wantStatus)
+			}
+			if tc.wantStatus != http.StatusOK {
+				return
+			}
+			var out struct {
+				Messages []mdl.MessageItem `json:"messages"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(out.Messages) != len(tc.wantText) {
+				t.Fatalf("len(messages) = %d, want %d", len(out.Messages), len(tc.wantText))
 			}
 			for i, want := range tc.wantText {
-				if got[i].Text != want {
-					t.Fatalf("messages[%d].Text = %q, want %q", i, got[i].Text, want)
+				if out.Messages[i].Text != want {
+					t.Fatalf("messages[%d].Text = %q, want %q", i, out.Messages[i].Text, want)
 				}
 			}
 		})
-	}
-}
-
-// TestListMessagesDMFilterWithLimit verifies the limit window
-// applies AFTER the DM filter, not before — otherwise a noisy
-// channel could push a DM out of the limited tail even though the
-// caller specifically asked for DMs.
-func TestListMessagesDMFilterWithLimit(t *testing.T) {
-	t.Parallel()
-	srv, _ := newMessagesHarness(t)
-	got := getMessagesBody(t, srv.URL+"/radios/0xabcdef01/messages?dm=1&limit=2")
-	if len(got) != 2 {
-		t.Fatalf("len(got) = %d, want 2", len(got))
-	}
-	// Tail of the DM-filtered slice = last two DMs in chronological order.
-	want := []string{"my DM to B", "DM peer C → peer B"}
-	for i, w := range want {
-		if got[i].Text != w {
-			t.Fatalf("messages[%d].Text = %q, want %q", i, got[i].Text, w)
-		}
-	}
-}
-
-// TestListMessagesUnknownDMValue — Huma's enum:",1,mine" should
-// reject anything else with a 422 before the handler runs, so a
-// typo'd value can't silently fall through to the permissive
-// default.
-func TestListMessagesUnknownDMValue(t *testing.T) {
-	t.Parallel()
-	srv, _ := newMessagesHarness(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(
-		ctx, http.MethodGet,
-		srv.URL+"/radios/0xabcdef01/messages?dm=bogus", nil,
-	)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422", resp.StatusCode)
 	}
 }

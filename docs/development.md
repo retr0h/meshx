@@ -560,9 +560,13 @@ A "public surface" is:
 - A meaningful behavior on a public function (one
   `Test<FunctionDescribingBehavior>` per behavior).
 
-Each test function is a single `[]struct{name, ...}` table covering **every
-distinct scenario** for that surface — happy path AND every distinct failure
-mode. Adding a new scenario is one row; the assertion logic stays shared.
+Scenarios go in a single `[]struct{name, ...}` table when their mechanics are
+uniform — same setup, same act/assert shape, different inputs and expectations.
+When scenarios genuinely diverge in mechanics (one tests cancellation, another
+tests delivery), use `t.Run("scenario-name", func(t *testing.T) { ... })`
+sub-tests under the same parent. **The unifying principle: one parent function
+per public surface — never multiple top-level `TestXHappyPath` / `TestXFailure`
+functions.**
 
 ```go
 func TestEndpointSendMessage(t *testing.T) {

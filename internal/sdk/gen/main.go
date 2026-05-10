@@ -20,12 +20,11 @@
 
 //go:build ignore
 
-// dumpspec writes the daemon's OpenAPI 3.0 spec to a file without
-// firing up a listener — replaces the legacy "spawn daemon, curl
-// localhost, save yaml" regen dance. Invoked via go:generate from
-// internal/sdk/gen/generate.go ahead of the oapi-codegen step, so
-// `just generate` runs end-to-end with no background daemon and
-// no port allocation.
+// main.go extracts the daemon's OpenAPI 3.0 spec directly from
+// Huma in-process and writes it to api.yaml — no listener, no port
+// allocation, no curl. Invoked via go:generate from generate.go
+// ahead of the oapi-codegen step, so `just generate` runs
+// end-to-end with no background daemon.
 //
 // Build-tagged "ignore" so `go build` and `go test` skip it; only
 // the generate directive (which uses `go run`) compiles it. Same

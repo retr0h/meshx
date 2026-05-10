@@ -303,7 +303,15 @@ type ApplyTextResult struct {
 // text body is the caller's concern (lives in TUI today; daemon
 // passes pre-sanitized text or ignores cleanup).
 func (s *Session) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) ApplyTextResult {
-	defer s.PublishText(ev)
+	// Inbound DMs addressed to MyNodeNum fire dm_received; channel
+	// broadcasts (and pre-handshake packets where MyNodeNum=0) fire
+	// text. Mutually exclusive — agents subscribe to whichever they
+	// care about without filtering the firehose.
+	if s.State.MyNodeNum != 0 && ev.ToNum == s.State.MyNodeNum {
+		defer s.PublishDMReceived(ev)
+	} else {
+		defer s.PublishText(ev)
+	}
 	body := ev.Body
 	defaultLong, _ := mdl.DefaultCallsign(body.FromNum)
 	from := defaultLong

@@ -28,6 +28,12 @@ package model
 
 import "time"
 
+// BroadcastNum is the firmware-canonical "everyone on this channel"
+// recipient address — MeshPacket.to == 0xFFFFFFFF. Compared against
+// MessageItem.ToNum / Text.ToNum to distinguish broadcasts from
+// peer-addressed DMs.
+const BroadcastNum uint32 = 0xFFFFFFFF
+
 // MessageStatus is a string-typed enum for Message.Status — the wire
 // form (HTTP/SSE JSON), the persistence form (SQLite messages.status
 // TEXT column), and the in-memory form are all the same string. Using

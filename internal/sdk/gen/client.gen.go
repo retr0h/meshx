@@ -95,6 +95,27 @@ func (e MessageStatusUpdateStatus) Valid() bool {
 	}
 }
 
+// Defines values for ListMessagesParamsDm.
+const (
+	Empty ListMessagesParamsDm = ""
+	Mine  ListMessagesParamsDm = "mine"
+	N1    ListMessagesParamsDm = "1"
+)
+
+// Valid indicates whether the value is a known member of the ListMessagesParamsDm enum.
+func (e ListMessagesParamsDm) Valid() bool {
+	switch e {
+	case Empty:
+		return true
+	case Mine:
+		return true
+	case N1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Acker defines model for Acker.
 type Acker struct {
 	// At time the Routing reply landed locally
@@ -791,7 +812,13 @@ type EventsStreamParams struct {
 type ListMessagesParams struct {
 	// Limit max rows to return; 0 = no limit
 	Limit *int64 `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Dm DM filter; '' = all rows, '1' = peer-addressed DMs (either direction), 'mine' = DMs to/from my_node_num. Use to skip channel-firehose filtering on the client side
+	Dm *ListMessagesParamsDm `form:"dm,omitempty" json:"dm,omitempty"`
 }
+
+// ListMessagesParamsDm defines parameters for ListMessages.
+type ListMessagesParamsDm string
 
 // SendMessageParams defines parameters for SendMessage.
 type SendMessageParams struct {
@@ -1815,6 +1842,18 @@ func NewListMessagesRequest(server string, radioId string, params *ListMessagesP
 		if params.Limit != nil {
 
 			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: "int64"}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Dm != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "dm", *params.Dm, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {

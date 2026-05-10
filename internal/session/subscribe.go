@@ -67,6 +67,7 @@ const (
 	EventDisconnected   = "disconnected"
 	EventTransportError = "transport_error"
 	EventMessageStatus  = "message_status"
+	EventDMReceived     = "dm_received"
 )
 
 // subscriberBuffer is the per-subscriber channel depth. Big enough
@@ -211,9 +212,24 @@ func (s *Session) ringSinceLocked(sinceID uint64) []Event {
 	return out
 }
 
-// PublishText is the typed shortcut for an mdl.Text event.
+// PublishText is the typed shortcut for an mdl.Text event —
+// channel broadcasts only. Inbound DMs addressed to MyNodeNum fire
+// PublishDMReceived instead so consumers can subscribe to one or
+// the other without filtering the firehose.
 func (s *Session) PublishText(t mdl.Text) Event {
 	ev := Event{Kind: EventText, Data: t}
+	s.Publish(ev)
+	return ev
+}
+
+// PublishDMReceived is the typed shortcut for an inbound DM —
+// payload shape matches mdl.Text but the event kind is
+// dm_received so consumers can target only DMs without parsing
+// every text packet to check ToNum. Mutually exclusive with
+// PublishText: a TEXT_MESSAGE_APP packet fires exactly one of the
+// two.
+func (s *Session) PublishDMReceived(t mdl.Text) Event {
+	ev := Event{Kind: EventDMReceived, Data: t}
 	s.Publish(ev)
 	return ev
 }

@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,17 @@ import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/session"
 )
+
+// reflectTypeName is a tiny indirection so the typeMap-collision
+// guard reads cleanly without spreading reflect imports through
+// the table-driven callers.
+func reflectTypeName(v any) string {
+	t := reflect.TypeOf(v)
+	if t == nil {
+		return "<nil>"
+	}
+	return t.PkgPath() + "." + t.Name()
+}
 
 // httptest harness — spins up an httptest.Server backed by the same
 // *Server production uses, registers a *session.Session under a
@@ -314,6 +326,102 @@ func TestEventsStreamSinceZeroReplaysWholeBuffer(t *testing.T) {
 		if ev.id != wantIDs[i] {
 			t.Fatalf("event[%d].id = %q, want %q", i, ev.id, wantIDs[i])
 		}
+	}
+}
+
+// TestEventsTypeMapHasDistinctTypes guards against the regression
+// that produced this file's existence: Huma's sse typeMap is keyed
+// by reflect.Type, so two map entries pointing at the same Go type
+// race on map iteration order and the loser's event name silently
+// becomes unreachable. This test enumerates eventsTypeMap and fails
+// if any two entries share a Go type — catching the next time
+// someone adds an event variant that reuses an existing payload
+// shape without a distinct named type.
+func TestEventsTypeMapHasDistinctTypes(t *testing.T) {
+	t.Parallel()
+	seen := make(map[string]string, len(eventsTypeMap))
+	for name, val := range eventsTypeMap {
+		typeName := reflectTypeName(val)
+		if prev, ok := seen[typeName]; ok {
+			t.Fatalf(
+				"events typeMap collision: %q and %q both map to Go type %q — "+
+					"define a distinct named type (e.g. `type DM Text`) so the "+
+					"sse typeMap can route both event names",
+				prev, name, typeName,
+			)
+		}
+		seen[typeName] = name
+	}
+}
+
+// TestEventsStreamDMReceivedFiresOwnEventName drives the full
+// inbound-DM path end-to-end (ApplyText → Publish → SSE) and
+// asserts the wire event name is `dm_received` rather than `text`.
+// The earlier broadcast-only smoke test missed this because it
+// published mdl.Text directly via PublishText, bypassing the
+// branching in ApplyText.
+func TestEventsStreamDMReceivedFiresOwnEventName(t *testing.T) {
+	h := newSSEHarness(t)
+	const myNum = uint32(0xdeadbeef)
+	const peer = uint32(0xc0ffee)
+	h.session.State.MyNodeNum = myNum
+
+	done := make(chan []sseEvent, 1)
+	go func() {
+		done <- readNSSEEvents(t, h.eventsURL(""), nil, 1, 3*time.Second)
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	h.session.ApplyText(mdl.Text{
+		Channel: 0,
+		ToNum:   myNum,
+		Body: mdl.Message{
+			FromNum:  peer,
+			Text:     "hi from peer",
+			PacketID: 99,
+			SentAt:   time.Now(),
+		},
+	}, "hi from peer", false)
+
+	events := <-done
+	if got := len(events); got != 1 {
+		t.Fatalf("len(events) = %d, want 1", got)
+	}
+	if events[0].event != "dm_received" {
+		t.Fatalf("event = %q, want \"dm_received\"", events[0].event)
+	}
+}
+
+// TestEventsStreamBroadcastFiresTextEventName is the matching
+// negative case — a broadcast (ToNum=BroadcastNum) must come out
+// as text, not dm_received.
+func TestEventsStreamBroadcastFiresTextEventName(t *testing.T) {
+	h := newSSEHarness(t)
+	h.session.State.MyNodeNum = 0xdeadbeef
+
+	done := make(chan []sseEvent, 1)
+	go func() {
+		done <- readNSSEEvents(t, h.eventsURL(""), nil, 1, 3*time.Second)
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	h.session.ApplyText(mdl.Text{
+		Channel: 0,
+		ToNum:   mdl.BroadcastNum,
+		Body: mdl.Message{
+			FromNum:  0xc0ffee,
+			Text:     "channel chat",
+			PacketID: 100,
+			SentAt:   time.Now(),
+		},
+	}, "channel chat", false)
+
+	events := <-done
+	if got := len(events); got != 1 {
+		t.Fatalf("len(events) = %d, want 1", got)
+	}
+	if events[0].event != "text" {
+		t.Fatalf("event = %q, want \"text\"", events[0].event)
 	}
 }
 

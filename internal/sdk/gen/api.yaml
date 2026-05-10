@@ -180,6 +180,26 @@ components:
     ConfigComplete:
       additionalProperties: false
       type: object
+    DM:
+      additionalProperties: false
+      properties:
+        Body:
+          $ref: "#/components/schemas/Message"
+        Channel:
+          format: int64
+          type: integer
+        RSSI:
+          type: string
+        ToNum:
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+        - Channel
+        - ToNum
+        - RSSI
+        - Body
+      type: object
     DeviceConfig:
       additionalProperties: false
       properties:
@@ -1691,6 +1711,24 @@ paths:
                       type: object
                     - properties:
                         data:
+                          $ref: "#/components/schemas/DM"
+                        event:
+                          const: dm_received
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event dm_received
+                      type: object
+                    - properties:
+                        data:
                           $ref: "#/components/schemas/EnvMetrics"
                         event:
                           const: env_metrics
@@ -1956,6 +1994,17 @@ paths:
             description: max rows to return; 0 = no limit
             format: int64
             type: integer
+        - description: DM filter; '' = all rows, '1' = peer-addressed DMs (either direction), 'mine' = DMs to/from my_node_num. Use to skip channel-firehose filtering on the client side
+          explode: false
+          in: query
+          name: dm
+          schema:
+            description: DM filter; '' = all rows, '1' = peer-addressed DMs (either direction), 'mine' = DMs to/from my_node_num. Use to skip channel-firehose filtering on the client side
+            enum:
+              - ""
+              - "1"
+              - mine
+            type: string
       responses:
         "200":
           content:

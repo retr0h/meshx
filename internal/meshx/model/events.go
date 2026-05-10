@@ -51,6 +51,14 @@ type Text struct {
 	Body    Message
 }
 
+// DM is the SSE wire shape for inbound DMs (kind: dm_received).
+// Structurally identical to Text — same fields, same JSON output —
+// but a distinct Go type so Huma's sse typeMap can register
+// dm_received without colliding with the text mapping. (Two
+// typeMap entries with the same Go type race on Go map iteration
+// order; whichever name "wins" is non-deterministic.)
+type DM Text
+
 // MyInfo delivers MyNodeInfo — our own node number, used to resolve
 // self vs peer and to claim the radio identity in storage.
 type MyInfo struct {

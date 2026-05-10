@@ -256,12 +256,35 @@ func (s *Server) handleListNodes(_ context.Context, in *listNodesInput) (*listNo
 
 type listMessagesInput struct {
 	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
-	Limit   int    `                doc:"max rows to return; 0 = no limit"             query:"limit" default:"0"`
+	Limit   int    `                doc:"max rows to return; 0 = no limit"                                                                                                                                   query:"limit" default:"0"`
+	DM      string `                doc:"DM filter; '' = all rows, '1' = peer-addressed DMs (either direction), 'mine' = DMs to/from my_node_num. Use to skip channel-firehose filtering on the client side" query:"dm"                enum:",1,mine"`
 }
 
 type listMessagesOutput struct {
 	Body struct {
 		Messages []mdl.MessageItem `json:"messages"`
+	}
+}
+
+// matchesDMFilter reports whether a row passes the ?dm= query
+// filter. "" = no filter (every row). "1" = any peer-addressed DM
+// (ToNum is a specific peer, not broadcast / unset). "mine" = DMs
+// I'm a participant in (incoming-to-me OR outgoing-by-me to a
+// specific peer). Other values are rejected by the input enum so
+// this falls through to a permissive default.
+func matchesDMFilter(m mdl.MessageItem, mode string, myNodeNum uint32) bool {
+	switch mode {
+	case "":
+		return true
+	case "1":
+		return m.ToNum != 0 && m.ToNum != mdl.BroadcastNum
+	case "mine":
+		if myNodeNum != 0 && m.ToNum == myNodeNum {
+			return true
+		}
+		return m.Mine && m.ToNum != 0 && m.ToNum != mdl.BroadcastNum
+	default:
+		return true
 	}
 }
 
@@ -280,6 +303,15 @@ func (s *Server) handleListMessages(
 		return out, nil
 	}
 	msgs := st.Messages
+	if in.DM != "" {
+		filtered := make([]mdl.MessageItem, 0, len(msgs))
+		for _, m := range msgs {
+			if matchesDMFilter(m, in.DM, st.MyNodeNum) {
+				filtered = append(filtered, m)
+			}
+		}
+		msgs = filtered
+	}
 	if in.Limit > 0 && len(msgs) > in.Limit {
 		msgs = msgs[len(msgs)-in.Limit:]
 	}

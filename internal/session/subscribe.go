@@ -227,9 +227,11 @@ func (s *Session) PublishText(t mdl.Text) Event {
 // dm_received so consumers can target only DMs without parsing
 // every text packet to check ToNum. Mutually exclusive with
 // PublishText: a TEXT_MESSAGE_APP packet fires exactly one of the
-// two.
+// two. Wire payload is mdl.DM (a distinct Go type with identical
+// fields) so Huma's sse typeMap can route dm_received without
+// colliding with text.
 func (s *Session) PublishDMReceived(t mdl.Text) Event {
-	ev := Event{Kind: EventDMReceived, Data: t}
+	ev := Event{Kind: EventDMReceived, Data: mdl.DM(t)}
 	s.Publish(ev)
 	return ev
 }

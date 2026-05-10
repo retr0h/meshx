@@ -221,6 +221,14 @@ type ChannelShareResult struct {
 // ConfigComplete defines model for ConfigComplete.
 type ConfigComplete = map[string]interface{}
 
+// DM defines model for DM.
+type DM struct {
+	Body    Message `json:"Body"`
+	Channel int64   `json:"Channel"`
+	RSSI    string  `json:"RSSI"`
+	ToNum   int64   `json:"ToNum"`
+}
+
 // DeviceConfig defines model for DeviceConfig.
 type DeviceConfig struct {
 	Role string `json:"Role"`

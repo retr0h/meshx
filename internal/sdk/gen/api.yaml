@@ -180,6 +180,26 @@ components:
     ConfigComplete:
       additionalProperties: false
       type: object
+    DM:
+      additionalProperties: false
+      properties:
+        Body:
+          $ref: "#/components/schemas/Message"
+        Channel:
+          format: int64
+          type: integer
+        RSSI:
+          type: string
+        ToNum:
+          format: int64
+          minimum: 0
+          type: integer
+      required:
+        - Channel
+        - ToNum
+        - RSSI
+        - Body
+      type: object
     DeviceConfig:
       additionalProperties: false
       properties:
@@ -1691,7 +1711,7 @@ paths:
                       type: object
                     - properties:
                         data:
-                          $ref: "#/components/schemas/Text"
+                          $ref: "#/components/schemas/DM"
                         event:
                           const: dm_received
                           description: The event name.

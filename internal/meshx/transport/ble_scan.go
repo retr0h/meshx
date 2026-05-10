@@ -52,7 +52,7 @@ type BLESighting struct {
 // deduplicated set.
 func ScanBLE(timeout time.Duration) ([]BLESighting, error) {
 	adapter := bluetooth.DefaultAdapter
-	if err := adapter.Enable(); err != nil {
+	if err := enableBLEAdapterOnce(adapter); err != nil {
 		return nil, fmt.Errorf("enable bluetooth adapter: %w", err)
 	}
 

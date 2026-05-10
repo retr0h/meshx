@@ -291,8 +291,8 @@ Two-stage regen, both invoked by `just generate` — no daemon required:
 
 1. `internal/sdk/gen/main.go` (build-tagged `ignore`, same pattern as
    `internal/tui/emoji/main.go`) imports `internal/server`, calls
-   `Server.OpenAPISpec()` to pull the spec straight from Huma in-process,
-   writes `api.yaml`.
+   `Server.OpenAPISpec()` to pull the spec straight from Huma in-process, writes
+   `api.yaml`.
 2. `oapi-codegen` runs against `api.yaml` + `cfg.yaml` to produce
    `client.gen.go`.
 
@@ -302,9 +302,9 @@ just generate                # runs both stages via `go generate ./...`
 
 Drift is enforced by `TestAPISpecMatchesVendoredCopy` (in
 `internal/server/spec_test.go`), which fails `just test` if the on-disk
-`api.yaml` doesn't match what the in-process daemon would emit. Breaking
-changes are caught in CI by `oasdiff` between the PR branch's `api.yaml`
-and main's — see `.github/workflows/go.yml`.
+`api.yaml` doesn't match what the in-process daemon would emit. Breaking changes
+are caught in CI by `oasdiff` between the PR branch's `api.yaml` and main's —
+see `.github/workflows/go.yml`.
 
 `internal/sdk/gen/cfg.yaml` configures oapi-codegen
 (`generate.models: true, client: true`); `client.gen.go` is checked in so

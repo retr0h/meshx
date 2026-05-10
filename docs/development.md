@@ -545,48 +545,123 @@ Manual checklists rot; automated tests don't. If a behavior genuinely cannot be
 tested (real-radio integration, browser-only EventSource semantics, hardware
 reset), call it out explicitly — don't bury it.
 
+### The shape rule (non-negotiable)
+
+**One test function per public surface. Scenarios are rows in a single table.**
+Don't write `TestFooHappyPath`, `TestFooMissingField`, `TestFooNotFound` as
+three separate functions — those are three rows of `TestFoo`. Ad-hoc one-off
+test functions sprawled across files are forbidden; consistency is the goal.
+
+A "public surface" is:
+
+- An HTTP route (one `TestEndpoint<OperationID>` per route registered in
+  `routes.go`).
+- An exported type's public method (one `Test<Type><Method>` per method).
+- A meaningful behavior on a public function (one
+  `Test<FunctionDescribingBehavior>` per behavior).
+
+Each test function is a single `[]struct{name, ...}` table covering **every
+distinct scenario** for that surface — happy path AND every distinct failure
+mode. Adding a new scenario is one row; the assertion logic stays shared.
+
+```go
+func TestEndpointSendMessage(t *testing.T) {
+    t.Parallel()
+
+    cases := []struct {
+        name       string
+        body       any
+        wantStatus int
+        wantBody   func(t *testing.T, body []byte)
+    }{
+        {
+            name:       "happy-path-broadcast",
+            body:       SendMessageRequest{Channel: 0, Text: "hi"},
+            wantStatus: http.StatusOK,
+            wantBody: func(t *testing.T, body []byte) {
+                var got SendMessageResult
+                require.NoError(t, json.Unmarshal(body, &got))
+                require.NotZero(t, got.PacketID)
+                require.True(t, got.OK)
+            },
+        },
+        {
+            name:       "happy-path-dm-with-to_num",
+            // …
+        },
+        {
+            name:       "rejects-empty-text-422",
+            body:       SendMessageRequest{Channel: 0, Text: ""},
+            wantStatus: http.StatusUnprocessableEntity,
+        },
+        {
+            name:       "rejects-unknown-radio-404",
+            // …
+        },
+    }
+    for _, tc := range cases {
+        t.Run(tc.name, func(t *testing.T) { /* shared act/assert */ })
+    }
+}
+```
+
 ### Tooling
 
 - **`testing` + `testify/require`** for unit tests. Standard library first;
   reach for `testify` only when an assertion would otherwise need a long custom
   message.
-- **`net/http/httptest`** for HTTP and SSE endpoints — `internal/server` routes
-  are exercised by spinning up `httptest.NewServer` against the same `*Server`
-  production uses. No fake handlers, no parallel mock router.
+- **`net/http/httptest`** for every HTTP and SSE endpoint —
+  `httptest.NewServer(s.http.Handler)` against the same `*Server` production
+  uses. No fake handlers, no parallel mock router.
 - **In-process `*session.Session`** (constructed via
   `session.New(nil, nil, nil)`) for testing the apply / publish / subscribe
   paths without a real radio. Inject events via `Session.Publish`; assert on
-  `Subscribe` / `SubscribeWithReplay` output.
+  `Subscribe` / `SubscribeWithReplay` output. For radio-dispatch verification
+  (commands reaching the pump), satisfy `session.Pump` with a fake that captures
+  dispatched commands — see `fakePump` in
+  `internal/server/handlers_radio_ops_test.go` for the canonical shape.
 - **Race detector** — `go test -race ./...` for anything with goroutines
   (Subscribe, Pump, the SSE handler). Cheapest way to catch a slipped lock.
 
-### Structure
+### HTTP-specific rules
 
-- **Prefer table-driven tests.** One test function per behavior, a
-  `[]struct{name, input, want}` table, `t.Run(tc.name, ...)` per row. Cuts the
-  failure-localization time from "which assertion in this 200-line function" to
-  "which row of the table."
+- **100% endpoint coverage.** Every route registered in
+  `internal/server/routes.go` has a dedicated `TestEndpoint*` test function with
+  happy-path + every distinct failure mode as table rows. If a route isn't
+  tested, the PR isn't done.
+- **Verify the wire shape on happy paths.** Every happy-path row decodes the
+  response body into the exported response type (`mdl.MessageItem`,
+  `SendMessageResult`, etc.) and asserts on key fields. Catches "we accidentally
+  renamed a JSON field" before the SDK regen does.
+- **Cover failure modes explicitly:** missing-required-field (422),
+  unknown-radio (404), bad path-param (400/422), buffer-full / pump-down (503),
+  validation rejects (422). One row per distinct failure.
+- **Test naming.** `TestEndpointListMessages`, `TestEndpointSendMessage`,
+  `TestEndpointMintChannel` — operation-id-shaped, predictable from the route
+  registration.
+
+### Other rules
+
 - **Test public-facing surfaces** — the HTTP route, the exported type, the wire
   shape. Internal-only helpers can be tested incidentally through their public
   callers; don't write a parallel test for every unexported function.
-- **Name tests after the behavior, not the function.**
-  `TestPublishAssignsMonotonicIDs` reads as documentation; `TestPublish` does
-  not.
 - **Bound waits.** Anything blocking takes
   `select { case … : case <-time.After(time.Second): t.Fatal("timed out") }`. A
   test that hangs the whole suite on regression is a bad test.
+- **No t.Skip on production code paths.** A test you skip is a regression you
+  ship.
 
 ### Test plan in PR descriptions
 
 The PR template's "Test plan" section is for **what the test suite covers**, not
-what the human needs to do:
+what the human needs to do. Reference the test names, not "checked locally":
 
 ```
 ## Test plan
 
-- [x] `TestEventsStreamReplaysFromCursor` — `?since=N` returns events N+1..head, then live
-- [x] `TestEventsStreamCursorBeyondBuffer` — cursor past head returns empty snapshot, live still works
-- [x] `TestSubscribeAtomicityNoDuplicatesOrLoss` — publish racing subscribe lands in exactly one of (snapshot, channel)
+- [x] `TestEndpointSendMessage` — happy paths (broadcast, DM via to_num, reply via reply_id) + failure rows (empty text, unknown radio, idempotency dedupe)
+- [x] `TestEndpointListMessages` — empty state, with limit, with ?dm=mine filter, unknown radio
+- [x] `TestSessionPublish` — monotonic IDs, fan-out to N subs, ring overflow keeps newest, cursor replay
 ```
 
 ### Running
@@ -594,7 +669,7 @@ what the human needs to do:
 ```bash
 just test                                    # full suite (lint + format + unit + coverage)
 go test -race ./...                          # all tests with race detector
-go test -run TestEventsStreamReplays ./internal/server/  # one test, verbose
+go test -run TestEndpointSendMessage ./internal/server/  # one test, verbose
 ```
 
 ## Color palette (Max Headroom)

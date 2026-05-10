@@ -22,8 +22,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -74,8 +76,20 @@ func init() {
 		"",
 		"transport target for the radio: /dev/cu.usb… | host:port | ble:<uuid>. Empty = serve with no radio attached.",
 	)
+	serverStartCmd.Flags().String(
+		"auth-token-file",
+		"",
+		"path to a bearer-token file. Read on startup; generated (32 random bytes hex, 0o600) on first run when missing. Required when --bind is non-loopback unless --auth-disabled is set. Clients send `Authorization: Bearer <token>`. /healthz is exempt.",
+	)
+	serverStartCmd.Flags().Bool(
+		"auth-disabled",
+		false,
+		"explicitly run without bearer-token auth even on a non-loopback bind. Only safe when an upstream proxy / VPN / firewall is doing access control — anyone reachable on the network can otherwise broadcast on the radio.",
+	)
 	_ = viper.BindPFlag("server.bind", serverStartCmd.Flags().Lookup("bind"))
 	_ = viper.BindPFlag("server.radio", serverStartCmd.Flags().Lookup("radio"))
+	_ = viper.BindPFlag("server.auth_token_file", serverStartCmd.Flags().Lookup("auth-token-file"))
+	_ = viper.BindPFlag("server.auth_disabled", serverStartCmd.Flags().Lookup("auth-disabled"))
 
 	serverCmd.AddCommand(serverStartCmd)
 }
@@ -83,13 +97,22 @@ func init() {
 func runServerStart(cmd *cobra.Command, _ []string) error {
 	bind := viper.GetString("server.bind")
 	radio := viper.GetString("server.radio")
+	authTokenFile := viper.GetString("server.auth_token_file")
+	authDisabled := viper.GetBool("server.auth_disabled")
 
 	log := logger.With(slog.String("subsystem", "server"))
+
+	authToken, err := resolveAuthToken(bind, authTokenFile, authDisabled, log)
+	if err != nil {
+		return err
+	}
+
 	log.Info(
 		"config",
 		slog.String("bind", bind),
 		slog.String("radio", radio),
 		slog.Bool("debug", viper.GetBool("debug")),
+		slog.Bool("auth", authToken != ""),
 	)
 
 	ctx, cancel := signal.NotifyContext(
@@ -180,6 +203,7 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		Pairer:     pairer,
 		USBScanner: usbScan,
 		Logger:     logger,
+		AuthToken:  authToken,
 	})
 
 	log.Info(
@@ -196,4 +220,62 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	return nil
+}
+
+// resolveAuthToken implements the bind-aware auth policy:
+//
+//   - --auth-disabled set:        no auth, regardless of bind.
+//   - token-file set:             load (or generate-on-first-run); auth on.
+//   - token-file unset, loopback: no auth (default for `127.0.0.1:4404`).
+//   - token-file unset, non-loop: ERROR — refuse to expose the radio
+//     unauthenticated. Operator must pass --auth-token-file or
+//     --auth-disabled explicitly.
+//
+// First-run token generation logs the plaintext token once at INFO so
+// the operator can copy it. Subsequent runs read silently.
+func resolveAuthToken(bind, tokenFile string, disabled bool, log *slog.Logger) (string, error) {
+	if disabled {
+		if !server.IsLoopbackBind(bind) {
+			log.Warn(
+				"auth disabled on non-loopback bind",
+				slog.String("bind", bind),
+				slog.String(
+					"hint",
+					"anyone reachable on the network can broadcast on the radio; ensure an upstream proxy / VPN / firewall enforces access control",
+				),
+			)
+		}
+		return "", nil
+	}
+	if tokenFile == "" {
+		if server.IsLoopbackBind(bind) {
+			return "", nil
+		}
+		return "", fmt.Errorf(
+			"--bind=%s is non-loopback but no --auth-token-file is set; "+
+				"pass --auth-token-file <path> (a token will be generated on first run) "+
+				"or --auth-disabled if access control lives upstream",
+			bind,
+		)
+	}
+	existed := true
+	if _, err := os.Stat(tokenFile); errors.Is(err, os.ErrNotExist) {
+		existed = false
+	}
+	token, err := server.LoadAuthToken(tokenFile)
+	if err != nil {
+		return "", fmt.Errorf("auth-token-file: %w", err)
+	}
+	if !existed {
+		log.Info(
+			"auth token generated",
+			slog.String("path", tokenFile),
+			slog.String("token", token),
+			slog.String(
+				"hint",
+				"save this; clients send `Authorization: Bearer <token>`. Subsequent server restarts read from the file silently.",
+			),
+		)
+	}
+	return token, nil
 }

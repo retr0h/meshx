@@ -35,8 +35,8 @@ import (
 )
 
 // fakePump captures every command Driver.Send dispatches so radio-op
-// handlers can be tested without a real radio. ctor returns a
-// session.Pump that satisfies the seam Session.Send forwards to.
+// handlers can be tested without a real radio. Satisfies the seam
+// session.Pump that Session.Send forwards to.
 type fakePump struct {
 	mu       sync.Mutex
 	commands []mdl.Command
@@ -66,9 +66,9 @@ func (p *fakePump) snapshot() []mdl.Command {
 	return out
 }
 
-// radioOpsHarness wires a Server with one Session that has a
-// fakePump attached, so handler dispatches reach the fake instead
-// of trying to talk to a real radio.
+// radioOpsHarness wires a Server with one Session that has a fakePump
+// attached, so handler dispatches reach the fake instead of trying to
+// talk to a real radio.
 func radioOpsHarness(t *testing.T) (*httptest.Server, *fakePump) {
 	t.Helper()
 	s := New(Config{Radios: NewRegistry()})
@@ -82,195 +82,169 @@ func radioOpsHarness(t *testing.T) (*httptest.Server, *fakePump) {
 	return srv, pump
 }
 
-// TestRadioOpsDispatchTypedCommand is the single behavior-as-table
-// covering all three new endpoints. Each row states the path, body,
-// and the model.Command we expect Driver.Send to receive. Adds a
-// fourth/fifth route in one row.
-func TestRadioOpsDispatchTypedCommand(t *testing.T) {
-	t.Parallel()
+// radioOpCase is the row shape shared by the three TestEndpoint
+// functions below. Each route's table covers its happy path, its
+// validation failures, and the unknown-radio gate in one place.
+type radioOpCase struct {
+	name       string
+	radioID    string // overrides default 0xabcdef01 (used for unknown-radio rows)
+	body       string // raw JSON body
+	wantStatus int
+	wantCmd    mdl.Command // expected mdl.Command on Send (if wantStatus == 202)
+	wantPID    bool        // response should echo non-zero packet_id
+}
 
-	cases := []struct {
-		name     string
-		path     string
-		body     any
-		wantCmd  mdl.Command
-		wantPID  bool // response should echo non-zero packet_id
-		wantBody string
-	}{
-		{
-			name:    "ping-dispatches-SendPing-with-target",
-			path:    "/ping",
-			body:    map[string]uint32{"to_num": 0xc0ffee},
-			wantCmd: mdl.SendPing{TargetNum: 0xc0ffee},
-			wantPID: true,
-		},
-		{
-			name:    "traceroute-dispatches-SendTraceroute-with-target",
-			path:    "/traceroute",
-			body:    map[string]uint32{"to_num": 0xc0ffee},
-			wantCmd: mdl.SendTraceroute{TargetNum: 0xc0ffee},
-			wantPID: true,
-		},
-		{
-			name:    "sync-dispatches-RequestSync-with-empty-body",
-			path:    "/sync",
-			body:    map[string]any{},
-			wantCmd: mdl.RequestSync{},
-			wantPID: false,
-		},
+func runRadioOpCase(t *testing.T, path string, tc radioOpCase) {
+	t.Helper()
+	srv, pump := radioOpsHarness(t)
+
+	radioID := tc.radioID
+	if radioID == "" {
+		radioID = "0xabcdef01"
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, pump := radioOpsHarness(t)
-			payload, err := json.Marshal(tc.body)
-			if err != nil {
-				t.Fatalf("marshal body: %v", err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			req, err := http.NewRequestWithContext(
-				ctx, http.MethodPost,
-				srv.URL+"/radios/0xabcdef01"+tc.path,
-				bytes.NewReader(payload),
-			)
-			if err != nil {
-				t.Fatalf("new request: %v", err)
-			}
-			req.Header.Set("content-type", "application/json")
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("do: %v", err)
-			}
-			defer func() { _ = resp.Body.Close() }()
-			if resp.StatusCode != http.StatusAccepted {
-				t.Fatalf("status = %d, want 202", resp.StatusCode)
-			}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		srv.URL+"/radios/"+radioID+path,
+		bytes.NewReader([]byte(tc.body)),
+	)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("content-type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != tc.wantStatus {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, tc.wantStatus)
+	}
 
-			cmds := pump.snapshot()
-			if got := len(cmds); got != 1 {
-				t.Fatalf("dispatched %d commands, want 1", got)
-			}
-			if cmds[0] != tc.wantCmd {
-				t.Fatalf("dispatched %#v, want %#v", cmds[0], tc.wantCmd)
-			}
+	cmds := pump.snapshot()
+	if tc.wantStatus != http.StatusAccepted {
+		if got := len(cmds); got != 0 {
+			t.Fatalf("dispatched %d commands on non-202; want pump untouched", got)
+		}
+		return
+	}
 
-			if tc.wantPID {
-				var body struct {
-					PacketID uint32 `json:"packet_id"`
-					OK       bool   `json:"ok"`
-				}
-				if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-					t.Fatalf("decode: %v", err)
-				}
-				if body.PacketID == 0 {
-					t.Fatalf("packet_id = 0, want non-zero")
-				}
-				if !body.OK {
-					t.Fatalf("ok = false, want true")
-				}
-			}
-		})
+	if got := len(cmds); got != 1 {
+		t.Fatalf("dispatched %d commands, want 1", got)
+	}
+	if cmds[0] != tc.wantCmd {
+		t.Fatalf("dispatched %#v, want %#v", cmds[0], tc.wantCmd)
+	}
+
+	if tc.wantPID {
+		var body struct {
+			PacketID uint32 `json:"packet_id"`
+			OK       bool   `json:"ok"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.PacketID == 0 {
+			t.Fatalf("packet_id = 0, want non-zero")
+		}
+		if !body.OK {
+			t.Fatalf("ok = false, want true")
+		}
 	}
 }
 
-// TestRadioOpsRejectMissingRequiredFields asserts Huma's validation
-// blocks malformed bodies before they hit Driver.Send. ping and
-// traceroute require to_num >= 1; sync has no required fields.
-func TestRadioOpsRejectMissingRequiredFields(t *testing.T) {
+// TestEndpointPing — POST /radios/{id}/ping. Happy path dispatches
+// SendPing to the pump and echoes a non-zero packet_id; validation
+// rejects to_num < 1 with 422; unknown radio_id returns 404.
+func TestEndpointPing(t *testing.T) {
 	t.Parallel()
-
-	cases := []struct {
-		name string
-		path string
-		body string
-	}{
+	cases := []radioOpCase{
 		{
-			name: "ping-rejects-zero-to_num",
-			path: "/ping",
-			body: `{"to_num":0}`,
+			name:       "dispatches-SendPing-with-target-and-echoes-packet-id",
+			body:       `{"to_num":12648430}`, // 0xc0ffee
+			wantStatus: http.StatusAccepted,
+			wantCmd:    mdl.SendPing{TargetNum: 0xc0ffee},
+			wantPID:    true,
 		},
 		{
-			name: "ping-rejects-missing-to_num",
-			path: "/ping",
-			body: `{}`,
+			name:       "rejects-zero-to_num-with-422",
+			body:       `{"to_num":0}`,
+			wantStatus: http.StatusUnprocessableEntity,
 		},
 		{
-			name: "traceroute-rejects-zero-to_num",
-			path: "/traceroute",
-			body: `{"to_num":0}`,
+			name:       "rejects-missing-to_num-with-422",
+			body:       `{}`,
+			wantStatus: http.StatusUnprocessableEntity,
 		},
 		{
-			name: "traceroute-rejects-missing-to_num",
-			path: "/traceroute",
-			body: `{}`,
+			name:       "returns-404-for-unknown-radio",
+			radioID:    "nope-no-such-radio",
+			body:       `{"to_num":1234}`,
+			wantStatus: http.StatusNotFound,
 		},
 	}
-
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, pump := radioOpsHarness(t)
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			req, _ := http.NewRequestWithContext(
-				ctx, http.MethodPost,
-				srv.URL+"/radios/0xabcdef01"+tc.path,
-				bytes.NewReader([]byte(tc.body)),
-			)
-			req.Header.Set("content-type", "application/json")
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("do: %v", err)
-			}
-			defer func() { _ = resp.Body.Close() }()
-			if resp.StatusCode != http.StatusUnprocessableEntity {
-				t.Fatalf("status = %d, want 422", resp.StatusCode)
-			}
-			if got := len(pump.snapshot()); got != 0 {
-				t.Fatalf("dispatched %d commands; expected pump untouched on 422", got)
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { runRadioOpCase(t, "/ping", tc) })
 	}
 }
 
-// TestRadioOpsReturn404ForUnknownRadio mirrors the existing
-// resolveRadio gate — hit the routes for a radio_id that isn't
-// registered, verify 404, verify nothing dispatched.
-func TestRadioOpsReturn404ForUnknownRadio(t *testing.T) {
+// TestEndpointTraceroute — POST /radios/{id}/traceroute. Same shape
+// as ping (target NodeNum required, packet_id correlator returned).
+func TestEndpointTraceroute(t *testing.T) {
 	t.Parallel()
-
-	cases := []struct {
-		name string
-		path string
-		body string
-	}{
-		{name: "ping", path: "/ping", body: `{"to_num":1234}`},
-		{name: "traceroute", path: "/traceroute", body: `{"to_num":1234}`},
-		{name: "sync", path: "/sync", body: `{}`},
+	cases := []radioOpCase{
+		{
+			name:       "dispatches-SendTraceroute-with-target-and-echoes-packet-id",
+			body:       `{"to_num":12648430}`,
+			wantStatus: http.StatusAccepted,
+			wantCmd:    mdl.SendTraceroute{TargetNum: 0xc0ffee},
+			wantPID:    true,
+		},
+		{
+			name:       "rejects-zero-to_num-with-422",
+			body:       `{"to_num":0}`,
+			wantStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:       "rejects-missing-to_num-with-422",
+			body:       `{}`,
+			wantStatus: http.StatusUnprocessableEntity,
+		},
+		{
+			name:       "returns-404-for-unknown-radio",
+			radioID:    "nope-no-such-radio",
+			body:       `{"to_num":1234}`,
+			wantStatus: http.StatusNotFound,
+		},
 	}
-
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			srv, pump := radioOpsHarness(t)
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			req, _ := http.NewRequestWithContext(
-				ctx, http.MethodPost,
-				srv.URL+"/radios/nope-no-such-radio"+tc.path,
-				bytes.NewReader([]byte(tc.body)),
-			)
-			req.Header.Set("content-type", "application/json")
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("do: %v", err)
-			}
-			defer func() { _ = resp.Body.Close() }()
-			if resp.StatusCode != http.StatusNotFound {
-				t.Fatalf("status = %d, want 404", resp.StatusCode)
-			}
-			if got := len(pump.snapshot()); got != 0 {
-				t.Fatalf("dispatched %d commands on unknown radio; want 0", got)
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { runRadioOpCase(t, "/traceroute", tc) })
+	}
+}
+
+// TestEndpointSync — POST /radios/{id}/sync. Fire-and-forget at the
+// wire level, so no required body fields and no packet_id correlator
+// in the response (the radio re-dumps its NodeDB / channels /
+// configs / Metadata, each arriving as its own SSE event).
+func TestEndpointSync(t *testing.T) {
+	t.Parallel()
+	cases := []radioOpCase{
+		{
+			name:       "dispatches-RequestSync-with-empty-body",
+			body:       `{}`,
+			wantStatus: http.StatusAccepted,
+			wantCmd:    mdl.RequestSync{},
+		},
+		{
+			name:       "returns-404-for-unknown-radio",
+			radioID:    "nope-no-such-radio",
+			body:       `{}`,
+			wantStatus: http.StatusNotFound,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { runRadioOpCase(t, "/sync", tc) })
 	}
 }

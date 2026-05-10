@@ -155,188 +155,198 @@ func (h *sseHarness) publishOne(label string) {
 	})
 }
 
-// formatInt64 is a hot-path helper that avoids importing fmt for one
-// integer-to-string conversion in test code. strconv would also
-// work; this stays dependency-light.
-func formatInt64(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
-}
+// TestEndpointEventsStream — GET /radios/{id}/events. Every row
+// follows the same shape: optionally pre-publish into the ring,
+// open the SSE stream with a query / headers, optionally publish
+// live events while the subscription is active, then assert on
+// the parsed SSE id / event-name lines. Mechanics are uniform so
+// scenarios live as table rows; the unknown-radio failure path
+// genuinely diverges (no events at all, just a body assertion) and
+// runs as a t.Run sub-test under the same parent.
+func TestEndpointEventsStream(t *testing.T) {
+	const myNum = uint32(0xdeadbeef)
+	const peer = uint32(0xc0ffee)
 
-// TestEventsStreamLiveOnlyNoCursor connects with no cursor; events
-// published after the subscribe should land on the stream and carry
-// matching SSE id: + JSON event_id fields.
-func TestEventsStreamLiveOnlyNoCursor(t *testing.T) {
-	h := newSSEHarness(t)
-
-	done := make(chan []sseEvent, 1)
-	go func() {
-		// Subscribe and read 3 live events.
-		done <- readNSSEEvents(t, h.eventsURL(""), nil, 3, 3*time.Second)
-	}()
-	// Give the subscribe a moment to land in the registry's fan-out.
-	time.Sleep(50 * time.Millisecond)
-
-	for i := 0; i < 3; i++ {
-		h.publishOne("hi")
-	}
-
-	events := <-done
-	if got := len(events); got != 3 {
-		t.Fatalf("len(events) = %d, want 3", got)
-	}
-	for i, ev := range events {
-		wantID := formatInt64(int64(i + 1))
-		if ev.id != wantID {
-			t.Fatalf("event[%d].id = %q, want %q (SSE id: line)", i, ev.id, wantID)
-		}
-		if ev.event != "text" {
-			t.Fatalf("event[%d].event = %q, want \"text\"", i, ev.event)
+	pubBroadcastN := func(n int) func(*sseHarness) {
+		return func(h *sseHarness) {
+			for i := 0; i < n; i++ {
+				h.publishOne("history")
+			}
 		}
 	}
-}
-
-// TestEventsStreamReplaysFromQueryCursor — ?since=N returns events
-// N+1..head from the ring buffer, then continues live. The core
-// resumption case.
-func TestEventsStreamReplaysFromQueryCursor(t *testing.T) {
-	h := newSSEHarness(t)
-
-	for i := 0; i < 5; i++ {
-		h.publishOne("history")
+	applyDM := func(h *sseHarness) {
+		h.session.State.MyNodeNum = myNum
+		h.session.ApplyText(mdl.Text{
+			Channel: 0,
+			ToNum:   myNum,
+			Body: mdl.Message{
+				FromNum: peer, Text: "hi from peer",
+				PacketID: 99, SentAt: time.Now(),
+			},
+		}, "hi from peer", false)
+	}
+	applyBroadcast := func(h *sseHarness) {
+		h.session.State.MyNodeNum = myNum
+		h.session.ApplyText(mdl.Text{
+			Channel: 0,
+			ToNum:   mdl.BroadcastNum,
+			Body: mdl.Message{
+				FromNum: peer, Text: "channel chat",
+				PacketID: 100, SentAt: time.Now(),
+			},
+		}, "channel chat", false)
 	}
 
-	events := readNSSEEvents(t, h.eventsURL("since=2"), nil, 3, 3*time.Second)
-	if got := len(events); got != 3 {
-		t.Fatalf("len(events) = %d, want 3 (events 3, 4, 5)", got)
+	cases := []struct {
+		name           string
+		prePublish     func(*sseHarness) // before subscribe — fills the ring
+		query          string
+		headers        map[string]string
+		livePublish    func(*sseHarness) // after subscribe lands in fan-out
+		wantN          int
+		wantIDs        []string // nil = skip id check
+		wantEventNames []string // nil = skip event-name check
+	}{
+		{
+			name:           "live-only-no-cursor-receives-post-subscribe-events",
+			livePublish:    pubBroadcastN(3),
+			wantN:          3,
+			wantIDs:        []string{"1", "2", "3"},
+			wantEventNames: []string{"text", "text", "text"},
+		},
+		{
+			name:       "since-query-replays-buffer-from-cursor",
+			prePublish: pubBroadcastN(5),
+			query:      "since=2",
+			wantN:      3,
+			wantIDs:    []string{"3", "4", "5"},
+		},
+		{
+			name:       "Last-Event-ID-header-replays-buffer-from-cursor",
+			prePublish: pubBroadcastN(5),
+			headers:    map[string]string{"Last-Event-ID": "3"},
+			wantN:      2,
+			wantIDs:    []string{"4", "5"},
+		},
+		{
+			// Explicit deliberate seek beats the auto-tracked
+			// reconnect cursor when both are supplied.
+			name:       "since-query-overrides-Last-Event-ID-header",
+			prePublish: pubBroadcastN(5),
+			query:      "since=4",
+			headers:    map[string]string{"Last-Event-ID": "1"},
+			wantN:      1,
+			wantIDs:    []string{"5"},
+		},
+		{
+			// "Client thinks it's caught up but daemon restarted and
+			// reset the counter" — replay nothing, but live still
+			// flows.
+			name:        "cursor-beyond-head-replays-empty-but-live-still-flows",
+			prePublish:  pubBroadcastN(3),
+			query:       "since=999999",
+			livePublish: pubBroadcastN(1),
+			wantN:       1,
+			wantIDs:     []string{"4"},
+		},
+		{
+			name:       "since-zero-replays-whole-buffer",
+			prePublish: pubBroadcastN(4),
+			query:      "since=0",
+			wantN:      4,
+			wantIDs:    []string{"1", "2", "3", "4"},
+		},
+		{
+			// ApplyText must route to the dm_received variant when
+			// ToNum == MyNodeNum — earlier broadcast-only smoke test
+			// missed this because PublishText bypassed the
+			// branching in ApplyText.
+			name:           "ApplyText-DM-routes-to-dm_received-event-name",
+			livePublish:    applyDM,
+			wantN:          1,
+			wantEventNames: []string{"dm_received"},
+		},
+		{
+			name:           "ApplyText-broadcast-routes-to-text-event-name",
+			livePublish:    applyBroadcast,
+			wantN:          1,
+			wantEventNames: []string{"text"},
+		},
 	}
-	wantIDs := []string{"3", "4", "5"}
-	for i, ev := range events {
-		if ev.id != wantIDs[i] {
-			t.Fatalf("event[%d].id = %q, want %q", i, ev.id, wantIDs[i])
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSSEHarness(t)
+			if tc.prePublish != nil {
+				tc.prePublish(h)
+			}
+
+			done := make(chan []sseEvent, 1)
+			go func() {
+				done <- readNSSEEvents(
+					t, h.eventsURL(tc.query), tc.headers, tc.wantN, 3*time.Second,
+				)
+			}()
+			if tc.livePublish != nil {
+				// Give the subscribe a moment to land in the
+				// registry's fan-out before publishing live.
+				time.Sleep(50 * time.Millisecond)
+				tc.livePublish(h)
+			}
+
+			events := <-done
+			if got := len(events); got != tc.wantN {
+				t.Fatalf("len(events) = %d, want %d", got, tc.wantN)
+			}
+			for i, ev := range events {
+				if tc.wantIDs != nil && ev.id != tc.wantIDs[i] {
+					t.Fatalf("event[%d].id = %q, want %q", i, ev.id, tc.wantIDs[i])
+				}
+				if tc.wantEventNames != nil && ev.event != tc.wantEventNames[i] {
+					t.Fatalf(
+						"event[%d].event = %q, want %q",
+						i, ev.event, tc.wantEventNames[i],
+					)
+				}
+			}
+		})
+	}
+
+	// Unknown-radio failure path: no events arrive at all, so the
+	// row-shaped assertion above doesn't apply. Stream opens 200
+	// (response headers committed before the handler runs) but
+	// emits zero events before timing out — documents current
+	// behavior so a future refactor that 404s at request setup
+	// surfaces as a test failure rather than silent breakage.
+	t.Run("unknown-radio-emits-no-events", func(t *testing.T) {
+		h := newSSEHarness(t)
+		url := h.srv.URL + "/radios/nope-no-such-radio/events"
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
 		}
-	}
-}
-
-// TestEventsStreamReplaysFromLastEventIDHeader — same replay
-// behavior, but driven by the EventSource standard Last-Event-ID
-// header instead of an explicit query param.
-func TestEventsStreamReplaysFromLastEventIDHeader(t *testing.T) {
-	h := newSSEHarness(t)
-
-	for i := 0; i < 5; i++ {
-		h.publishOne("history")
-	}
-
-	events := readNSSEEvents(
-		t, h.eventsURL(""), map[string]string{"Last-Event-ID": "3"}, 2, 3*time.Second,
-	)
-	if got := len(events); got != 2 {
-		t.Fatalf("len(events) = %d, want 2 (events 4, 5)", got)
-	}
-	if events[0].id != "4" || events[1].id != "5" {
-		t.Fatalf(
-			"got ids %q,%q; want 4,5",
-			events[0].id, events[1].id,
-		)
-	}
-}
-
-// TestEventsStreamSinceTakesPriorityOverHeader — when both ?since=
-// and Last-Event-ID are supplied, the explicit query param wins (a
-// deliberate seek beats the auto-tracked reconnect cursor).
-func TestEventsStreamSinceTakesPriorityOverHeader(t *testing.T) {
-	h := newSSEHarness(t)
-
-	for i := 0; i < 5; i++ {
-		h.publishOne("history")
-	}
-
-	events := readNSSEEvents(
-		t, h.eventsURL("since=4"), map[string]string{"Last-Event-ID": "1"}, 1, 3*time.Second,
-	)
-	if got := len(events); got != 1 {
-		t.Fatalf("len(events) = %d, want 1 (only event 5; query ?since=4 wins over header=1)", got)
-	}
-	if events[0].id != "5" {
-		t.Fatalf("event id = %q, want 5", events[0].id)
-	}
-}
-
-// TestEventsStreamCursorBeyondHeadLiveOnly — cursor past the highest
-// id replays nothing; the live stream still delivers subsequent
-// events. Covers the "client thinks it's caught up but daemon
-// restarted and lost the counter" path.
-func TestEventsStreamCursorBeyondHeadLiveOnly(t *testing.T) {
-	h := newSSEHarness(t)
-
-	for i := 0; i < 3; i++ {
-		h.publishOne("history")
-	}
-
-	done := make(chan []sseEvent, 1)
-	go func() {
-		done <- readNSSEEvents(t, h.eventsURL("since=999999"), nil, 1, 3*time.Second)
-	}()
-	time.Sleep(50 * time.Millisecond)
-	h.publishOne("after-cursor")
-
-	events := <-done
-	if got := len(events); got != 1 {
-		t.Fatalf("len(events) = %d, want 1 (only the post-cursor live event)", got)
-	}
-	if events[0].id != "4" {
-		t.Fatalf("event id = %q, want 4", events[0].id)
-	}
-}
-
-// TestEventsStreamSinceZeroReplaysWholeBuffer — ?since=0 is the
-// "I've never seen anything" cursor; replays everything still in the
-// ring buffer.
-func TestEventsStreamSinceZeroReplaysWholeBuffer(t *testing.T) {
-	h := newSSEHarness(t)
-
-	for i := 0; i < 4; i++ {
-		h.publishOne("history")
-	}
-
-	events := readNSSEEvents(t, h.eventsURL("since=0"), nil, 4, 3*time.Second)
-	if got := len(events); got != 4 {
-		t.Fatalf("len(events) = %d, want 4 (whole buffer)", got)
-	}
-	wantIDs := []string{"1", "2", "3", "4"}
-	for i, ev := range events {
-		if ev.id != wantIDs[i] {
-			t.Fatalf("event[%d].id = %q, want %q", i, ev.id, wantIDs[i])
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		if got := strings.TrimSpace(string(body)); got != "" {
+			t.Fatalf("unknown radio leaked event data: %q", got)
 		}
-	}
+	})
 }
 
 // TestEventsTypeMapHasDistinctTypes guards against the regression
 // that produced this file's existence: Huma's sse typeMap is keyed
 // by reflect.Type, so two map entries pointing at the same Go type
 // race on map iteration order and the loser's event name silently
-// becomes unreachable. This test enumerates eventsTypeMap and fails
-// if any two entries share a Go type — catching the next time
-// someone adds an event variant that reuses an existing payload
-// shape without a distinct named type.
+// becomes unreachable. Enumerates eventsTypeMap and fails if any
+// two entries share a Go type — catching the next time someone
+// adds an event variant that reuses an existing payload shape
+// without a distinct named type.
+//
+// Kept separate from TestEndpointEventsStream because it's a
+// package-level invariant guard, not a /events behavior scenario.
 func TestEventsTypeMapHasDistinctTypes(t *testing.T) {
 	t.Parallel()
 	seen := make(map[string]string, len(eventsTypeMap))
@@ -351,109 +361,5 @@ func TestEventsTypeMapHasDistinctTypes(t *testing.T) {
 			)
 		}
 		seen[typeName] = name
-	}
-}
-
-// TestEventsStreamDMReceivedFiresOwnEventName drives the full
-// inbound-DM path end-to-end (ApplyText → Publish → SSE) and
-// asserts the wire event name is `dm_received` rather than `text`.
-// The earlier broadcast-only smoke test missed this because it
-// published mdl.Text directly via PublishText, bypassing the
-// branching in ApplyText.
-func TestEventsStreamDMReceivedFiresOwnEventName(t *testing.T) {
-	h := newSSEHarness(t)
-	const myNum = uint32(0xdeadbeef)
-	const peer = uint32(0xc0ffee)
-	h.session.State.MyNodeNum = myNum
-
-	done := make(chan []sseEvent, 1)
-	go func() {
-		done <- readNSSEEvents(t, h.eventsURL(""), nil, 1, 3*time.Second)
-	}()
-	time.Sleep(50 * time.Millisecond)
-
-	h.session.ApplyText(mdl.Text{
-		Channel: 0,
-		ToNum:   myNum,
-		Body: mdl.Message{
-			FromNum:  peer,
-			Text:     "hi from peer",
-			PacketID: 99,
-			SentAt:   time.Now(),
-		},
-	}, "hi from peer", false)
-
-	events := <-done
-	if got := len(events); got != 1 {
-		t.Fatalf("len(events) = %d, want 1", got)
-	}
-	if events[0].event != "dm_received" {
-		t.Fatalf("event = %q, want \"dm_received\"", events[0].event)
-	}
-}
-
-// TestEventsStreamBroadcastFiresTextEventName is the matching
-// negative case — a broadcast (ToNum=BroadcastNum) must come out
-// as text, not dm_received.
-func TestEventsStreamBroadcastFiresTextEventName(t *testing.T) {
-	h := newSSEHarness(t)
-	h.session.State.MyNodeNum = 0xdeadbeef
-
-	done := make(chan []sseEvent, 1)
-	go func() {
-		done <- readNSSEEvents(t, h.eventsURL(""), nil, 1, 3*time.Second)
-	}()
-	time.Sleep(50 * time.Millisecond)
-
-	h.session.ApplyText(mdl.Text{
-		Channel: 0,
-		ToNum:   mdl.BroadcastNum,
-		Body: mdl.Message{
-			FromNum:  0xc0ffee,
-			Text:     "channel chat",
-			PacketID: 100,
-			SentAt:   time.Now(),
-		},
-	}, "channel chat", false)
-
-	events := <-done
-	if got := len(events); got != 1 {
-		t.Fatalf("len(events) = %d, want 1", got)
-	}
-	if events[0].event != "text" {
-		t.Fatalf("event = %q, want \"text\"", events[0].event)
-	}
-}
-
-// TestEventsStreamReturns404ForUnknownRadio — the SSE handler can't
-// emit huma.Error404NotFound the usual way (the response is already
-// committed once sse.Register hands us the writer), so the bail-out
-// path logs + returns. Verifies the HTTP layer's resolve happens
-// BEFORE we hit that path — a request to an unregistered radio_id
-// should fail at request setup, not stream-then-bail.
-//
-// Today this hits the SSE-handler-internal warn-and-return path
-// because Huma's sse.Register doesn't run the same error-translation
-// pipeline as huma.Register. Documents the current behavior so a
-// future refactor that fixes this surfaces as a test failure rather
-// than silent breakage.
-func TestEventsStreamReturns404ForUnknownRadio(t *testing.T) {
-	h := newSSEHarness(t)
-	url := h.srv.URL + "/radios/nope-no-such-radio/events"
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	// Stream opens 200 (response headers committed before handler
-	// runs) but emits zero events before timing out. If we ever flip
-	// this to a 404 at request setup, change the assertion to
-	// `resp.StatusCode == 404`.
-	body, _ := io.ReadAll(resp.Body)
-	if got := strings.TrimSpace(string(body)); got != "" {
-		t.Fatalf("unknown radio leaked event data: %q", got)
 	}
 }

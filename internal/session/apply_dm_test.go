@@ -27,14 +27,13 @@ import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
-// TestApplyTextRoutesEventByDMness pins down the contract that
-// drives every SSE / agent consumer of the text path: a DM
-// addressed to MyNodeNum fires dm_received; everything else
-// (broadcasts, DMs to other peers we happen to overhear,
-// pre-handshake packets where MyNodeNum is still 0) fires text.
-// Mutual exclusion is the value here — consumers subscribe to one
-// kind and trust they aren't also picking up the other.
-func TestApplyTextRoutesEventByDMness(t *testing.T) {
+// TestSessionApplyText pins down the contract that drives every SSE /
+// agent consumer of the text path: a DM addressed to MyNodeNum fires
+// dm_received; everything else (broadcasts, DMs to other peers we
+// overhear, pre-handshake packets where MyNodeNum is still 0) fires
+// text. Mutual exclusion is the value here — consumers subscribe to
+// one kind and trust they aren't also picking up the other.
+func TestSessionApplyText(t *testing.T) {
 	t.Parallel()
 
 	const myNum = uint32(0xdeadbeef)

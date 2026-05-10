@@ -21,7 +21,6 @@
 package session
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -29,9 +28,9 @@ import (
 )
 
 // drainKinds reads the channel non-blockingly and returns the
-// observed Event.Kind values in order. Lets a table-driven test
-// assert "the publish stream produced exactly these event kinds in
-// this order" without bookkeeping per row.
+// observed Event values in order. Lets a table-driven test assert
+// "the publish stream produced exactly these event kinds in this
+// order" without bookkeeping per row.
 func drainKinds(ch <-chan Event, n int, timeout time.Duration) []Event {
 	out := make([]Event, 0, n)
 	deadline := time.After(timeout)
@@ -62,13 +61,14 @@ func seedOutboundRow(s *Session, packetID uint32) {
 	})
 }
 
-// TestApplyRoutingPublishesMessageStatus is the single behavior-as-
-// table that pins down which Routing replies surface a
-// message_status event and which don't. Each case states the input
-// (Routing reply + the row's pre-state) and the expected publish
-// stream — kinds + final row Status. Adding a new case is one row;
-// the assertion logic stays the same.
-func TestApplyRoutingPublishesMessageStatus(t *testing.T) {
+// TestSessionApplyRouting covers the public ApplyRouting surface.
+// The dispatch-shape scenarios (which routing replies surface a
+// message_status update, which fall through, what status the row
+// flips to) live as a table — uniform mechanics. The Ackers snapshot-
+// independence property has genuinely different mechanics (two
+// subscribers, two ApplyRouting calls, copy-vs-alias check) so it
+// runs as a t.Run sub-test under the same parent.
+func TestSessionApplyRouting(t *testing.T) {
 	t.Parallel()
 
 	type ackerSeed struct {
@@ -87,7 +87,7 @@ func TestApplyRoutingPublishesMessageStatus(t *testing.T) {
 		wantAckers  int               // count of Ackers in the published update
 	}{
 		{
-			name:     "ok-flips-to-ack-and-publishes-update",
+			name:     "ok-flips-row-to-ack-and-publishes-status-update",
 			packetID: 100,
 			routing: mdl.Routing{
 				RequestID: 100,
@@ -102,7 +102,7 @@ func TestApplyRoutingPublishesMessageStatus(t *testing.T) {
 			wantAckers:  1,
 		},
 		{
-			name:     "fail-flips-to-fail-and-publishes-update",
+			name:     "fail-flips-row-to-fail-and-publishes-status-update",
 			packetID: 101,
 			routing: mdl.Routing{
 				RequestID: 101,
@@ -117,9 +117,9 @@ func TestApplyRoutingPublishesMessageStatus(t *testing.T) {
 			wantAckers:  0,
 		},
 		{
-			name: "no-matching-row-publishes-routing-only",
 			// packetID 0 → don't seed a row; Routing reply has no
 			// match and falls through without flipping anything.
+			name: "no-matching-row-publishes-routing-only",
 			routing: mdl.Routing{
 				RequestID: 999,
 				OK:        true,
@@ -181,14 +181,11 @@ func TestApplyRoutingPublishesMessageStatus(t *testing.T) {
 				}
 			}
 
-			// Validate the published update payload when one was
-			// expected. Only the OK + fail paths fire this; the
-			// no-match case skips this block.
 			if tc.wantPubStat == "" {
 				return
 			}
-			// message_status is published inline; PublishRouting is
-			// deferred — so the order on the wire is
+			// message_status is published inline; PublishRouting
+			// is deferred — so the order on the wire is
 			// message_status, then routing.
 			updateEv := events[0]
 			update, ok := updateEv.Data.(mdl.MessageStatusUpdate)
@@ -206,54 +203,43 @@ func TestApplyRoutingPublishesMessageStatus(t *testing.T) {
 			}
 		})
 	}
-}
 
-// TestApplyRoutingAckersSnapshotIndependentOfRow ensures the Ackers
-// slice carried on the published event is a copy, not a live alias
-// of the row's Ackers — a later ack on the same row mustn't mutate
-// the previously-published event payload.
-func TestApplyRoutingAckersSnapshotIndependentOfRow(t *testing.T) {
-	t.Parallel()
-	s := newTestSession()
-	ch := s.Subscribe(t.Context())
+	// Property check: the Ackers slice carried on a published
+	// MessageStatusUpdate is a copy, not a live alias of the row's
+	// Ackers. A later ack on the same row mustn't retroactively
+	// mutate the previously-published event payload.
+	t.Run("published-ackers-are-snapshotted-not-aliased-to-row", func(t *testing.T) {
+		s := newTestSession()
+		ch := s.Subscribe(t.Context())
 
-	const pid = 200
-	seedOutboundRow(s, pid)
+		const pid = 200
+		seedOutboundRow(s, pid)
 
-	s.ApplyRouting(mdl.Routing{
-		RequestID: pid,
-		OK:        true,
-		FromNum:   100,
-		Hops:      1,
-		At:        time.Unix(1700000000, 0),
+		s.ApplyRouting(mdl.Routing{
+			RequestID: pid, OK: true, FromNum: 100, Hops: 1,
+			At: time.Unix(1700000000, 0),
+		})
+		_ = drainKinds(ch, 2, 200*time.Millisecond)
+
+		// Re-trigger via a fresh subscriber so we capture the
+		// SECOND publish's Ackers payload. The first publish's
+		// Ackers slice (already drained above) must not have grown
+		// by the time the second publish lands.
+		ch2 := s.Subscribe(t.Context())
+		s.ApplyRouting(mdl.Routing{
+			RequestID: pid, OK: true, FromNum: 200, Hops: 2,
+			At: time.Unix(1700000001, 0),
+		})
+		events := drainKinds(ch2, 2, 200*time.Millisecond)
+		if len(events) < 2 {
+			t.Fatalf("got %d events, want 2", len(events))
+		}
+		upd, ok := events[0].Data.(mdl.MessageStatusUpdate)
+		if !ok {
+			t.Fatalf("Data is %T, want mdl.MessageStatusUpdate", events[0].Data)
+		}
+		if got := len(upd.Ackers); got != 2 {
+			t.Fatalf("second-update.Ackers len = %d, want 2", got)
+		}
 	})
-
-	// Drain the routing + status events from the first apply.
-	_ = drainKinds(ch, 2, 200*time.Millisecond)
-
-	// Read the published update via the subscriber channel: we
-	// already drained it above, so re-trigger and capture the second
-	// publish; the Ackers slice on event #1 should NOT contain the
-	// peer that arrived in event #2.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ch2 := s.Subscribe(ctx)
-	s.ApplyRouting(mdl.Routing{
-		RequestID: pid,
-		OK:        true,
-		FromNum:   200, // second peer
-		Hops:      2,
-		At:        time.Unix(1700000001, 0),
-	})
-	events := drainKinds(ch2, 2, 200*time.Millisecond)
-	if len(events) < 2 {
-		t.Fatalf("got %d events, want 2", len(events))
-	}
-	upd, ok := events[0].Data.(mdl.MessageStatusUpdate)
-	if !ok {
-		t.Fatalf("Data is %T, want mdl.MessageStatusUpdate", events[0].Data)
-	}
-	if got := len(upd.Ackers); got != 2 {
-		t.Fatalf("second-update.Ackers len = %d, want 2", got)
-	}
 }

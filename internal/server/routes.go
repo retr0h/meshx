@@ -167,6 +167,15 @@ func (s *Server) registerRoutes() {
 	}, s.handleShareChannel)
 
 	sse.Register(s.api, huma.Operation{
+		OperationID: "events-unified",
+		Method:      http.MethodGet,
+		Path:        "/events",
+		Summary:     "Unified server-sent events stream across all radios",
+		Description: "Live SSE stream of mesh activity across every radio currently registered with the daemon — one connection covers a fleet (USB + BLE + TCP). Each event is wrapped in a `MeshxEvent` envelope carrying `kind`, `radio_id`, `event_id`, and the per-kind `data` payload; clients dispatch on `kind` (the `event:` line is always `meshx_event` since SSE event names can't carry per-message metadata). Live-only — for resumable replay, subscribe to `/radios/{radio_id}/events?since=` on the specific radio you care about.",
+		Tags:        []string{"events"},
+	}, unifiedEventsTypeMap, s.handleUnifiedEvents)
+
+	sse.Register(s.api, huma.Operation{
 		OperationID: "events-stream",
 		Method:      http.MethodGet,
 		Path:        "/radios/{radio_id}/events",

@@ -41,9 +41,10 @@ import (
 // param) on reconnect — the daemon replays buffered events with
 // id > since before subscribing for live ones.
 type Event struct {
-	ID   uint64 `json:"event_id"`
-	Kind string `json:"kind"`
-	Data any    `json:"data"`
+	ID      uint64 `json:"event_id"`
+	Kind    string `json:"kind"`
+	RadioID string `json:"radio_id,omitempty"`
+	Data    any    `json:"data"`
 }
 
 // EventKind tags every variant. Stable contract — the SSE consumer
@@ -171,6 +172,9 @@ func (s *Session) Publish(ev Event) {
 	s.subMu.Lock()
 	s.nextEventID++
 	ev.ID = s.nextEventID
+	if s.State != nil && ev.RadioID == "" {
+		ev.RadioID = s.State.RadioID
+	}
 	s.ringPushLocked(ev)
 	subs := append([]chan Event(nil), s.subs...)
 	s.subMu.Unlock()

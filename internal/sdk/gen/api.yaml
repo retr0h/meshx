@@ -484,6 +484,28 @@ components:
         - Region
         - ModemPreset
       type: object
+    MeshxEvent:
+      additionalProperties: false
+      properties:
+        data:
+          description: event payload — schema depends on kind
+        event_id:
+          description: per-radio monotonic event id (use ?since= on /radios/{id}/events for resumable replay against one radio)
+          format: int64
+          minimum: 0
+          type: integer
+        kind:
+          description: event kind — text | dm_received | node_info | routing | message_status | …; full list at /openapi-3.0.yaml under each per-kind schema
+          type: string
+        radio_id:
+          description: originating radio's canonical identifier
+          type: string
+      required:
+        - event_id
+        - kind
+        - radio_id
+        - data
+      type: object
     Message:
       additionalProperties: false
       properties:
@@ -1317,6 +1339,48 @@ info:
   version: 0.1.0
 openapi: 3.0.3
 paths:
+  /events:
+    get:
+      description: Live SSE stream of mesh activity across every radio currently registered with the daemon — one connection covers a fleet (USB + BLE + TCP). Each event is wrapped in a `MeshxEvent` envelope carrying `kind`, `radio_id`, `event_id`, and the per-kind `data` payload; clients dispatch on `kind` (the `event:` line is always `meshx_event` since SSE event names can't carry per-message metadata). Live-only — for resumable replay, subscribe to `/radios/{radio_id}/events?since=` on the specific radio you care about.
+      operationId: events-unified
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                description: Each oneOf object in the array represents one possible Server Sent Events (SSE) message, serialized as UTF-8 text according to the SSE specification.
+                items:
+                  oneOf:
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/MeshxEvent"
+                        event:
+                          const: meshx_event
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event meshx_event
+                      type: object
+                title: Server Sent Events
+                type: array
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Unified server-sent events stream across all radios
+      tags:
+        - events
   /healthz:
     get:
       description: Cheap probe for orchestration (systemd, k8s, docker healthcheck). Touches no state.

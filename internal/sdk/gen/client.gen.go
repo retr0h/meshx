@@ -368,6 +368,21 @@ type LoraConfig struct {
 	TxPowerDBm  int32  `json:"TxPowerDBm"`
 }
 
+// MeshxEvent defines model for MeshxEvent.
+type MeshxEvent struct {
+	// Data event payload — schema depends on kind
+	Data interface{} `json:"data"`
+
+	// EventId per-radio monotonic event id (use ?since= on /radios/{id}/events for resumable replay against one radio)
+	EventId int64 `json:"event_id"`
+
+	// Kind event kind — text | dm_received | node_info | routing | message_status | …; full list at /openapi-3.0.yaml under each per-kind schema
+	Kind string `json:"kind"`
+
+	// RadioId originating radio's canonical identifier
+	RadioId string `json:"radio_id"`
+}
+
 // Message defines model for Message.
 type Message struct {
 	// Corrupted sanitization replaced/dropped bytes
@@ -934,6 +949,9 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// EventsUnified request
+	EventsUnified(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// Health request
 	Health(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1017,6 +1035,18 @@ type ClientInterface interface {
 	ScanUsbWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	ScanUsb(ctx context.Context, body ScanUsbJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+func (c *Client) EventsUnified(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewEventsUnifiedRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 func (c *Client) Health(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1389,6 +1419,33 @@ func (c *Client) ScanUsb(ctx context.Context, body ScanUsbJSONRequestBody, reqEd
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewEventsUnifiedRequest generates requests for EventsUnified
+func NewEventsUnifiedRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/events")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewHealthRequest generates requests for Health
@@ -2353,6 +2410,9 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// EventsUnifiedWithResponse request
+	EventsUnifiedWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*EventsUnifiedResponse, error)
+
 	// HealthWithResponse request
 	HealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*HealthResponse, error)
 
@@ -2436,6 +2496,36 @@ type ClientWithResponsesInterface interface {
 	ScanUsbWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ScanUsbResponse, error)
 
 	ScanUsbWithResponse(ctx context.Context, body ScanUsbJSONRequestBody, reqEditors ...RequestEditorFn) (*ScanUsbResponse, error)
+}
+
+type EventsUnifiedResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r EventsUnifiedResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r EventsUnifiedResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r EventsUnifiedResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 type HealthResponse struct {
@@ -3116,6 +3206,15 @@ func (r ScanUsbResponse) ContentType() string {
 	return ""
 }
 
+// EventsUnifiedWithResponse request returning *EventsUnifiedResponse
+func (c *ClientWithResponses) EventsUnifiedWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*EventsUnifiedResponse, error) {
+	rsp, err := c.EventsUnified(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseEventsUnifiedResponse(rsp)
+}
+
 // HealthWithResponse request returning *HealthResponse
 func (c *ClientWithResponses) HealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*HealthResponse, error) {
 	rsp, err := c.Health(ctx, reqEditors...)
@@ -3384,6 +3483,32 @@ func (c *ClientWithResponses) ScanUsbWithResponse(ctx context.Context, body Scan
 		return nil, err
 	}
 	return ParseScanUsbResponse(rsp)
+}
+
+// ParseEventsUnifiedResponse parses an HTTP response from a EventsUnifiedWithResponse call
+func ParseEventsUnifiedResponse(rsp *http.Response) (*EventsUnifiedResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &EventsUnifiedResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
 }
 
 // ParseHealthResponse parses an HTTP response from a HealthWithResponse call

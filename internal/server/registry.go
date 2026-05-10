@@ -20,7 +20,12 @@
 
 package server
 
-import "sync"
+import (
+	"context"
+	"sync"
+
+	"github.com/retr0h/meshx/internal/session"
+)
 
 // registry.go — the per-radio Driver registry the server multiplexes
 // across. Every API path lives under /radios/{radio_id}/… so a single
@@ -104,6 +109,61 @@ func (r *Registry) Rekey(oldID, newID string, d Driver) {
 	delete(r.drivers, oldID)
 	r.drivers[newID] = d
 }
+
+// SubscribeAll subscribes to every currently-registered driver and
+// merges their event streams onto one channel. Each delivered Event
+// carries the originating driver's RadioID (set by Session.Publish
+// at fan-out time) so consumers can route without parsing the
+// connecting URL. Closes when ctx cancels.
+//
+// Snapshots the registry once at call time — drivers added AFTER
+// SubscribeAll returns are NOT picked up by an existing subscriber.
+// That lifecycle isn't exercised today (cmd/server_start populates
+// the registry before Run); when dynamic attach lands, this needs
+// a notify-on-Add hook to re-fan the new driver into in-flight
+// SubscribeAll channels.
+func (r *Registry) SubscribeAll(ctx context.Context) <-chan session.Event {
+	out := make(chan session.Event, registryFanInBuffer)
+	if r == nil {
+		close(out)
+		return out
+	}
+	r.mu.RLock()
+	drivers := make([]Driver, 0, len(r.drivers))
+	for _, d := range r.drivers {
+		drivers = append(drivers, d)
+	}
+	r.mu.RUnlock()
+
+	var wg sync.WaitGroup
+	for _, d := range drivers {
+		ch := d.Subscribe(ctx)
+		wg.Add(1)
+		go func(ch <-chan session.Event) {
+			defer wg.Done()
+			for ev := range ch {
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(ch)
+	}
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+	return out
+}
+
+// registryFanInBuffer is the SubscribeAll output-channel depth.
+// Bigger than the per-driver subscriberBuffer (64) because a
+// fleet's combined volume is N×, but bounded so a permanently-
+// stuck consumer can't bloat memory. Drops on full match the
+// per-driver Subscribe contract — canonical state is recoverable
+// via GET /radios.
+const registryFanInBuffer = 256
 
 // IDs returns all registered radio ids, sorted is NOT guaranteed —
 // handlers that need stable order should sort the returned slice.

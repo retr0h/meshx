@@ -23,6 +23,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"strconv"
 
 	"github.com/danielgtaylor/huma/v2/sse"
 
@@ -64,6 +65,15 @@ var eventsTypeMap = map[string]any{
 // Returns when the client disconnects (ctx cancels) or the driver is
 // torn down.
 //
+// Honors a resumption cursor on reconnect: SSE's Last-Event-ID
+// header (auto-managed by EventSource browser clients) OR an
+// explicit ?since=<event_id> query param (for curl, hand-written
+// HTTP clients). The cursor names the highest event_id the client
+// has already processed; the daemon replays every buffered event
+// with id > cursor before subscribing for live ones. Per-event
+// SSE id: lines mean EventSource auto-tracks the cursor across
+// reconnects with no client-side bookkeeping.
+//
 // The dispatch on ev.Kind picks the registered Go type for send.Data
 // so Huma writes the right `event:` line on the wire — clients can
 // switch on the event name without parsing JSON to know the kind.
@@ -87,15 +97,39 @@ func (s *Server) handleEvents(
 		return
 	}
 
+	cursor, hasCursor := resolveEventCursor(in.LastEventID, in.Since)
+
 	log := s.logger.With(
 		slog.String("subsystem", "sse"),
 		slog.String("radio_id", in.RadioID),
 		slog.String("request_id", RequestIDFromContext(ctx)),
+		slog.Uint64("since", cursor),
 	)
 	log.Info("subscribed")
 	defer log.Info("unsubscribed")
 
-	ch := d.Subscribe(ctx)
+	var (
+		snapshot []session.Event
+		ch       <-chan session.Event
+	)
+	if hasCursor {
+		snapshot, ch = d.SubscribeWithReplay(ctx, cursor)
+	} else {
+		ch = d.Subscribe(ctx)
+	}
+
+	for _, ev := range snapshot {
+		if err := send(sse.Message{ID: int(ev.ID), Data: ev.Data}); err != nil {
+			log.Debug(
+				"replay send failed",
+				slog.String("kind", ev.Kind),
+				slog.Uint64("event_id", ev.ID),
+				slog.Any("error", err),
+			)
+			return
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -104,17 +138,39 @@ func (s *Server) handleEvents(
 			if !ok {
 				return
 			}
-			if err := send.Data(ev.Data); err != nil {
+			if err := send(sse.Message{ID: int(ev.ID), Data: ev.Data}); err != nil {
 				// Most likely the client disconnected mid-write —
 				// next ctx tick catches it; log + bail so we don't
 				// spam the channel until then.
 				log.Debug(
 					"send failed",
 					slog.String("kind", ev.Kind),
+					slog.Uint64("event_id", ev.ID),
 					slog.Any("error", err),
 				)
 				return
 			}
 		}
 	}
+}
+
+// resolveEventCursor picks the resumption cursor from inputs, in
+// priority order: ?since= query param wins over Last-Event-ID
+// header (the explicit query is a deliberate seek; the header is
+// the auto-tracked cursor an EventSource client emits on reconnect).
+// Returns (cursor, true) when a usable value parsed; (0, false)
+// when neither was supplied or both failed to parse — caller skips
+// replay and goes straight to live subscribe.
+func resolveEventCursor(headerID, querySince string) (uint64, bool) {
+	if querySince != "" {
+		if id, err := strconv.ParseUint(querySince, 10, 64); err == nil {
+			return id, true
+		}
+	}
+	if headerID != "" {
+		if id, err := strconv.ParseUint(headerID, 10, 64); err == nil {
+			return id, true
+		}
+	}
+	return 0, false
 }

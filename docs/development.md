@@ -99,9 +99,11 @@ meshx/
     │   ├── geo.go                # haversine / bearing / compass math
     │   ├── help.go               # /help entry data
     │   └── qr.go                 # ASCII QR rendering for /channel share
-    ├── driver/                   # headless radio session layer — owns canonical State, wraps Pump + Store
-    │   ├── session.go             # *session.Session + New + Send + Stop + Session
+    ├── session/                  # headless radio session layer — owns canonical State, wraps Pump + Store
+    │   ├── session.go            # *session.Session + New + Send + Stop + Session
     │   ├── state.go              # *session.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests
+    │   ├── apply.go              # Apply* handlers: Text / NodeInfo / Routing / Position / …
+    │   ├── subscribe.go          # Event + Subscribe + SubscribeWithReplay + ring buffer (per-Session replay log)
     │   ├── pump.go               # consumer interface (Pump) for internal/meshx/pump
     │   └── store.go              # consumer interface (Store) for internal/meshx/storage
     ├── server/                   # HTTP+SSE daemon (Huma)
@@ -173,21 +175,17 @@ to `DialBLE`.
 `internal/meshx/model/` holds the canonical wire/persisted shapes every boundary
 in the codebase speaks. Three consumers all traffic in `mdl.X`:
 
-```
-                  model package
-   (Message, NodeInfo, Position, Routing, Ping,
-    LoraConfig, ExternalNotification, …)
-                       ▲
-        ┌──────────────┼──────────────┐
-        │              │              │
-      pump          storage      server (future)
-   (translate     (CRUD via      (HTTP+SSE)
-    proto→model)   *Sqlite)
-        │              │              │
-        └──────────────┼──────────────┘
-                       ▼
-                meshx TUI Update
-        (case mdl.Text / NodeInfo / Position / …)
+```mermaid
+flowchart TB
+  M["**model package**<br/>Message · NodeInfo · Position · Routing · Ping<br/>LoraConfig · ExternalNotification · …"]
+  P["**pump**<br/>proto→model"]
+  S["**storage**<br/>CRUD · *Sqlite"]
+  H["**server**<br/>HTTP+SSE"]
+  T["**TUI Update**<br/>case mdl.Text / NodeInfo / Position / …"]
+  P --> M
+  S --> M
+  H --> M
+  M --> T
 ```
 
 Inbound, `pump/translate.go` projects `*pb.FromRadio` → `model.X` events.
@@ -427,16 +425,16 @@ Concrete Components live in:
 
 The frame `View()` builds:
 
-```
-VStack:
-  statusBar       (1 row)
-  topDivider      (1 row)
-  body (flex)     ← renderIrssiBody → channelsPane | nodesPane |
-                                       messagesPane | nearbyPane |
-                                       radarPane | helpPane
-  channelTabsRow  (1 row)
-  inputBar        (1 row)
-  Spacer          (1 row trailing — keeps cursor off the last terminal row)
+```mermaid
+flowchart TB
+  V["VStack"]
+  S1["statusBar (1 row)"]
+  D["topDivider (1 row)"]
+  B["body (flex)<br/>renderIrssiBody → channelsPane · nodesPane · messagesPane · nearbyPane · radarPane · helpPane"]
+  T["channelTabsRow (1 row)"]
+  I["inputBar (1 row)"]
+  SP["Spacer (1 row trailing — keeps cursor off the last terminal row)"]
+  V --> S1 --> D --> B --> T --> I --> SP
 ```
 
 Set `MESHX_LAYOUT_ASSERT=1` to enable dev-mode invariant panics: every
@@ -532,9 +530,62 @@ body so long parents don't blow the width budget.
 
 ## Testing
 
+Every PR that adds or changes behavior ships with the tests that verify it. **No
+"Test plan" sections in PR descriptions that ask the human to verify by hand.**
+Manual checklists rot; automated tests don't. If a behavior genuinely cannot be
+tested (real-radio integration, browser-only EventSource semantics, hardware
+reset), call it out explicitly — don't bury it.
+
+### Tooling
+
+- **`testing` + `testify/require`** for unit tests. Standard library first;
+  reach for `testify` only when an assertion would otherwise need a long custom
+  message.
+- **`net/http/httptest`** for HTTP and SSE endpoints — `internal/server` routes
+  are exercised by spinning up `httptest.NewServer` against the same `*Server`
+  production uses. No fake handlers, no parallel mock router.
+- **In-process `*session.Session`** (constructed via
+  `session.New(nil, nil, nil)`) for testing the apply / publish / subscribe
+  paths without a real radio. Inject events via `Session.Publish`; assert on
+  `Subscribe` / `SubscribeWithReplay` output.
+- **Race detector** — `go test -race ./...` for anything with goroutines
+  (Subscribe, Pump, the SSE handler). Cheapest way to catch a slipped lock.
+
+### Structure
+
+- **Prefer table-driven tests.** One test function per behavior, a
+  `[]struct{name, input, want}` table, `t.Run(tc.name, ...)` per row. Cuts the
+  failure-localization time from "which assertion in this 200-line function" to
+  "which row of the table."
+- **Test public-facing surfaces** — the HTTP route, the exported type, the wire
+  shape. Internal-only helpers can be tested incidentally through their public
+  callers; don't write a parallel test for every unexported function.
+- **Name tests after the behavior, not the function.**
+  `TestPublishAssignsMonotonicIDs` reads as documentation; `TestPublish` does
+  not.
+- **Bound waits.** Anything blocking takes
+  `select { case … : case <-time.After(time.Second): t.Fatal("timed out") }`. A
+  test that hangs the whole suite on regression is a bad test.
+
+### Test plan in PR descriptions
+
+The PR template's "Test plan" section is for **what the test suite covers**, not
+what the human needs to do:
+
+```
+## Test plan
+
+- [x] `TestEventsStreamReplaysFromCursor` — `?since=N` returns events N+1..head, then live
+- [x] `TestEventsStreamCursorBeyondBuffer` — cursor past head returns empty snapshot, live still works
+- [x] `TestSubscribeAtomicityNoDuplicatesOrLoss` — publish racing subscribe lands in exactly one of (snapshot, channel)
+```
+
+### Running
+
 ```bash
-go test ./internal/meshx/...            # all tests
-go test -run TestSnapshotView -v ./internal/meshx/  # print a visual snapshot
+just test                                    # full suite (lint + format + unit + coverage)
+go test -race ./...                          # all tests with race detector
+go test -run TestEventsStreamReplays ./internal/server/  # one test, verbose
 ```
 
 ## Color palette (Max Headroom)

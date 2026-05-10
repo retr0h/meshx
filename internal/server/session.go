@@ -64,6 +64,17 @@ type Driver interface {
 	// and closes it on cancel. Used by the SSE handler.
 	Subscribe(ctx context.Context) <-chan session.Event
 
+	// SubscribeWithReplay returns a chronological snapshot of every
+	// buffered Event with id > sinceID, AND a live channel for
+	// events published after the snapshot. The two are atomic: a
+	// publish racing this call lands in exactly one of (snapshot,
+	// channel), never both, never neither. Used by the SSE handler
+	// to honor Last-Event-ID / ?since= reconnect cursors.
+	SubscribeWithReplay(
+		ctx context.Context,
+		sinceID uint64,
+	) ([]session.Event, <-chan session.Event)
+
 	// RecordOutbound mirrors ApplyText for locally-originated text —
 	// appends a "mine" row to State.Messages, persists, indexes by
 	// PacketID, and publishes a synthesized mdl.Text. Called by

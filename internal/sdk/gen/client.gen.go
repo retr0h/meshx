@@ -601,6 +601,27 @@ type Ping struct {
 	SNR       string    `json:"SNR"`
 }
 
+// PingRequest defines model for PingRequest.
+type PingRequest struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// ToNum peer NodeNum to ping; the firmware echoes a REPLY_APP packet back which lands as a 'ping' SSE event correlated by the returned packet_id
+	ToNum int64 `json:"to_num"`
+}
+
+// PingResult defines model for PingResult.
+type PingResult struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Ok false when the pump's outbound buffer was full or no radio is attached
+	Ok bool `json:"ok"`
+
+	// PacketId MeshPacket.id allocated for the ping; matches the request_id field on the eventual ping event
+	PacketId int32 `json:"packet_id"`
+}
+
 // Position defines model for Position.
 type Position struct {
 	Altitude    int32     `json:"Altitude"`
@@ -755,6 +776,15 @@ type SkippedChannel struct {
 	Reason string `json:"reason"`
 }
 
+// SyncResult defines model for SyncResult.
+type SyncResult struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Ok false when the pump's outbound buffer was full or no radio is attached
+	Ok bool `json:"ok"`
+}
+
 // Text defines model for Text.
 type Text struct {
 	Body    Message `json:"Body"`
@@ -770,6 +800,27 @@ type Traceroute struct {
 	RequestID int64     `json:"RequestID"`
 	Route     *[]int64  `json:"Route"`
 	ToNum     int64     `json:"ToNum"`
+}
+
+// TracerouteRequest defines model for TracerouteRequest.
+type TracerouteRequest struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// ToNum peer NodeNum to trace a route to; the firmware walks the mesh and echoes a TRACEROUTE_APP packet back which lands as a 'traceroute' SSE event correlated by the returned packet_id
+	ToNum int64 `json:"to_num"`
+}
+
+// TracerouteResult defines model for TracerouteResult.
+type TracerouteResult struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Ok false when the pump's outbound buffer was full or no radio is attached
+	Ok bool `json:"ok"`
+
+	// PacketId MeshPacket.id allocated for the traceroute; matches the request_id field on the eventual traceroute event
+	PacketId int32 `json:"packet_id"`
 }
 
 // TransportError defines model for TransportError.
@@ -861,8 +912,14 @@ type UpdateConfigJSONRequestBody = UpdateConfigRequest
 // SendMessageJSONRequestBody defines body for SendMessage for application/json ContentType.
 type SendMessageJSONRequestBody = SendMessageRequest
 
+// PingPeerJSONRequestBody defines body for PingPeer for application/json ContentType.
+type PingPeerJSONRequestBody = PingRequest
+
 // RebootRadioJSONRequestBody defines body for RebootRadio for application/json ContentType.
 type RebootRadioJSONRequestBody = RebootRequest
+
+// TraceroutePeerJSONRequestBody defines body for TraceroutePeer for application/json ContentType.
+type TraceroutePeerJSONRequestBody = TracerouteRequest
 
 // PairBleJSONRequestBody defines body for PairBle for application/json ContentType.
 type PairBleJSONRequestBody = PairBLEInputBody
@@ -999,10 +1056,23 @@ type ClientInterface interface {
 	// ListNodes request
 	ListNodes(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// PingPeerWithBody request with any body
+	PingPeerWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PingPeer(ctx context.Context, radioId string, body PingPeerJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// RebootRadioWithBody request with any body
 	RebootRadioWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	RebootRadio(ctx context.Context, radioId string, body RebootRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// SyncRadio request
+	SyncRadio(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// TraceroutePeerWithBody request with any body
+	TraceroutePeerWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	TraceroutePeer(ctx context.Context, radioId string, body TraceroutePeerJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListBleDevices request
 	ListBleDevices(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1253,6 +1323,30 @@ func (c *Client) ListNodes(ctx context.Context, radioId string, reqEditors ...Re
 	return c.Client.Do(req)
 }
 
+func (c *Client) PingPeerWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPingPeerRequestWithBody(c.Server, radioId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PingPeer(ctx context.Context, radioId string, body PingPeerJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPingPeerRequest(c.Server, radioId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) RebootRadioWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewRebootRadioRequestWithBody(c.Server, radioId, contentType, body)
 	if err != nil {
@@ -1267,6 +1361,42 @@ func (c *Client) RebootRadioWithBody(ctx context.Context, radioId string, conten
 
 func (c *Client) RebootRadio(ctx context.Context, radioId string, body RebootRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewRebootRadioRequest(c.Server, radioId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SyncRadio(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSyncRadioRequest(c.Server, radioId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) TraceroutePeerWithBody(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewTraceroutePeerRequestWithBody(c.Server, radioId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) TraceroutePeer(ctx context.Context, radioId string, body TraceroutePeerJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewTraceroutePeerRequest(c.Server, radioId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2038,6 +2168,53 @@ func NewListNodesRequest(server string, radioId string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewPingPeerRequest calls the generic PingPeer builder with application/json body
+func NewPingPeerRequest(server string, radioId string, body PingPeerJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPingPeerRequestWithBody(server, radioId, "application/json", bodyReader)
+}
+
+// NewPingPeerRequestWithBody generates requests for PingPeer with any type of body
+func NewPingPeerRequestWithBody(server string, radioId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "radio_id", radioId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/%s/ping", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewRebootRadioRequest calls the generic RebootRadio builder with application/json body
 func NewRebootRadioRequest(server string, radioId string, body RebootRadioJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -2066,6 +2243,87 @@ func NewRebootRadioRequestWithBody(server string, radioId string, contentType st
 	}
 
 	operationPath := fmt.Sprintf("/radios/%s/reboot", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewSyncRadioRequest generates requests for SyncRadio
+func NewSyncRadioRequest(server string, radioId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "radio_id", radioId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/%s/sync", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewTraceroutePeerRequest calls the generic TraceroutePeer builder with application/json body
+func NewTraceroutePeerRequest(server string, radioId string, body TraceroutePeerJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewTraceroutePeerRequestWithBody(server, radioId, "application/json", bodyReader)
+}
+
+// NewTraceroutePeerRequestWithBody generates requests for TraceroutePeer with any type of body
+func NewTraceroutePeerRequestWithBody(server string, radioId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "radio_id", radioId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/%s/traceroute", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -2460,10 +2718,23 @@ type ClientWithResponsesInterface interface {
 	// ListNodesWithResponse request
 	ListNodesWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*ListNodesResponse, error)
 
+	// PingPeerWithBodyWithResponse request with any body
+	PingPeerWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PingPeerResponse, error)
+
+	PingPeerWithResponse(ctx context.Context, radioId string, body PingPeerJSONRequestBody, reqEditors ...RequestEditorFn) (*PingPeerResponse, error)
+
 	// RebootRadioWithBodyWithResponse request with any body
 	RebootRadioWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RebootRadioResponse, error)
 
 	RebootRadioWithResponse(ctx context.Context, radioId string, body RebootRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*RebootRadioResponse, error)
+
+	// SyncRadioWithResponse request
+	SyncRadioWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*SyncRadioResponse, error)
+
+	// TraceroutePeerWithBodyWithResponse request with any body
+	TraceroutePeerWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*TraceroutePeerResponse, error)
+
+	TraceroutePeerWithResponse(ctx context.Context, radioId string, body TraceroutePeerJSONRequestBody, reqEditors ...RequestEditorFn) (*TraceroutePeerResponse, error)
 
 	// ListBleDevicesWithResponse request
 	ListBleDevicesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListBleDevicesResponse, error)
@@ -2929,6 +3200,37 @@ func (r ListNodesResponse) ContentType() string {
 	return ""
 }
 
+type PingPeerResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON202                       *PingResult
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PingPeerResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PingPeerResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PingPeerResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type RebootRadioResponse struct {
 	Body                          []byte
 	HTTPResponse                  *http.Response
@@ -2954,6 +3256,68 @@ func (r RebootRadioResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r RebootRadioResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type SyncRadioResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON202                       *SyncResult
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r SyncRadioResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r SyncRadioResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r SyncRadioResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type TraceroutePeerResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON202                       *TracerouteResult
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r TraceroutePeerResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r TraceroutePeerResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r TraceroutePeerResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3364,6 +3728,23 @@ func (c *ClientWithResponses) ListNodesWithResponse(ctx context.Context, radioId
 	return ParseListNodesResponse(rsp)
 }
 
+// PingPeerWithBodyWithResponse request with arbitrary body returning *PingPeerResponse
+func (c *ClientWithResponses) PingPeerWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PingPeerResponse, error) {
+	rsp, err := c.PingPeerWithBody(ctx, radioId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePingPeerResponse(rsp)
+}
+
+func (c *ClientWithResponses) PingPeerWithResponse(ctx context.Context, radioId string, body PingPeerJSONRequestBody, reqEditors ...RequestEditorFn) (*PingPeerResponse, error) {
+	rsp, err := c.PingPeer(ctx, radioId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePingPeerResponse(rsp)
+}
+
 // RebootRadioWithBodyWithResponse request with arbitrary body returning *RebootRadioResponse
 func (c *ClientWithResponses) RebootRadioWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*RebootRadioResponse, error) {
 	rsp, err := c.RebootRadioWithBody(ctx, radioId, contentType, body, reqEditors...)
@@ -3379,6 +3760,32 @@ func (c *ClientWithResponses) RebootRadioWithResponse(ctx context.Context, radio
 		return nil, err
 	}
 	return ParseRebootRadioResponse(rsp)
+}
+
+// SyncRadioWithResponse request returning *SyncRadioResponse
+func (c *ClientWithResponses) SyncRadioWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*SyncRadioResponse, error) {
+	rsp, err := c.SyncRadio(ctx, radioId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSyncRadioResponse(rsp)
+}
+
+// TraceroutePeerWithBodyWithResponse request with arbitrary body returning *TraceroutePeerResponse
+func (c *ClientWithResponses) TraceroutePeerWithBodyWithResponse(ctx context.Context, radioId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*TraceroutePeerResponse, error) {
+	rsp, err := c.TraceroutePeerWithBody(ctx, radioId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseTraceroutePeerResponse(rsp)
+}
+
+func (c *ClientWithResponses) TraceroutePeerWithResponse(ctx context.Context, radioId string, body TraceroutePeerJSONRequestBody, reqEditors ...RequestEditorFn) (*TraceroutePeerResponse, error) {
+	rsp, err := c.TraceroutePeer(ctx, radioId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseTraceroutePeerResponse(rsp)
 }
 
 // ListBleDevicesWithResponse request returning *ListBleDevicesResponse
@@ -3926,6 +4333,39 @@ func ParseListNodesResponse(rsp *http.Response) (*ListNodesResponse, error) {
 	return response, nil
 }
 
+// ParsePingPeerResponse parses an HTTP response from a PingPeerWithResponse call
+func ParsePingPeerResponse(rsp *http.Response) (*PingPeerResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PingPeerResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest PingResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseRebootRadioResponse parses an HTTP response from a RebootRadioWithResponse call
 func ParseRebootRadioResponse(rsp *http.Response) (*RebootRadioResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3942,6 +4382,72 @@ func ParseRebootRadioResponse(rsp *http.Response) (*RebootRadioResponse, error) 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
 		var dest RebootResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseSyncRadioResponse parses an HTTP response from a SyncRadioWithResponse call
+func ParseSyncRadioResponse(rsp *http.Response) (*SyncRadioResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &SyncRadioResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest SyncResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseTraceroutePeerResponse parses an HTTP response from a TraceroutePeerWithResponse call
+func ParseTraceroutePeerResponse(rsp *http.Response) (*TraceroutePeerResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &TraceroutePeerResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest TracerouteResult
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

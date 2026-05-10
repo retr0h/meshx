@@ -77,6 +77,24 @@ func (e MessageItemStatus) Valid() bool {
 	}
 }
 
+// Defines values for MessageStatusUpdateStatus.
+const (
+	Ack  MessageStatusUpdateStatus = "ack"
+	Fail MessageStatusUpdateStatus = "fail"
+)
+
+// Valid indicates whether the value is a known member of the MessageStatusUpdateStatus enum.
+func (e MessageStatusUpdateStatus) Valid() bool {
+	switch e {
+	case Ack:
+		return true
+	case Fail:
+		return true
+	default:
+		return false
+	}
+}
+
 // Acker defines model for Acker.
 type Acker struct {
 	// At time the Routing reply landed locally
@@ -412,6 +430,19 @@ type MessageItem struct {
 
 // MessageItemStatus row delivery state. (empty) = inbound chat (no delivery indicator). 'ack' = local radio confirmed transmission — fires within ~1s of send for both broadcasts and DMs (the everyday 'did it leave my radio?' signal). 'pending' = queued locally, ack not yet received. 'fail' = radio rejected the send or the ack timed out. 'system' / 'notice' = synthetic rows the TUI generates for status banners; never persisted to SQLite. For per-peer mesh acks (DMs only), see the 'acks' field.
 type MessageItemStatus string
+
+// MessageStatusUpdate defines model for MessageStatusUpdate.
+type MessageStatusUpdate struct {
+	Ackers   *[]Acker  `json:"ackers,omitempty"`
+	At       time.Time `json:"at"`
+	PacketId int64     `json:"packet_id"`
+
+	// Status new status — only the terminal transitions (ack | fail) fire this event
+	Status MessageStatusUpdateStatus `json:"status"`
+}
+
+// MessageStatusUpdateStatus new status — only the terminal transitions (ack | fail) fire this event
+type MessageStatusUpdateStatus string
 
 // Metadata defines model for Metadata.
 type Metadata struct {

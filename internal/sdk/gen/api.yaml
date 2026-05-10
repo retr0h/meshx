@@ -611,6 +611,32 @@ components:
         - to_num
         - sent_at
       type: object
+    MessageStatusUpdate:
+      additionalProperties: false
+      properties:
+        ackers:
+          items:
+            $ref: "#/components/schemas/Acker"
+          nullable: true
+          type: array
+        at:
+          format: date-time
+          type: string
+        packet_id:
+          format: int64
+          minimum: 0
+          type: integer
+        status:
+          description: new status — only the terminal transitions (ack | fail) fire this event
+          enum:
+            - ack
+            - fail
+          type: string
+      required:
+        - packet_id
+        - status
+        - at
+      type: object
     Metadata:
       additionalProperties: false
       properties:
@@ -1698,6 +1724,24 @@ paths:
                         - data
                         - event
                       title: Event lora_config
+                      type: object
+                    - properties:
+                        data:
+                          $ref: "#/components/schemas/MessageStatusUpdate"
+                        event:
+                          const: message_status
+                          description: The event name.
+                          type: string
+                        id:
+                          description: The event ID.
+                          type: integer
+                        retry:
+                          description: The retry time in milliseconds.
+                          type: integer
+                      required:
+                        - data
+                        - event
+                      title: Event message_status
                       type: object
                     - properties:
                         data:

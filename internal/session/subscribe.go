@@ -66,6 +66,7 @@ const (
 	EventReconnecting   = "reconnecting"
 	EventDisconnected   = "disconnected"
 	EventTransportError = "transport_error"
+	EventMessageStatus  = "message_status"
 )
 
 // subscriberBuffer is the per-subscriber channel depth. Big enough
@@ -255,6 +256,15 @@ func (s *Session) PublishTraceroute(t mdl.Traceroute) Event {
 // PublishPing is the typed shortcut for an mdl.Ping event.
 func (s *Session) PublishPing(p mdl.Ping) Event {
 	ev := Event{Kind: EventPing, Data: p}
+	s.Publish(ev)
+	return ev
+}
+
+// PublishMessageStatus is the typed shortcut for an
+// mdl.MessageStatusUpdate event. Fires from ApplyRouting when an
+// outbound row flips to terminal Status.
+func (s *Session) PublishMessageStatus(u mdl.MessageStatusUpdate) Event {
+	ev := Event{Kind: EventMessageStatus, Data: u}
 	s.Publish(ev)
 	return ev
 }

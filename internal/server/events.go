@@ -58,6 +58,7 @@ var eventsTypeMap = map[string]any{
 	session.EventReconnecting:   mdl.Reconnecting{},
 	session.EventDisconnected:   mdl.Disconnected{},
 	session.EventTransportError: mdl.TransportError{},
+	session.EventMessageStatus:  mdl.MessageStatusUpdate{},
 }
 
 // handleEvents subscribes to the resolved Driver's event stream and

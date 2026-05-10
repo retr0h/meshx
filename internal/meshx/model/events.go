@@ -255,3 +255,21 @@ type Disconnected struct{}
 type TransportError struct {
 	Err error
 }
+
+// MessageStatusUpdate fires when ApplyRouting flips an outbound
+// row's terminal Status — the radio confirmed delivery (StatusAck)
+// or gave up (StatusFail). Lets SSE consumers track per-packet
+// outcome without polling GET /messages. Ackers replays the
+// structured per-peer mesh-relay echoes accumulated for this row at
+// the time the status flipped (DMs only — broadcasts don't
+// generate Routing echoes from peers).
+//
+// Named "Update" rather than just "Status" because mdl.MessageStatus
+// is already the string-typed enum on Message rows; the event type
+// has to use a different name to avoid the collision.
+type MessageStatusUpdate struct {
+	PacketID uint32        `json:"packet_id"        format:"int64" minimum:"0"`
+	Status   MessageStatus `json:"status"                                      enum:"ack,fail" doc:"new status — only the terminal transitions (ack | fail) fire this event"`
+	Ackers   []Acker       `json:"ackers,omitempty"`
+	At       time.Time     `json:"at"`
+}

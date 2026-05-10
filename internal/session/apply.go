@@ -433,6 +433,18 @@ func (s *Session) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 				row.Message,
 			))
 		}
+		// Surface the terminal flip as its own SSE event so consumers
+		// don't have to diff /messages to detect ack/fail. Ackers
+		// snapshot reflects the row's per-peer echoes at flip time;
+		// later Routing replies for the same packet refresh the row's
+		// Ackers but don't re-publish (the row has already terminated).
+		ackersCopy := append([]mdl.Acker(nil), row.Ackers...)
+		s.PublishMessageStatus(mdl.MessageStatusUpdate{
+			PacketID: row.PacketID,
+			Status:   row.Status,
+			Ackers:   ackersCopy,
+			At:       msg.At,
+		})
 		return ApplyRoutingResult{
 			Matched:   true,
 			Index:     i,

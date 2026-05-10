@@ -892,6 +892,44 @@ components:
         - RSSI
         - At
       type: object
+    PingRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/PingRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        to_num:
+          description: peer NodeNum to ping; the firmware echoes a REPLY_APP packet back which lands as a 'ping' SSE event correlated by the returned packet_id
+          format: int64
+          minimum: 1
+          type: integer
+      required:
+        - to_num
+      type: object
+    PingResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/PingResult.json
+          format: uri
+          readOnly: true
+          type: string
+        ok:
+          description: false when the pump's outbound buffer was full or no radio is attached
+          type: boolean
+        packet_id:
+          description: MeshPacket.id allocated for the ping; matches the request_id field on the eventual ping event
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - packet_id
+        - ok
+      type: object
     Position:
       additionalProperties: false
       properties:
@@ -1207,6 +1245,21 @@ components:
         - name
         - reason
       type: object
+    SyncResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/SyncResult.json
+          format: uri
+          readOnly: true
+          type: string
+        ok:
+          description: false when the pump's outbound buffer was full or no radio is attached
+          type: boolean
+      required:
+        - ok
+      type: object
     Text:
       additionalProperties: false
       properties:
@@ -1258,6 +1311,44 @@ components:
         - ToNum
         - Route
         - At
+      type: object
+    TracerouteRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/TracerouteRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        to_num:
+          description: peer NodeNum to trace a route to; the firmware walks the mesh and echoes a TRACEROUTE_APP packet back which lands as a 'traceroute' SSE event correlated by the returned packet_id
+          format: int64
+          minimum: 1
+          type: integer
+      required:
+        - to_num
+      type: object
+    TracerouteResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/TracerouteResult.json
+          format: uri
+          readOnly: true
+          type: string
+        ok:
+          description: false when the pump's outbound buffer was full or no radio is attached
+          type: boolean
+        packet_id:
+          description: MeshPacket.id allocated for the traceroute; matches the request_id field on the eventual traceroute event
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+        - packet_id
+        - ok
       type: object
     TransportError:
       additionalProperties: false
@@ -2152,6 +2243,40 @@ paths:
       summary: List known mesh peers for one radio
       tags:
         - nodes
+  /radios/{radio_id}/ping:
+    post:
+      description: Dispatches a Meshtastic REPLY_APP ping to the named peer. The radio echoes the packet back, which the daemon surfaces as a `ping` SSE event correlated by `packet_id`. Returns 202 Accepted with the allocated `packet_id`. Fire-and-forget at the HTTP layer; clients consume `/radios/{id}/events` to observe the round-trip.
+      operationId: ping-peer
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PingRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PingResult"
+          description: Accepted
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Send a REPLY_APP ping to a peer
+      tags:
+        - radio-ops
   /radios/{radio_id}/reboot:
     post:
       description: Schedules a firmware reboot N seconds out (default 5 to mirror the TUI's /reboot grace). The radio drops carrier during reboot — clients should expect the SSE stream to disconnect and the daemon to auto-reconnect once the radio comes back. Returns 202 Accepted with the acknowledged delay.
@@ -2186,6 +2311,68 @@ paths:
       summary: Reboot the radio
       tags:
         - config
+  /radios/{radio_id}/sync:
+    post:
+      description: Fires a WantConfigId at the radio so it re-dumps its NodeDB, channel table, configs (LoRa / device / position), Metadata, and ConfigComplete. Each arrives as its own SSE event over the next few seconds. Useful when a remote client suspects its cached state has drifted (e.g., after a long reconnect gap) and wants the radio to retransmit ground truth. Returns 202 Accepted; no correlator on the wire — every SSE event during the dump is independent.
+      operationId: sync-radio
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncResult"
+          description: Accepted
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Re-request the radio's full config dump
+      tags:
+        - radio-ops
+  /radios/{radio_id}/traceroute:
+    post:
+      description: Dispatches a Meshtastic TRACEROUTE_APP RouteDiscovery request to the named peer. The radio walks the mesh and echoes a TRACEROUTE_APP reply back, which the daemon surfaces as a `traceroute` SSE event carrying the ordered list of intermediate nodes the discovery walked through. Returns 202 Accepted with the allocated `packet_id` for SSE correlation.
+      operationId: traceroute-peer
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TracerouteRequest"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TracerouteResult"
+          description: Accepted
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Issue a TRACEROUTE_APP RouteDiscovery to a peer
+      tags:
+        - radio-ops
   /transports/ble/devices:
     get:
       description: Returns every BLE device the daemon has saved for auto-connect. Favorite devices are flagged.

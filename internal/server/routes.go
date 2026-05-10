@@ -128,6 +128,36 @@ func (s *Server) registerRoutes() {
 	}, s.handleReboot)
 
 	huma.Register(s.api, huma.Operation{
+		OperationID:   "ping-peer",
+		Method:        http.MethodPost,
+		Path:          "/radios/{radio_id}/ping",
+		Summary:       "Send a REPLY_APP ping to a peer",
+		Description:   "Dispatches a Meshtastic REPLY_APP ping to the named peer. The radio echoes the packet back, which the daemon surfaces as a `ping` SSE event correlated by `packet_id`. Returns 202 Accepted with the allocated `packet_id`. Fire-and-forget at the HTTP layer; clients consume `/radios/{id}/events` to observe the round-trip.",
+		Tags:          []string{"radio-ops"},
+		DefaultStatus: 202,
+	}, s.handlePing)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID:   "traceroute-peer",
+		Method:        http.MethodPost,
+		Path:          "/radios/{radio_id}/traceroute",
+		Summary:       "Issue a TRACEROUTE_APP RouteDiscovery to a peer",
+		Description:   "Dispatches a Meshtastic TRACEROUTE_APP RouteDiscovery request to the named peer. The radio walks the mesh and echoes a TRACEROUTE_APP reply back, which the daemon surfaces as a `traceroute` SSE event carrying the ordered list of intermediate nodes the discovery walked through. Returns 202 Accepted with the allocated `packet_id` for SSE correlation.",
+		Tags:          []string{"radio-ops"},
+		DefaultStatus: 202,
+	}, s.handleTraceroute)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID:   "sync-radio",
+		Method:        http.MethodPost,
+		Path:          "/radios/{radio_id}/sync",
+		Summary:       "Re-request the radio's full config dump",
+		Description:   "Fires a WantConfigId at the radio so it re-dumps its NodeDB, channel table, configs (LoRa / device / position), Metadata, and ConfigComplete. Each arrives as its own SSE event over the next few seconds. Useful when a remote client suspects its cached state has drifted (e.g., after a long reconnect gap) and wants the radio to retransmit ground truth. Returns 202 Accepted; no correlator on the wire — every SSE event during the dump is independent.",
+		Tags:          []string{"radio-ops"},
+		DefaultStatus: 202,
+	}, s.handleSync)
+
+	huma.Register(s.api, huma.Operation{
 		OperationID:   "mint-channel",
 		Method:        http.MethodPost,
 		Path:          "/radios/{radio_id}/channels",

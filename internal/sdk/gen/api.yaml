@@ -1542,7 +1542,7 @@ paths:
         - config
   /radios/{radio_id}/events:
     get:
-      description: Live SSE stream of mesh activity for the named radio — text packets, node-info beacons, channel changes, position fixes, routing acks, traceroute / ping replies. Clients consume this for real-time UI updates.
+      description: Live SSE stream of mesh activity for the named radio — text packets, node-info beacons, channel changes, position fixes, routing acks, traceroute / ping replies. Each event carries an `id:` line and an `event_id` field in the JSON body; clients track the highest id seen and pass it back as either the `Last-Event-ID` header (auto-managed by EventSource) or a `?since=<event_id>` query param to resume after a reconnect. The daemon keeps the last 1024 events per radio in memory and replays anything with id > cursor before subscribing for live ones; cursors older than the buffer's oldest entry replay whatever's still available so the client can detect the gap by comparing its requested cursor to the first replayed id. Cursors persist only as long as the daemon process — restart drops the buffer.
       operationId: events-stream
       parameters:
         - description: canonical radio identifier — see GET /radios
@@ -1551,6 +1551,19 @@ paths:
           required: true
           schema:
             description: canonical radio identifier — see GET /radios
+            type: string
+        - description: resumption cursor auto-emitted by EventSource clients on reconnect; the daemon replays buffered events with id > LastEventID
+          in: header
+          name: Last-Event-ID
+          schema:
+            description: resumption cursor auto-emitted by EventSource clients on reconnect; the daemon replays buffered events with id > LastEventID
+            type: string
+        - description: explicit resumption cursor (decimal event_id); takes priority over Last-Event-ID. Use 0 to replay the entire ring buffer
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: explicit resumption cursor (decimal event_id); takes priority over Last-Event-ID. Use 0 to replay the entire ring buffer
             type: string
       responses:
         "200":

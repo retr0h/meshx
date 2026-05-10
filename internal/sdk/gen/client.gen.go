@@ -747,6 +747,15 @@ type UpdateConfigResult struct {
 	Applied *[]string `json:"applied"`
 }
 
+// EventsStreamParams defines parameters for EventsStream.
+type EventsStreamParams struct {
+	// Since explicit resumption cursor (decimal event_id); takes priority over Last-Event-ID. Use 0 to replay the entire ring buffer
+	Since *string `form:"since,omitempty" json:"since,omitempty"`
+
+	// LastEventID resumption cursor auto-emitted by EventSource clients on reconnect; the daemon replays buffered events with id > LastEventID
+	LastEventID *string `json:"Last-Event-ID,omitempty"`
+}
+
 // ListMessagesParams defines parameters for ListMessages.
 type ListMessagesParams struct {
 	// Limit max rows to return; 0 = no limit
@@ -893,7 +902,7 @@ type ClientInterface interface {
 	UpdateConfig(ctx context.Context, radioId string, body UpdateConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// EventsStream request
-	EventsStream(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	EventsStream(ctx context.Context, radioId string, params *EventsStreamParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListMessages request
 	ListMessages(ctx context.Context, radioId string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1088,8 +1097,8 @@ func (c *Client) UpdateConfig(ctx context.Context, radioId string, body UpdateCo
 	return c.Client.Do(req)
 }
 
-func (c *Client) EventsStream(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewEventsStreamRequest(c.Server, radioId)
+func (c *Client) EventsStream(ctx context.Context, radioId string, params *EventsStreamParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewEventsStreamRequest(c.Server, radioId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1662,7 +1671,7 @@ func NewUpdateConfigRequestWithBody(server string, radioId string, contentType s
 }
 
 // NewEventsStreamRequest generates requests for EventsStream
-func NewEventsStreamRequest(server string, radioId string) (*http.Request, error) {
+func NewEventsStreamRequest(server string, radioId string, params *EventsStreamParams) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -1687,9 +1696,51 @@ func NewEventsStreamRequest(server string, radioId string) (*http.Request, error
 		return nil, err
 	}
 
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Since != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "since", *params.Since, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	if params != nil {
+
+		if params.LastEventID != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Last-Event-ID", *params.LastEventID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Last-Event-ID", headerParam0)
+		}
+
 	}
 
 	return req, nil
@@ -2258,7 +2309,7 @@ type ClientWithResponsesInterface interface {
 	UpdateConfigWithResponse(ctx context.Context, radioId string, body UpdateConfigJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateConfigResponse, error)
 
 	// EventsStreamWithResponse request
-	EventsStreamWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*EventsStreamResponse, error)
+	EventsStreamWithResponse(ctx context.Context, radioId string, params *EventsStreamParams, reqEditors ...RequestEditorFn) (*EventsStreamResponse, error)
 
 	// ListMessagesWithResponse request
 	ListMessagesWithResponse(ctx context.Context, radioId string, params *ListMessagesParams, reqEditors ...RequestEditorFn) (*ListMessagesResponse, error)
@@ -3093,8 +3144,8 @@ func (c *ClientWithResponses) UpdateConfigWithResponse(ctx context.Context, radi
 }
 
 // EventsStreamWithResponse request returning *EventsStreamResponse
-func (c *ClientWithResponses) EventsStreamWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*EventsStreamResponse, error) {
-	rsp, err := c.EventsStream(ctx, radioId, reqEditors...)
+func (c *ClientWithResponses) EventsStreamWithResponse(ctx context.Context, radioId string, params *EventsStreamParams, reqEditors ...RequestEditorFn) (*EventsStreamResponse, error) {
+	rsp, err := c.EventsStream(ctx, radioId, params, reqEditors...)
 	if err != nil {
 		return nil, err
 	}

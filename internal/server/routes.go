@@ -171,7 +171,7 @@ func (s *Server) registerRoutes() {
 		Method:      http.MethodGet,
 		Path:        "/radios/{radio_id}/events",
 		Summary:     "Server-sent events stream for one radio",
-		Description: "Live SSE stream of mesh activity for the named radio — text packets, node-info beacons, channel changes, position fixes, routing acks, traceroute / ping replies. Clients consume this for real-time UI updates.",
+		Description: "Live SSE stream of mesh activity for the named radio — text packets, node-info beacons, channel changes, position fixes, routing acks, traceroute / ping replies. Each event carries an `id:` line and an `event_id` field in the JSON body; clients track the highest id seen and pass it back as either the `Last-Event-ID` header (auto-managed by EventSource) or a `?since=<event_id>` query param to resume after a reconnect. The daemon keeps the last 1024 events per radio in memory and replays anything with id > cursor before subscribing for live ones; cursors older than the buffer's oldest entry replay whatever's still available so the client can detect the gap by comparing its requested cursor to the first replayed id. Cursors persist only as long as the daemon process — restart drops the buffer.",
 		Tags:        []string{"events"},
 	}, eventsTypeMap, s.handleEvents)
 

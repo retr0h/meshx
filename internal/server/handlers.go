@@ -341,6 +341,14 @@ func (s *Server) handleSendMessage(
 // sse.Register reads the path tag to populate the spec's parameters
 // block. There's no body / response shape here; sse.Register provides
 // the streaming response itself.
+//
+// LastEventID and Since are the two surfaces clients use to resume
+// after a reconnect. Browser EventSource auto-emits Last-Event-ID
+// from the most recent SSE id: line; curl / hand-written clients
+// generally find ?since= more ergonomic. The handler accepts either
+// — see resolveEventCursor for the priority rules.
 type eventsInput struct {
-	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
+	RadioID     string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
+	LastEventID string `                doc:"resumption cursor auto-emitted by EventSource clients on reconnect; the daemon replays buffered events with id > LastEventID" header:"Last-Event-ID"`
+	Since       string `                doc:"explicit resumption cursor (decimal event_id); takes priority over Last-Event-ID. Use 0 to replay the entire ring buffer"                            query:"since"`
 }

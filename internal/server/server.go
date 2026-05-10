@@ -72,6 +72,13 @@ type Config struct {
 	// recovery, future audit) emits through. Nil falls back to a
 	// stderr text handler so tests don't have to wire one up.
 	Logger *slog.Logger
+
+	// AuthToken gates every request with a constant-time bearer-
+	// token check when non-empty. Empty disables the auth middleware
+	// entirely (the default for loopback-only binds, which the cmd/
+	// layer ensures). /healthz is exempt regardless so orchestration
+	// liveness probes don't need credentials.
+	AuthToken string
 }
 
 // OpenAPISpec returns the daemon's OpenAPI 3.0 spec as YAML bytes —
@@ -100,6 +107,7 @@ type Server struct {
 	api         huma.API
 	logger      *slog.Logger
 	idempotency *idempotencyCache
+	authToken   string
 }
 
 // New wires a Server around the given Config. The Registry is
@@ -136,6 +144,7 @@ func New(cfg Config) *Server {
 		api:         api,
 		logger:      cfg.Logger.With(slog.String("subsystem", "http")),
 		idempotency: newIdempotencyCache(),
+		authToken:   cfg.AuthToken,
 		http: &http.Server{
 			Handler: mux,
 			// ReadHeaderTimeout protects against slowloris-style attacks;

@@ -53,6 +53,7 @@ func RequestIDFromContext(ctx context.Context) string {
 func (s *Server) registerMiddleware() {
 	s.api.UseMiddleware(s.recoveryMiddleware)
 	s.api.UseMiddleware(s.requestIDMiddleware)
+	s.api.UseMiddleware(s.authMiddleware)
 	s.api.UseMiddleware(s.requestLogMiddleware)
 }
 

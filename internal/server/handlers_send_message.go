@@ -23,7 +23,6 @@ package server
 import (
 	"context"
 
-	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/radio"
 )
 
@@ -75,30 +74,22 @@ func (s *Server) handleSendMessage(
 	// of the same logical send within the TTL window so a network
 	// blip + client retry doesn't double-broadcast on RF. Key is
 	// per-radio so independent radios don't share a key namespace.
+	// Stays in front of SendMessage because the Idempotency-Key header
+	// is an HTTP-specific concept; the TUI doesn't retry, and an MCP
+	// server that wants its own dedupe layer can wrap SendMessage.
 	if cached, ok := s.idempotency.Get(in.RadioID, in.IdempotencyKey); ok {
 		out := &sendMessageOutput{}
 		out.Body = cached
 		return out, nil
 	}
-	pid, ok := d.Send(mdl.SendText{
+	res := d.SendMessage(radio.SendMessageRequest{
 		Channel: in.Body.Channel,
 		Text:    in.Body.Text,
 		ReplyID: in.Body.ReplyID,
 		ToNum:   in.Body.ToNum,
 	})
-	// Record the outbound row in State.Messages + persist + publish
-	// even when ok=false (demo mode / pump disconnected): the row
-	// still belongs in the user's chat log as a pending entry, and
-	// the Routing handler flips it to Fail when no ack arrives.
-	d.RecordOutbound(radio.RecordOutboundOptions{
-		Channel:  in.Body.Channel,
-		Text:     in.Body.Text,
-		ReplyID:  in.Body.ReplyID,
-		PacketID: pid,
-		ToNum:    in.Body.ToNum,
-	})
 	out := &sendMessageOutput{}
-	out.Body = SendMessageResult{PacketID: pid, OK: ok}
+	out.Body = SendMessageResult{PacketID: res.PacketID, OK: res.OK}
 	s.idempotency.Put(in.RadioID, in.IdempotencyKey, out.Body)
 	return out, nil
 }

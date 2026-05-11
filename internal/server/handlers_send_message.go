@@ -39,7 +39,7 @@ import (
 type SendMessageRequest struct {
 	Channel int    `json:"channel"            doc:"target channel slot index (0..7); the current channel's slot is the default"`
 	Text    string `json:"text"               doc:"message body"                                                                                                                                                                              minLength:"1"`
-	ReplyID uint32 `json:"reply_id,omitempty" doc:"PacketID this message replies to"`
+	ReplyID uint32 `json:"reply_id,omitempty" doc:"PacketID this message replies to"                                                                                                                                                                        format:"int64" minimum:"0"`
 	ToNum   uint32 `json:"to_num,omitempty"   doc:"recipient NodeNum for a DM (peer-addressed unicast); 0 = broadcast on the channel. Look up the numeric NodeNum via GET /radios/{radio_id}/nodes — callsigns are not resolved server-side."               format:"int64" minimum:"0"`
 }
 
@@ -48,7 +48,7 @@ type SendMessageRequest struct {
 // "Result" not "Response" so the OpenAPI schema name doesn't collide
 // with oapi-codegen's auto-generated <OpId>Response wrapper.)
 type SendMessageResult struct {
-	PacketID uint32 `json:"packet_id" doc:"MeshPacket.id allocated by the radio (zero if pump rejected the send)"`
+	PacketID uint32 `json:"packet_id" doc:"MeshPacket.id allocated by the radio (zero if pump rejected the send)"  format:"int64" minimum:"0"`
 	OK       bool   `json:"ok"        doc:"false when the pump's outbound buffer was full or no radio is attached"`
 }
 

@@ -187,7 +187,7 @@ func (r *Remote) Send(cmd mdl.Command) (uint32, bool) {
 			Text:    c.Text,
 		}
 		if c.ReplyID != 0 {
-			rid := int32(c.ReplyID)
+			rid := int64(c.ReplyID)
 			body.ReplyId = &rid
 		}
 		// Bound the outbound POST so an unreachable daemon doesn't

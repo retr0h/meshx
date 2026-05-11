@@ -619,7 +619,7 @@ type PingResult struct {
 	Ok bool `json:"ok"`
 
 	// PacketId MeshPacket.id allocated for the ping; matches the request_id field on the eventual ping event
-	PacketId int32 `json:"packet_id"`
+	PacketId int64 `json:"packet_id"`
 }
 
 // Position defines model for Position.
@@ -640,7 +640,7 @@ type RadioSummary struct {
 	Connected bool `json:"connected"`
 
 	// MyNodeNum radio's own node num; zero before MyInfo arrives
-	MyNodeNum int32 `json:"my_node_num"`
+	MyNodeNum int64 `json:"my_node_num"`
 
 	// RadioId canonical radio identifier — 0x<hex node_num> post-handshake, pending:<transport>:<addr> beforehand
 	RadioId string `json:"radio_id"`
@@ -723,7 +723,7 @@ type SendMessageRequest struct {
 	Channel int64 `json:"channel"`
 
 	// ReplyId PacketID this message replies to
-	ReplyId *int32 `json:"reply_id,omitempty"`
+	ReplyId *int64 `json:"reply_id,omitempty"`
 
 	// Text message body
 	Text string `json:"text"`
@@ -741,7 +741,7 @@ type SendMessageResult struct {
 	Ok bool `json:"ok"`
 
 	// PacketId MeshPacket.id allocated by the radio (zero if pump rejected the send)
-	PacketId int32 `json:"packet_id"`
+	PacketId int64 `json:"packet_id"`
 }
 
 // SessionSnapshot defines model for SessionSnapshot.
@@ -749,7 +749,7 @@ type SessionSnapshot struct {
 	// Schema A URL to the JSON Schema for this object.
 	Schema         *string  `json:"$schema,omitempty"`
 	AirUtilTx      *float32 `json:"air_util_tx,omitempty"`
-	BatteryLevel   *int32   `json:"battery_level,omitempty"`
+	BatteryLevel   *int64   `json:"battery_level,omitempty"`
 	BatteryVoltage *float32 `json:"battery_voltage,omitempty"`
 	ChannelUtil    *float32 `json:"channel_util,omitempty"`
 	ConnectDest    string   `json:"connect_dest"`
@@ -759,7 +759,7 @@ type SessionSnapshot struct {
 	MyGrid         *string  `json:"my_grid,omitempty"`
 	MyLatitude     *float64 `json:"my_latitude,omitempty"`
 	MyLongitude    *float64 `json:"my_longitude,omitempty"`
-	MyNodeNum      int32    `json:"my_node_num"`
+	MyNodeNum      int64    `json:"my_node_num"`
 	RadioFirmware  *string  `json:"radio_firmware,omitempty"`
 	RadioId        string   `json:"radio_id"`
 	RadioModem     *string  `json:"radio_modem,omitempty"`
@@ -820,7 +820,7 @@ type TracerouteResult struct {
 	Ok bool `json:"ok"`
 
 	// PacketId MeshPacket.id allocated for the traceroute; matches the request_id field on the eventual traceroute event
-	PacketId int32 `json:"packet_id"`
+	PacketId int64 `json:"packet_id"`
 }
 
 // TransportError defines model for TransportError.

@@ -67,6 +67,7 @@ type Remote struct {
 	client    *gen.ClientWithResponses
 	radioID   string
 	serverURL string
+	authToken string // empty when the daemon is unauthenticated
 	cancel    context.CancelFunc
 
 	// teaSend is set by Start once the bubbletea program is up.
@@ -80,8 +81,23 @@ type Remote struct {
 // is registered, and seeds *radio.State from the daemon's snapshot
 // endpoints. The returned Remote is ready to satisfy radioSession but
 // won't receive live events until Start is called.
-func NewRemote(serverURL, radioID string) (*Remote, error) {
-	c, err := gen.NewClientWithResponses(serverURL)
+//
+// authToken is the bearer token the daemon expects; empty = no auth
+// header (for loopback daemons running --auth-disabled or unauthed).
+// Threads through both the typed HTTP calls (via WithRequestEditorFn)
+// and the hand-rolled SSE reader.
+func NewRemote(serverURL, authToken, radioID string) (*Remote, error) {
+	opts := []gen.ClientOption{}
+	if authToken != "" {
+		token := authToken
+		opts = append(opts, gen.WithRequestEditorFn(
+			func(_ context.Context, req *http.Request) error {
+				req.Header.Set("Authorization", "Bearer "+token)
+				return nil
+			},
+		))
+	}
+	c, err := gen.NewClientWithResponses(serverURL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("sdk: build client: %w", err)
 	}
@@ -90,6 +106,7 @@ func NewRemote(serverURL, radioID string) (*Remote, error) {
 		client:    c,
 		radioID:   radioID,
 		serverURL: serverURL,
+		authToken: authToken,
 	}
 	if err := r.seed(context.Background()); err != nil {
 		return nil, err
@@ -230,6 +247,9 @@ func (r *Remote) runSSE(ctx context.Context) {
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
+	if r.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+r.authToken)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return

@@ -449,12 +449,17 @@ func RunRadio(dest string) error {
 // /nodes + /messages, then the SSE stream injects mdl.X events into
 // the model's Update loop where the existing apply* handlers run.
 //
+// authToken is the bearer token the daemon expects (empty = no auth,
+// for loopback daemons that pass --auth-disabled or run unauthed).
+// It's forwarded into NewRemote so every HTTP call + the SSE stream
+// carry `Authorization: Bearer <token>`.
+//
 // No Pump.Send happens client-side — outbound mdl.SendText goes
 // through Remote.Send which POSTs to /radios/{id}/messages. No store
 // either — StoreHandle returns nil and the apply* handlers' nil-check
 // pattern (already present for demo mode) becomes a no-op.
-func RunRadioRemote(serverURL, radioID string) error {
-	r, err := sdk.NewRemote(serverURL, radioID)
+func RunRadioRemote(serverURL, authToken, radioID string) error {
+	r, err := sdk.NewRemote(serverURL, authToken, radioID)
 	if err != nil {
 		return err
 	}

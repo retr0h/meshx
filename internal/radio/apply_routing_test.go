@@ -61,14 +61,14 @@ func seedOutboundRow(s *Session, packetID uint32) {
 	})
 }
 
-// TestSessionApplyRouting covers the public ApplyRouting surface.
+// TestSession_ApplyRouting covers the public ApplyRouting surface.
 // The dispatch-shape scenarios (which routing replies surface a
 // message_status update, which fall through, what status the row
 // flips to) live as a table — uniform mechanics. The Ackers snapshot-
 // independence property has genuinely different mechanics (two
 // subscribers, two ApplyRouting calls, copy-vs-alias check) so it
 // runs as a t.Run sub-test under the same parent.
-func TestSessionApplyRouting(t *testing.T) {
+func TestSession_ApplyRouting(t *testing.T) {
 	t.Parallel()
 
 	type ackerSeed struct {

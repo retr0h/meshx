@@ -33,7 +33,7 @@ import (
 // overhear, pre-handshake packets where MyNodeNum is still 0) fires
 // text. Mutual exclusion is the value here — consumers subscribe to
 // one kind and trust they aren't also picking up the other.
-func TestSessionApplyText(t *testing.T) {
+func TestSession_ApplyText(t *testing.T) {
 	t.Parallel()
 
 	const myNum = uint32(0xdeadbeef)

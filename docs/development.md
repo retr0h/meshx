@@ -557,26 +557,43 @@ reset), call it out explicitly — don't bury it.
 
 ### The shape rule (non-negotiable)
 
-**One test function per public surface. Scenarios are rows in a single table.**
-Don't write `TestFooHappyPath`, `TestFooMissingField`, `TestFooNotFound` as
-three separate functions — those are three rows of `TestFoo`. Ad-hoc one-off
-test functions sprawled across files are forbidden; consistency is the goal.
+**One test function per public surface. Every test is table-driven.** A test
+that exercises only one scenario today is still written as a one-row table — the
+second scenario is a new row, not a new function. Don't write
+`TestFooHappyPath`, `TestFooMissingField`, `TestFooNotFound` as three separate
+functions; those are three rows of `TestFoo`. Ad-hoc sibling test functions are
+forbidden.
 
 A "public surface" is:
 
 - An HTTP route (one `TestEndpoint<OperationID>` per route registered in
   `routes.go`).
-- An exported type's public method (one `Test<Type><Method>` per method).
-- A meaningful behavior on a public function (one
-  `Test<FunctionDescribingBehavior>` per behavior).
+- An exported type's public method (one `Test<Type>_<Method>` per method — see
+  naming below).
+- A package-level function (one `Test<Function>` per function).
 
-Scenarios go in a single `[]struct{name, ...}` table when their mechanics are
-uniform — same setup, same act/assert shape, different inputs and expectations.
-When scenarios genuinely diverge in mechanics (one tests cancellation, another
-tests delivery), use `t.Run("scenario-name", func(t *testing.T) { ... })`
-sub-tests under the same parent. **The unifying principle: one parent function
-per public surface — never multiple top-level `TestXHappyPath` / `TestXFailure`
-functions.**
+#### Naming
+
+| Subject in code                        | Test name                 |
+| -------------------------------------- | ------------------------- |
+| `LoadAuthToken` (function)             | `TestLoadAuthToken`       |
+| `Session.ApplyText` (method on a type) | `TestSession_ApplyText`   |
+| HTTP route operation `SendMessage`     | `TestEndpointSendMessage` |
+
+The underscore is reserved for the `Type.Method` separator — Go-stdlib idiom
+(`TestFile_Stat`, `TestBuffer_WriteByte`), and `go test -run Type/Method`
+formats it cleanly. Never use the underscore as a `_HappyPath` / `_Failure`
+discriminator — those are table rows, not function names.
+
+#### Tables, always
+
+Scenarios go in a single `[]struct{name, ...}` table. When their mechanics are
+uniform (same setup, same act/assert shape, different inputs and expectations),
+the loop body is one block. When scenarios genuinely diverge in mechanics (one
+tests cancellation, another tests delivery), the table holds a
+`run func(t *testing.T)` field per row OR use
+`t.Run("scenario-name", func(t *testing.T) { ... })` sub-tests under the same
+parent — _still one parent function_, never sibling top-levels.
 
 ```go
 func TestEndpointSendMessage(t *testing.T) {

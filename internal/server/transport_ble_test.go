@@ -375,10 +375,10 @@ func btoi(b bool) int {
 	return 0
 }
 
-// TestEndpointForgetBLE — DELETE /transports/ble/devices/{uuid}.
+// TestEndpointForgetBLEDevice — DELETE /transports/ble/devices/{uuid}.
 // Resolves the path arg via transports.Store.LookupBLEDevice (accepts UUID or
 // name); 404 when no saved device matches.
-func TestEndpointForgetBLE(t *testing.T) {
+func TestEndpointForgetBLEDevice(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {

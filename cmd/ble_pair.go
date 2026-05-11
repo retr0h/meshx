@@ -21,12 +21,11 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
 	"github.com/spf13/cobra"
-
-	"github.com/retr0h/meshx/internal/meshx/model"
 )
 
 var blePairCmd = &cobra.Command{
@@ -44,22 +43,20 @@ Linux goes through the BlueZ agent.`,
 			Debug("running", slog.String("uuid", uuid))
 		fmt.Printf("pairing %s …\n", uuid)
 		fmt.Println("  if your OS pops a Bluetooth pair prompt, enter the PIN shown on the radio.")
-		if err := cliBLEPairer.Pair(uuid); err != nil {
-			return fmt.Errorf("pair: %w", err)
-		}
-		store, err := cliOpenBLEStore()
+		mgr, closeFn, err := cliTransports()
 		if err != nil {
 			return fmt.Errorf("open store: %w", err)
 		}
-		defer func() { _ = store.Close() }()
-		if err := store.SaveBLEDevice(model.BLEDevice{UUID: uuid}); err != nil {
-			return fmt.Errorf("save: %w", err)
+		defer closeFn()
+		view, err := mgr.PairBLE(context.Background(), uuid)
+		if err != nil {
+			return err
 		}
-		fmt.Printf("paired with %s, saved to ~/.meshx/meshx.db\n", uuid)
+		fmt.Printf("paired with %s, saved to ~/.meshx/meshx.db\n", view.UUID)
 		fmt.Println()
 		fmt.Println("next steps:")
-		fmt.Printf("  - `meshx ble connect %s` to open the TUI\n", uuid)
-		fmt.Printf("  - `meshx ble fav %s` to make bare `meshx` auto-connect here\n", uuid)
+		fmt.Printf("  - `meshx ble connect %s` to open the TUI\n", view.UUID)
+		fmt.Printf("  - `meshx ble fav %s` to make bare `meshx` auto-connect here\n", view.UUID)
 		return nil
 	},
 }

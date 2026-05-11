@@ -21,6 +21,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -39,7 +40,11 @@ var bleScanCmd = &cobra.Command{
 	RunE: func(_ *cobra.Command, _ []string) error {
 		logger.With(slog.String("subsystem", "ble.scan")).
 			Debug("running", slog.Int("timeout_ms", 10000))
-		hits, err := cliBLEScanner.Scan(10000)
+		// Scan doesn't touch the pairing store — construct a Manager
+		// without sqlite so a missing meshx.db (fresh install, no
+		// home dir) doesn't block discovery.
+		mgr := newTransportsManager(nil)
+		hits, err := mgr.ScanBLE(context.Background(), 10000)
 		if err != nil {
 			return err
 		}

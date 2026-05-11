@@ -21,6 +21,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -46,7 +47,10 @@ var usbConnectCmd = &cobra.Command{
 		log := logger.With(slog.String("subsystem", "usb.connect"))
 		log.Debug("running", slog.String("device", dest))
 		if dest == "" {
-			auto, err := cliUSBScanner.AutoDetect(1500)
+			// AutoDetect doesn't need the sqlite store — construct a
+			// storeless Manager.
+			mgr := newTransportsManager(nil)
+			auto, err := mgr.AutoDetectUSB(context.Background(), 1500)
 			if err != nil {
 				return fmt.Errorf(
 					"usb auto-detect: %w — try `meshx usb scan` to see candidates",

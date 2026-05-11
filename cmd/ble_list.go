@@ -21,6 +21,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -34,12 +35,12 @@ var bleListCmd = &cobra.Command{
 	Short: "Show saved Bluetooth devices",
 	RunE: func(_ *cobra.Command, _ []string) error {
 		logger.With(slog.String("subsystem", "ble.list")).Debug("running")
-		store, err := cliOpenBLEStore()
+		mgr, closeFn, err := cliTransports()
 		if err != nil {
 			return fmt.Errorf("open store: %w", err)
 		}
-		defer func() { _ = store.Close() }()
-		devs, err := store.LoadBLEDevices()
+		defer closeFn()
+		devs, err := mgr.ListBLEDevices(context.Background())
 		if err != nil {
 			return fmt.Errorf("load: %w", err)
 		}

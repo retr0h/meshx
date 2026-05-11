@@ -59,23 +59,28 @@ go run . --debug ble pair <uuid>
 ```
 meshx/
 ├── main.go                       # tiny — forwards to cmd.Execute()
-├── cmd/                          # one file per subcommand; *_deps.go declares the cmd-local narrow consumer interfaces
+├── cmd/                          # one file per subcommand; CLI commands consume *transports.Manager (no direct transport.* / storage.* calls)
 │   ├── root.go                   # cobra root + global slog logger (lmittmann/tint, JSON via -j) + viper (MESHX_ env prefix) + persistent flags
 │   ├── version.go                # `meshx version` JSON build identity
 │   ├── usb.go                    # `meshx usb` parent + init wiring
-│   ├── usb_scan.go               # `meshx usb scan` — direct transport.IdentifyAllSerial
-│   ├── usb_connect.go            # `meshx usb connect` — auto-detect or explicit, then tui.RunRadio
-│   ├── usb_probe.go              # `meshx usb probe` — deep diagnostic packet dump
-│   ├── usb_deps.go               # narrow usbScanner interface + transportUSBScanner adapter (cliUSBScanner)
+│   ├── usb_scan.go               # `meshx usb scan` — calls mgr.ScanUSB
+│   ├── usb_connect.go            # `meshx usb connect` — mgr.AutoDetectUSB or explicit, then tui.RunRadio
+│   ├── usb_probe.go              # `meshx usb probe` — deep diagnostic packet dump (legitimately reaches transport.* for wire-level work)
 │   ├── ble.go                    # `meshx ble` parent + init + orDash helper
-│   ├── ble_scan.go ble_pair.go ble_list.go ble_forget.go ble_connect.go ble_disconnect.go ble_fav.go
-│   ├── ble_probe.go              # 15s FromRadio dump
-│   ├── ble_deps.go               # narrow bleScanner / blePairer / bleStore interfaces + transport adapters + cliOpenBLEStore
+│   ├── ble_scan.go               # `meshx ble scan` — calls mgr.ScanBLE (no store needed)
+│   ├── ble_pair.go               # mgr.PairBLE — triggers OS bonding + persists
+│   ├── ble_list.go               # mgr.ListBLEDevices
+│   ├── ble_forget.go             # mgr.ForgetBLE
+│   ├── ble_fav.go                # mgr.SetBLEFavorite
+│   ├── ble_disconnect.go         # mgr.ClearBLEFavorite
+│   ├── ble_connect.go            # mgr.ResolveBLE → tui.RunRadio("ble:<uuid>")
+│   ├── ble_probe.go              # 15s FromRadio dump (wire-level)
 │   ├── server.go                 # `meshx server` parent
 │   ├── server_start.go           # `meshx server start` — headless daemon (binds via viper.server.bind, default 127.0.0.1:4404)
-│   └── server_deps.go            # daemon-only adapters (daemonBLEScanner / daemonBLEPairer / daemonUSBScanner / openStore) wiring server.Config
+│   ├── server_deps.go            # openStore — opens sqlite handle for the daemon (CLI uses cliTransports instead)
+│   └── transports_deps.go        # shared adapters (bleScannerAdapter, blePairerAdapter, usbScannerAdapter) + newTransportsManager helper + cliTransports for one-shot CLI use
 └── internal/
-    ├── tui/                      # Bubble Tea rendering surface (model holds *session.Session today)
+    ├── tui/                      # Bubble Tea rendering surface (model holds *radio.Session today)
     │   ├── app.go                # Bubble Tea model + View + Update + RunRadio entrypoint
     │   ├── ui.go                 # View dispatcher, model getters, generic utils
     │   ├── commands.go           # /command dispatcher + ham bangs
@@ -99,23 +104,28 @@ meshx/
     │   ├── geo.go                # haversine / bearing / compass math
     │   ├── help.go               # /help entry data
     │   └── qr.go                 # ASCII QR rendering for /channel share
-    ├── session/                  # headless radio session layer — owns canonical State, wraps Pump + Store
-    │   ├── session.go            # *session.Session + New + Send + Stop + Session
-    │   ├── state.go              # *session.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests
+    ├── radio/                    # headless per-radio session layer — owns canonical State, wraps Pump + Store
+    │   ├── session.go            # *radio.Session + New + Send + Stop
+    │   ├── state.go              # *radio.State — per-radio runtime: Channels/Nodes/Messages, indices, pending requests
     │   ├── apply.go              # Apply* handlers: Text / NodeInfo / Routing / Position / …
     │   ├── subscribe.go          # Event + Subscribe + SubscribeWithReplay + ring buffer (per-Session replay log)
+    │   ├── hydrate.go            # HydrateFromStore — replay persisted history at boot
     │   ├── pump.go               # consumer interface (Pump) for internal/meshx/pump
     │   └── store.go              # consumer interface (Store) for internal/meshx/storage
-    ├── server/                   # HTTP+SSE daemon (Huma)
-    │   ├── server.go             # *Server + Config{Radios, Store, Scanner, Pairer, USBScanner, Logger}
+    ├── transports/               # hardware-management surface — single source of truth for BLE/USB ops
+    │   ├── manager.go            # *Manager — Config{Store, Scanner, Pairer, USBScanner} + New
+    │   ├── types.go              # consumer interfaces (Store, BLEScanner, BLEPairer, USBScanner) + wire types (BLEDeviceView, BLESighting, USBSighting)
+    │   ├── ble.go                # List / Scan / Pair / Forget / Fav / Clear / Resolve / ResolveAutoConnect
+    │   └── usb.go                # Scan / AutoDetect
+    ├── server/                   # HTTP+SSE daemon (Huma) — thin adapters over radio/transports
+    │   ├── server.go             # *Server + Config{Radios, Transports, Logger, AuthToken}
     │   ├── registry.go           # radio_id → Driver multiplex
     │   ├── middleware.go         # request-id / request-log / panic recovery
-    │   ├── session.go             # consumer interface (Driver)
-    │   ├── store.go              # Store / BLEScanner / BLEPairer / USBScanner consumer interfaces + sighting wire shapes
+    │   ├── session.go            # consumer interface (Driver — what the server needs from *radio.Session)
     │   ├── routes.go             # huma.Register calls
     │   ├── handlers.go           # per-route handlers
-    │   ├── transport_ble.go      # /transports/ble/* HTTP routes (remote admin)
-    │   └── transport_usb.go      # /transports/usb/{scan,auto} HTTP routes (remote admin)
+    │   ├── transport_ble.go      # /transports/ble/* HTTP routes — thin wrappers over s.transports.X
+    │   └── transport_usb.go      # /transports/usb/{scan,auto} HTTP routes — same pattern
     ├── sdk/
     │   └── gen/                  # generated Go HTTP client (api.yaml + cfg.yaml + generate.go + client.gen.go)
     ├── version/                  # build identity (Version / Commit / Date / BuiltBy)
@@ -232,11 +242,11 @@ Three modes share one binary:
 3. **Remote** (planned) — `meshx ble connect --server http://host:4404 <id>`
    runs the TUI against a remote daemon.
 
-The dual-mode seam is `internal/tui/session.go::radioSession`.
-`*session.Session` satisfies it for local mode; `*sdk.RemoteDriver` (planned)
-satisfies it over HTTP+SSE — it holds a `*gen.Client` for outbound calls and
-consumes `/radios/{id}/events` to project events onto a local `*session.State`.
-The TUI's Update path doesn't branch on mode.
+The dual-mode seam is `internal/tui/session.go::radioSession`. `*radio.Session`
+satisfies it for local mode; `*sdk.RemoteDriver` (planned) satisfies it over
+HTTP+SSE — it holds a `*gen.Client` for outbound calls and consumes
+`/radios/{id}/events` to project events onto a local `*radio.State`. The TUI's
+Update path doesn't branch on mode.
 
 Remote mode has two independent reconnect loops: radio↔daemon (pump backoff on
 the daemon side) and TUI↔daemon (SSE re-subscribe + snapshot re-fetch on
@@ -272,7 +282,7 @@ status, duration, request_id, remote, user-agent — Error level for 5xx, Warn f
 A request flows: Huma router → middleware stack (panic / request-id / log) →
 `internal/server/handlers.go` → `resolveRadio({radio_id})` → `Registry.Get(id)`
 → `Driver` (the consumer interface in `internal/server/session.go`, satisfied by
-`*session.Session`). Handlers project model types (`mdl.ChannelItem`,
+`*radio.Session`). Handlers project model types (`mdl.ChannelItem`,
 `mdl.NodeItem`, `mdl.MessageItem`) directly into responses — no DTO duplication,
 the JSON shape on the wire IS the model shape. Multi-radio is the `Registry`
 multiplex (`radio_id → Driver`, RWMutex-guarded); routes are radio-scoped under
@@ -638,12 +648,11 @@ first — never invent a `_test.go` file that doesn't pair with production.
 - **`net/http/httptest`** for every HTTP and SSE endpoint —
   `httptest.NewServer(s.http.Handler)` against the same `*Server` production
   uses. No fake handlers, no parallel mock router.
-- **In-process `*session.Session`** (constructed via
-  `session.New(nil, nil, nil)`) for testing the apply / publish / subscribe
-  paths without a real radio. Inject events via `Session.Publish`; assert on
-  `Subscribe` / `SubscribeWithReplay` output. For radio-dispatch verification
-  (commands reaching the pump), satisfy `session.Pump` with a fake that captures
-  dispatched commands — see `fakePump` in
+- **In-process `*radio.Session`** (constructed via `radio.New(nil, nil, nil)`)
+  for testing the apply / publish / subscribe paths without a real radio. Inject
+  events via `Session.Publish`; assert on `Subscribe` / `SubscribeWithReplay`
+  output. For radio-dispatch verification (commands reaching the pump), satisfy
+  `radio.Pump` with a fake that captures dispatched commands — see `fakePump` in
   `internal/server/handlers_radio_ops_test.go` for the canonical shape.
 - **Race detector** — `go test -race ./...` for anything with goroutines
   (Subscribe, Pump, the SSE handler). Cheapest way to catch a slipped lock.

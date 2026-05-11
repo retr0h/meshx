@@ -21,6 +21,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -36,22 +37,16 @@ var bleConnectCmd = &cobra.Command{
 	RunE: func(_ *cobra.Command, args []string) error {
 		log := logger.With(slog.String("subsystem", "ble.connect"))
 		log.Debug("running", slog.String("target", args[0]))
-		store, err := cliOpenBLEStore()
+		mgr, closeFn, err := cliTransports()
 		if err != nil {
 			return fmt.Errorf("open store: %w", err)
 		}
-		d, err := store.LookupBLEDevice(args[0])
-		_ = store.Close()
+		uuid, err := mgr.ResolveBLE(context.Background(), args[0])
+		closeFn()
 		if err != nil {
-			return fmt.Errorf("lookup: %w", err)
+			return err
 		}
-		if d == nil {
-			return fmt.Errorf(
-				"no saved device matches %q — run `meshx ble list` to see what's paired",
-				args[0],
-			)
-		}
-		log.Debug("resolved", slog.String("uuid", d.UUID))
-		return tui.RunRadio("ble:" + d.UUID)
+		log.Debug("resolved", slog.String("uuid", uuid))
+		return tui.RunRadio("ble:" + uuid)
 	},
 }

@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/danielgtaylor/huma/v2 v2.37.3
+	github.com/dave/jennifer v1.7.1
 	github.com/lmatte7/gomesh v0.2.1
 	github.com/lmittmann/tint v1.1.3
 	github.com/mattn/go-sqlite3 v1.14.44
@@ -288,6 +289,8 @@ tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 	github.com/oasdiff/oasdiff
+	github.com/retr0h/meshx/internal/sdk/gen/dumpspec
+	github.com/retr0h/meshx/internal/tui/emoji/emojigen
 	github.com/segmentio/golines
 	mvdan.cc/gofumpt
 )

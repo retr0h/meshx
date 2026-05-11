@@ -18,18 +18,17 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-//go:build ignore
-
-// main.go extracts the daemon's OpenAPI 3.0 spec directly from
-// Huma in-process and writes it to api.yaml — no listener, no port
-// allocation, no curl. Invoked via go:generate from generate.go
-// ahead of the oapi-codegen step, so `just generate` runs
-// end-to-end with no background daemon.
+// Command dumpspec extracts the daemon's OpenAPI 3.0 spec directly
+// from Huma in-process and writes it to api.yaml — no listener, no
+// port allocation, no curl. Invoked via go:generate from the
+// sibling gen package's generate.go ahead of the oapi-codegen step,
+// so `just generate` runs end-to-end with no background daemon.
 //
-// Build-tagged "ignore" so `go build` and `go test` skip it; only
-// the generate directive (which uses `go run`) compiles it. Same
-// pattern internal/tui/emoji/main.go uses for its widths.gen.go
-// generator.
+// Registered as a `tool` in go.mod (same pattern as gofumpt /
+// golines / oapi-codegen / emojigen) so internal/server lands in
+// the require graph through a real-build subpackage. Invoked via
+// `go tool` from the sibling gen/generate.go's go:generate
+// directive.
 package main
 
 import (

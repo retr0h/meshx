@@ -41,7 +41,7 @@ type PingRequest struct {
 
 // PingResult acknowledges the dispatch.
 type PingResult struct {
-	PacketID uint32 `json:"packet_id" doc:"MeshPacket.id allocated for the ping; matches the request_id field on the eventual ping event"`
+	PacketID uint32 `json:"packet_id" doc:"MeshPacket.id allocated for the ping; matches the request_id field on the eventual ping event" format:"int64" minimum:"0"`
 	OK       bool   `json:"ok"        doc:"false when the pump's outbound buffer was full or no radio is attached"`
 }
 
@@ -52,7 +52,7 @@ type TracerouteRequest struct {
 
 // TracerouteResult acknowledges the dispatch.
 type TracerouteResult struct {
-	PacketID uint32 `json:"packet_id" doc:"MeshPacket.id allocated for the traceroute; matches the request_id field on the eventual traceroute event"`
+	PacketID uint32 `json:"packet_id" doc:"MeshPacket.id allocated for the traceroute; matches the request_id field on the eventual traceroute event" format:"int64" minimum:"0"`
 	OK       bool   `json:"ok"        doc:"false when the pump's outbound buffer was full or no radio is attached"`
 }
 

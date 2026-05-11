@@ -923,7 +923,7 @@ components:
           type: boolean
         packet_id:
           description: MeshPacket.id allocated for the ping; matches the request_id field on the eventual ping event
-          format: int32
+          format: int64
           minimum: 0
           type: integer
       required:
@@ -967,7 +967,7 @@ components:
           type: boolean
         my_node_num:
           description: radio's own node num; zero before MyInfo arrives
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         radio_id:
@@ -1135,7 +1135,7 @@ components:
           type: integer
         reply_id:
           description: PacketID this message replies to
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         text:
@@ -1165,7 +1165,7 @@ components:
           type: boolean
         packet_id:
           description: MeshPacket.id allocated by the radio (zero if pump rejected the send)
-          format: int32
+          format: int64
           minimum: 0
           type: integer
       required:
@@ -1185,7 +1185,7 @@ components:
           format: float
           type: number
         battery_level:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         battery_voltage:
@@ -1212,7 +1212,7 @@ components:
           format: double
           type: number
         my_node_num:
-          format: int32
+          format: int64
           minimum: 0
           type: integer
         radio_firmware:
@@ -1343,7 +1343,7 @@ components:
           type: boolean
         packet_id:
           description: MeshPacket.id allocated for the traceroute; matches the request_id field on the eventual traceroute event
-          format: int32
+          format: int64
           minimum: 0
           type: integer
       required:

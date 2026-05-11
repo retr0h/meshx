@@ -31,9 +31,15 @@ import (
 // to subscribe to /events.
 
 // RadioSummary is one entry in GET /radios.
+//
+// MyNodeNum is uint32 on the wire (Meshtastic's chipset-derived id,
+// can exceed int32 max). Tagged format:"int64" minimum:"0" so the
+// OpenAPI spec emits a wide-enough integer type — without these the
+// generated SDK narrows to int32 and overflows on real-world radios.
+// Same pattern wherever a uint32 surfaces in the HTTP wire shape.
 type RadioSummary struct {
 	RadioID     string `json:"radio_id"     doc:"canonical radio identifier — 0x<hex node_num> post-handshake, pending:<transport>:<addr> beforehand"`
-	MyNodeNum   uint32 `json:"my_node_num"  doc:"radio's own node num; zero before MyInfo arrives"`
+	MyNodeNum   uint32 `json:"my_node_num"  doc:"radio's own node num; zero before MyInfo arrives"                                                    format:"int64" minimum:"0"`
 	Connected   bool   `json:"connected"    doc:"true once ConfigComplete has fired"`
 	ConnectDest string `json:"connect_dest" doc:"transport target string (/dev/cu.*, host:port, ble:<uuid>)"`
 }
@@ -41,7 +47,7 @@ type RadioSummary struct {
 // SessionSnapshot is the GET /radios/{radio_id} response.
 type SessionSnapshot struct {
 	RadioID        string  `json:"radio_id"`
-	MyNodeNum      uint32  `json:"my_node_num"`
+	MyNodeNum      uint32  `json:"my_node_num"               format:"int64" minimum:"0"`
 	Connected      bool    `json:"connected"`
 	CurrentChannel string  `json:"current_channel"`
 	ConnectDest    string  `json:"connect_dest"`
@@ -49,7 +55,7 @@ type SessionSnapshot struct {
 	RadioRegion    string  `json:"radio_region,omitempty"`
 	RadioModem     string  `json:"radio_modem,omitempty"`
 	RadioRole      string  `json:"radio_role,omitempty"`
-	BatteryLevel   uint32  `json:"battery_level,omitempty"`
+	BatteryLevel   uint32  `json:"battery_level,omitempty"   format:"int64" minimum:"0"`
 	BatteryVoltage float32 `json:"battery_voltage,omitempty"`
 	ChannelUtil    float32 `json:"channel_util,omitempty"`
 	AirUtilTx      float32 `json:"air_util_tx,omitempty"`

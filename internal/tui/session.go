@@ -100,4 +100,19 @@ type radioSession interface {
 	// SaveNodePrefs persists a peer's favorite / muted toggle through
 	// the Store. Failures surface via OnStoreError.
 	SaveNodePrefs(radioID string, nodeNum uint32, favorite, muted bool)
+
+	// Channel ops — single source of truth for /channel new / add /
+	// del / share. The TUI commands wrap these with flash messages
+	// and system-block output; HTTP handlers in internal/server wrap
+	// them with Huma I/O structs. Same primitives, two consumers.
+	MintChannel(req radio.MintChannelRequest) (radio.MintChannelResult, error)
+	ImportChannel(req radio.ImportChannelRequest) (radio.ImportChannelResult, error)
+	DeleteChannel(req radio.DeleteChannelRequest) (radio.DeleteChannelResult, error)
+	ShareChannel(req radio.ShareChannelRequest) (radio.ChannelShareResult, error)
+
+	// LookupChannelByName resolves a user-typed name (raw / "#name" /
+	// "*name*") to a slot index. Returns -1 when no live channel
+	// matches. TUI's findChannelByName uses this so the resolution
+	// rule lives in one place.
+	LookupChannelByName(typed string) int
 }

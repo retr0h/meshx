@@ -83,4 +83,13 @@ type Driver interface {
 	// /messages and /events without waiting for a radio echo that
 	// never comes.
 	RecordOutbound(opts radio.RecordOutboundOptions) radio.ApplyTextResult
+
+	// Channel ops — single source of truth for /channel new / add /
+	// del / share. Concrete logic (PSK gen, slot find, dispatch,
+	// optimistic state) lives on *radio.Session; HTTP handlers wrap
+	// these methods 1:1.
+	MintChannel(req radio.MintChannelRequest) (radio.MintChannelResult, error)
+	ImportChannel(req radio.ImportChannelRequest) (radio.ImportChannelResult, error)
+	DeleteChannel(req radio.DeleteChannelRequest) (radio.DeleteChannelResult, error)
+	ShareChannel(req radio.ShareChannelRequest) (radio.ChannelShareResult, error)
 }

@@ -39,7 +39,6 @@ import (
 // model uses the canonical item types from model/. Local aliases
 // keep TUI call sites readable.
 type (
-	channelItem = mdl.ChannelItem
 	messageItem = mdl.MessageItem
 	nodeItem    = mdl.NodeItem
 )

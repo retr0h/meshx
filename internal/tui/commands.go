@@ -34,9 +34,7 @@
 package tui
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -45,7 +43,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/meshx/pump"
 	"github.com/retr0h/meshx/internal/radio"
 	"github.com/retr0h/meshx/internal/version"
 )
@@ -207,58 +204,11 @@ func (m *model) setOwner(longName, shortName, which string) tea.Cmd {
 // channels. Slot 0 is always PRIMARY; 1..7 are SECONDARY. /channel
 // new + add allocate into the first DISABLED slot >= 1; PRIMARY is
 // off-limits because the radio refuses to operate without one.
-const meshtasticChannelSlots = 8
-
-// findFreeChannelSlot returns the first slot index >= 1 that is
-// DISABLED (or beyond the radio's reported set), suitable for /channel
-// new + /channel add to allocate into. Returns -1 if all 7 secondary
-// slots are taken — caller should flash "no free slots, /channel del
-// something first."
 //
-// Slot 0 is intentionally skipped — that's PRIMARY's home and the
-// firmware refuses to operate without one. Adding via slot 0 would
-// silently nuke the user's primary channel; refuse and let them
-// /channel del + /channel new explicitly if they really want to
-// replace the primary.
-func (m *model) findFreeChannelSlot() int {
-	for i := 1; i < meshtasticChannelSlots; i++ {
-		if i >= len(m.Channels) {
-			return i
-		}
-		if m.Channels[i].Role == roleDisabled || m.Channels[i].Role == "" {
-			return i
-		}
-	}
-	return -1
-}
-
-// findChannelByName looks up a channel slot by user-typed name. The
-// renderer prefixes names with "#" / "*…*" for display; we accept the
-// bare name, the prefixed form, or a leading "#" — whatever the user
-// types should resolve. Case-sensitive because PSK lookup ultimately
-// matches on bytes. Returns -1 if not found or DISABLED.
-func (m *model) findChannelByName(typed string) int {
-	want := bareChannelName(strings.TrimSpace(typed))
-	for i, c := range m.Channels {
-		if c.Role == roleDisabled {
-			continue
-		}
-		if bareChannelName(c.Name) == want {
-			return i
-		}
-	}
-	return -1
-}
-
-// bareChannelName strips the renderer's display prefixes from a
-// channel name — `#` for unkeyed channels, `*…*` for PSK-protected.
-// Used by findChannelByName + channelShare so the user-typed name and
-// the radio-side ChannelSettings.Name stay in sync regardless of
-// which form the user happens to type.
-func bareChannelName(s string) string {
-	s = strings.TrimPrefix(s, "#")
-	return strings.Trim(s, "*")
-}
+// Slot allocation, free-slot lookup, name resolution all live on
+// *radio.Session — see internal/radio/ops_channels.go. The TUI just
+// dispatches via m.session.X and surfaces flash / system-block
+// feedback.
 
 // channelShare round-trips a local channel back into a meshtastic://
 // URL and renders it as an ASCII QR for in-person scanning. The PSK
@@ -276,34 +226,29 @@ func (m *model) channelShare(typed string) tea.Cmd {
 		m.flash = "/channel share needs a live radio connection"
 		return nil
 	}
-	idx := m.findChannelByName(typed)
+	idx := m.session.LookupChannelByName(typed)
 	if idx < 0 {
 		m.flash = fmt.Sprintf("/channel share: no channel matching %q", typed)
 		return nil
 	}
-	c := m.Channels[idx]
-	if c.Role == rolePrimary && len(c.PSK) == 0 {
-		// Sharing the default LongFast channel as a meshtastic:// URL
-		// is technically valid but useless — every Meshtastic radio is
-		// on it by default. Refuse rather than emit a QR no one needs
-		// to scan.
+	// Primary-without-PSK is allowed by the ops layer (HTTP exposes it
+	// at GET /channels/0/share). The TUI refuses interactively because
+	// sharing default LongFast as a QR has no recipient who needs it.
+	if c := m.Channels[idx]; c.Role == rolePrimary && len(c.PSK) == 0 {
 		m.flash = "/channel share: the default channel is on every radio — nothing to share"
 		return nil
 	}
-	shareURL, err := pump.BuildChannelShareURL(mdl.ChannelInfo{
-		Name: bareChannelName(c.Name),
-		PSK:  c.PSK,
-	})
+	res, err := m.session.ShareChannel(radio.ShareChannelRequest{Index: idx})
 	if err != nil {
 		m.flash = fmt.Sprintf("/channel share failed: %v", err)
 		return nil
 	}
-	qr, err := renderQRASCII(shareURL)
+	qr, err := renderQRASCII(res.ShareURL)
 	if err != nil {
 		m.flash = fmt.Sprintf("/channel share: qr render failed: %v", err)
 		return nil
 	}
-	header := fmt.Sprintf("/channel share — %s", c.Name)
+	header := fmt.Sprintf("/channel share — %s", res.Name)
 	qrLines := strings.Split(qr, "\n")
 	lines := make([]string, 0, len(qrLines)+4)
 	lines = append(
@@ -312,9 +257,9 @@ func (m *model) channelShare(typed string) tea.Cmd {
 		"",
 	)
 	lines = append(lines, qrLines...)
-	lines = append(lines, "", "url: "+shareURL)
+	lines = append(lines, "", "url: "+res.ShareURL)
 	m.systemBlock(header, lines...)
-	m.flash = fmt.Sprintf("share QR for %s — visible in log", c.Name)
+	m.flash = fmt.Sprintf("share QR for %s — visible in log", res.Name)
 	return nil
 }
 
@@ -338,73 +283,22 @@ func (m *model) channelNew(name string) tea.Cmd {
 		m.flash = "/channel new needs a live radio connection"
 		return nil
 	}
-	name = strings.TrimSpace(name)
-	name = strings.TrimPrefix(name, "#")
-	if name == "" {
+	if strings.TrimSpace(strings.TrimPrefix(name, "#")) == "" {
 		m.flash = "usage: /channel new <name>"
 		return nil
 	}
-	if len(name) > 11 {
-		m.flash = fmt.Sprintf(
-			"/channel new rejected: name %d bytes, max 11 (Meshtastic field cap)", len(name),
-		)
-		return nil
-	}
-	if m.findChannelByName(name) >= 0 {
-		m.flash = fmt.Sprintf("/channel new: %q already exists — /channel del first", name)
-		return nil
-	}
-	slot := m.findFreeChannelSlot()
-	if slot < 0 {
-		m.flash = fmt.Sprintf(
-			"/channel new: no free slots (max %d, /channel del to free one)",
-			meshtasticChannelSlots-1,
-		)
-		return nil
-	}
-	psk := make([]byte, 32)
-	if _, err := rand.Read(psk); err != nil {
-		m.flash = fmt.Sprintf("/channel new: rand.Read failed: %v", err)
-		return nil
-	}
-	// Id randomized so the channel hash collides minimally with other
-	// meshes using the same name. Per the proto's note: any 32-bit-
-	// random uint is fine for collision avoidance among the small
-	// number of meshtastic users.
-	channelID, err := randUint32()
+	res, err := m.session.MintChannel(radio.MintChannelRequest{Name: name})
 	if err != nil {
 		m.flash = fmt.Sprintf("/channel new: %v", err)
 		return nil
 	}
-	if _, ok := m.session.Send(mdl.SetChannel{
-		Slot: mdl.ChannelInfo{
-			Index:  slot,
-			Name:   name,
-			Role:   mdl.ChannelSecondary,
-			ID:     channelID,
-			HasPSK: true,
-			PSK:    psk,
-		},
-	}); !ok {
-		m.flash = "/channel new dropped — outbound buffer full"
-		return nil
-	}
-	// Optimistically populate so a second /channel new doesn't race
-	// the radio's ChannelInfo broadcast and pick the same slot.
-	display := "*" + name + "*"
-	m.Channels[slot] = channelItem{
-		Name:    display,
-		Private: true,
-		Index:   slot,
-		Role:    roleSecondary,
-		PSK:     psk,
-	}
-	fp := pskFingerprint(psk)
+	display := "*" + res.Name + "*"
+	fp := pskFingerprint(res.PSK)
 	m.systemBlock(
-		fmt.Sprintf("/channel new — %s created at slot %d", display, slot),
+		fmt.Sprintf("/channel new — %s created at slot %d", display, res.Index),
 		"PSK: 32 random bytes (AES256), RAM-only — never written to disk",
 		fmt.Sprintf("fingerprint: %s   ← read aloud to verify parity with the recipient", fp),
-		fmt.Sprintf("share:       /channel share %s", name),
+		fmt.Sprintf("share:       /channel share %s", res.Name),
 	)
 	m.flash = fmt.Sprintf("created %s (fp %s)", display, fp)
 	return nil
@@ -414,23 +308,12 @@ func (m *model) channelNew(name string) tea.Cmd {
 // short, human-readable identifier the user can read aloud to confirm
 // key parity with a recipient ("my fingerprint is a3f2c9b1, what's
 // yours?"). Same convention SSH uses for host key fingerprints. The
-// PSK itself is never displayed — only the hash.
+// PSK itself is never displayed — only the hash. TUI-only: the HTTP
+// API never exposes the PSK to clients (it's already encoded in the
+// share URL).
 func pskFingerprint(psk []byte) string {
 	sum := sha256.Sum256(psk)
 	return hex.EncodeToString(sum[:4])
-}
-
-// randUint32 returns a crypto/rand uint32 for ChannelSettings.Id.
-// Returns the error so the caller can surface it as a flash — we're
-// running inside the bubbletea Update loop and a panic here would
-// kill the whole TUI mid-keystroke. Entropy failure is rare but the
-// failure mode shouldn't be "app crash."
-func randUint32() (uint32, error) {
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return 0, fmt.Errorf("crypto/rand: %w", err)
-	}
-	return binary.BigEndian.Uint32(b[:]), nil
 }
 
 // channelDel disables a channel slot via AdminMessage_SetChannel
@@ -449,7 +332,7 @@ func (m *model) channelDel(typed string) tea.Cmd {
 		m.flash = "/channel del needs a live radio connection"
 		return nil
 	}
-	idx := m.findChannelByName(typed)
+	idx := m.session.LookupChannelByName(typed)
 	if idx < 0 {
 		m.flash = fmt.Sprintf("/channel del: no channel matching %q", typed)
 		return nil
@@ -458,19 +341,12 @@ func (m *model) channelDel(typed string) tea.Cmd {
 		m.flash = "/channel del: cannot delete the primary channel — use /config to rename"
 		return nil
 	}
-	if _, ok := m.session.Send(mdl.DeleteChannel{Index: idx}); !ok {
-		m.flash = "/channel del dropped — outbound buffer full"
+	res, err := m.session.DeleteChannel(radio.DeleteChannelRequest{Index: idx})
+	if err != nil {
+		m.flash = fmt.Sprintf("/channel del: %v", err)
 		return nil
 	}
-	deletedName := m.Channels[idx].Name
-	// Optimistically clear the slot — the radio's ChannelInfo
-	// rebroadcast will reconfirm, but the UI shouldn't keep showing a
-	// channel the user just deleted while waiting for that round trip.
-	m.Channels[idx] = channelItem{
-		Index: idx,
-		Role:  roleDisabled,
-	}
-	if m.CurrentChannel == deletedName {
+	if m.CurrentChannel == res.Name {
 		// User deleted the channel they were on. Snap back to the
 		// primary so the input bar has a valid target.
 		for _, c := range m.Channels {
@@ -480,8 +356,8 @@ func (m *model) channelDel(typed string) tea.Cmd {
 			}
 		}
 	}
-	m.systemLine(fmt.Sprintf("channel %s deleted (slot %d freed)", deletedName, idx))
-	m.flash = fmt.Sprintf("deleted %s", deletedName)
+	m.systemLine(fmt.Sprintf("channel %s deleted (slot %d freed)", res.Name, idx))
+	m.flash = fmt.Sprintf("deleted %s", res.Name)
 	return nil
 }
 
@@ -497,71 +373,33 @@ func (m *model) channelAdd(rawURL string) tea.Cmd {
 		m.flash = "/channel add needs a live radio connection"
 		return nil
 	}
-	slots, err := pump.ParseChannelShareURL(rawURL)
+	res, err := m.session.ImportChannel(radio.ImportChannelRequest{URL: rawURL})
 	if err != nil {
 		m.flash = "/channel add: " + err.Error()
 		return nil
 	}
-	added, skipped := 0, 0
-	var summary []string
-	for _, s := range slots {
-		name := s.Name
-		if name == "" {
-			// Empty-name in a share URL means "default channel" —
-			// almost certainly a mistake (sharing the well-known
-			// LongFast channel that everyone is already on). Skip
-			// rather than silently overwrite slot 0 / dupe LongFast.
-			summary = append(summary, "skip: <empty name> (would clobber default)")
-			skipped++
-			continue
-		}
-		if m.findChannelByName(name) >= 0 {
-			summary = append(summary, fmt.Sprintf("skip: %q already on radio", name))
-			skipped++
-			continue
-		}
-		slot := m.findFreeChannelSlot()
-		if slot < 0 {
-			summary = append(summary,
-				fmt.Sprintf("skip: %q — no free slots (max %d, /channel del to free one)",
-					name, meshtasticChannelSlots-1))
-			skipped++
-			continue
-		}
-		// Place the imported channel into the next free slot. The model
-		// already carries Role=Secondary, ID, PSK from the share URL.
-		s.Index = slot
-		if _, ok := m.session.Send(mdl.SetChannel{Slot: s}); !ok {
-			summary = append(summary, fmt.Sprintf("fail: %q — outbound buffer full", name))
-			skipped++
-			continue
-		}
-		// Optimistically populate the slot so a follow-up /channel new
-		// finds the next free slot rather than re-using this one. The
-		// radio's ChannelInfo broadcast will overwrite this row with
-		// the canonical state shortly.
-		display := "#" + name
-		if len(s.PSK) > 0 {
-			display = "*" + name + "*"
-		}
-		m.Channels[slot] = channelItem{
-			Name:    display,
-			Private: len(s.PSK) > 0,
-			Index:   slot,
-			Role:    roleSecondary,
-			PSK:     s.PSK,
-		}
-		summary = append(summary, fmt.Sprintf("add:  %s → slot %d", display, slot))
-		added++
-	}
-	if added == 0 && skipped == 0 {
+	if len(res.Imported) == 0 && len(res.Skipped) == 0 {
 		m.flash = "/channel add: nothing to do"
 		return nil
 	}
-	header := fmt.Sprintf("/channel add — %d added, %d skipped", added, skipped)
+	summary := make([]string, 0, len(res.Imported)+len(res.Skipped))
+	for _, ic := range res.Imported {
+		summary = append(summary, fmt.Sprintf("add:  %s → slot %d", ic.Name, ic.Index))
+	}
+	for _, sc := range res.Skipped {
+		name := sc.Name
+		if name == "" {
+			name = "<empty name>"
+		}
+		summary = append(summary, fmt.Sprintf("skip: %q — %s", name, sc.Reason))
+	}
+	header := fmt.Sprintf(
+		"/channel add — %d added, %d skipped",
+		len(res.Imported), len(res.Skipped),
+	)
 	m.systemBlock(header, summary...)
-	if added > 0 {
-		m.flash = fmt.Sprintf("added %d channel%s", added, plural(added))
+	if len(res.Imported) > 0 {
+		m.flash = fmt.Sprintf("added %d channel%s", len(res.Imported), plural(len(res.Imported)))
 	} else {
 		m.flash = "no channels added — see log"
 	}

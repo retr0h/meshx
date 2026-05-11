@@ -19,7 +19,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	go.bug.st/serial v1.6.4
-	golang.org/x/term v0.42.0
+	golang.org/x/term v0.43.0
 	google.golang.org/protobuf v1.36.11
 	tinygo.org/x/bluetooth v0.15.0
 )
@@ -88,7 +88,6 @@ require (
 	github.com/curioswitch/go-reassign v0.3.0 // indirect
 	github.com/daixiang0/gci v0.13.7 // indirect
 	github.com/dave/dst v0.27.3 // indirect
-	github.com/dave/jennifer v1.7.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/denis-tingaikin/go-header v0.5.0 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
@@ -221,7 +220,6 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/sivchari/containedctx v1.0.3 // indirect
 	github.com/sonatard/noctx v0.5.1 // indirect
-	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
 	github.com/sourcegraph/go-diff v0.8.0 // indirect
 	github.com/soypat/cyw43439 v0.1.0 // indirect
 	github.com/soypat/lneto v0.1.0 // indirect
@@ -276,7 +274,7 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20260209203927-2842357ff358 // indirect
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

@@ -115,4 +115,13 @@ type radioSession interface {
 	// matches. TUI's findChannelByName uses this so the resolution
 	// rule lives in one place.
 	LookupChannelByName(typed string) int
+
+	// Config + radio-op dispatches — same shared primitives the HTTP
+	// handlers call. TUI commands (/nick, /tag, /config, /reboot,
+	// /sync, /ping, /tr) become thin wrappers over these.
+	UpdateConfig(req radio.UpdateConfigRequest) (radio.UpdateConfigResult, error)
+	Reboot(req radio.RebootRequest) (radio.RebootResult, error)
+	Sync() (radio.SyncResult, error)
+	Ping(req radio.PingRequest) (radio.PingResult, error)
+	Traceroute(req radio.TracerouteRequest) (radio.TracerouteResult, error)
 }

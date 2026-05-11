@@ -92,4 +92,14 @@ type Driver interface {
 	ImportChannel(req radio.ImportChannelRequest) (radio.ImportChannelResult, error)
 	DeleteChannel(req radio.DeleteChannelRequest) (radio.DeleteChannelResult, error)
 	ShareChannel(req radio.ShareChannelRequest) (radio.ChannelShareResult, error)
+
+	// Config + radio-op dispatches — single source of truth for the
+	// PATCH /config / POST /reboot / POST /sync / POST /ping /
+	// POST /traceroute surface. Validation + dispatch live on
+	// *radio.Session; HTTP handlers wrap these 1:1.
+	UpdateConfig(req radio.UpdateConfigRequest) (radio.UpdateConfigResult, error)
+	Reboot(req radio.RebootRequest) (radio.RebootResult, error)
+	Sync() (radio.SyncResult, error)
+	Ping(req radio.PingRequest) (radio.PingResult, error)
+	Traceroute(req radio.TracerouteRequest) (radio.TracerouteResult, error)
 }

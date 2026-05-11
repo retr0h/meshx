@@ -141,6 +141,11 @@ func (m *model) setOwner(longName, shortName, which string) tea.Cmd {
 		m.flash = "/" + which + "name needs a live radio connection"
 		return nil
 	}
+	// Default for empty-input handling matches the old TUI behavior:
+	// /nick with no arg → usage; /tag with no arg → usage. The
+	// session's UpdateConfig validates byte caps but treats an empty
+	// supplied string as invalid (1..max). Catch the no-arg case up
+	// front for the user-friendly usage message.
 	target := strings.TrimSpace(longName)
 	if which == "short" {
 		target = strings.TrimSpace(shortName)
@@ -153,38 +158,17 @@ func (m *model) setOwner(longName, shortName, which string) tea.Cmd {
 		}
 		return nil
 	}
-	// Meshtastic field lengths per the proto — longname up to 36
-	// bytes, shortname up to 4 bytes. We measure in bytes not
-	// runes because that's what firmware enforces.
+	// Only the touched field gets sent; UpdateConfig coalesces and
+	// preserves the omitted half of the User record from State.
+	req := radio.UpdateConfigRequest{}
 	switch which {
 	case "long":
-		if len(longName) > 36 {
-			m.flash = fmt.Sprintf("/nick rejected: longname %d bytes, max 36", len(longName))
-			return nil
-		}
+		req.LongName = &longName
 	case "short":
-		if len(shortName) > 4 {
-			m.flash = fmt.Sprintf(
-				"/tag rejected: shortname %d bytes, max 4 (%d-byte emoji counts as 1 char)",
-				len(shortName),
-				len(shortName),
-			)
-			return nil
-		}
+		req.ShortName = &shortName
 	}
-	isLicensed := false
-	if n := m.myNode(); n != nil {
-		// Preserve the existing is_licensed flag across renames.
-		// We don't expose a /license command today so this just
-		// stays however the user configured it via the phone app.
-		_ = n
-	}
-	if _, ok := m.session.Send(mdl.SetOwner{
-		LongName:   longName,
-		ShortName:  shortName,
-		IsLicensed: isLicensed,
-	}); !ok {
-		m.flash = "/" + which + "name dropped — outbound buffer full"
+	if _, err := m.session.UpdateConfig(req); err != nil {
+		m.flash = fmt.Sprintf("/%sname: %v", which, err)
 		return nil
 	}
 	switch which {
@@ -479,54 +463,44 @@ func (m *model) commitConfigDraft() int {
 		m.flash = "/config: save needs a live radio connection"
 		return 0
 	}
-	// Validate before any side effects. Stop on the first failure so
-	// the user fixes one at a time — partial commits would land the
-	// "valid" half on the radio while the panel still shows the
-	// invalid edit, which is confusing.
-	if len(m.cfgDraft.longName) > 36 {
-		m.flash = fmt.Sprintf("/config: longname %d bytes, max 36", len(m.cfgDraft.longName))
-		return 0
+	// Build a sparse UpdateConfigRequest — only fields that diverge
+	// from current state get pointers. The session method coalesces
+	// owner fields into one SetOwner dispatch and rejects oversize
+	// strings with a 400, so this loop just stages the diff.
+	req := radio.UpdateConfigRequest{}
+	if m.cfgDraft.longName != m.myCallsign() {
+		ln := m.cfgDraft.longName
+		req.LongName = &ln
 	}
-	if len(m.cfgDraft.shortName) > 4 {
-		m.flash = fmt.Sprintf("/config: shortname %d bytes, max 4", len(m.cfgDraft.shortName))
-		return 0
+	if m.cfgDraft.shortName != m.myShortName() {
+		sn := m.cfgDraft.shortName
+		req.ShortName = &sn
 	}
-
-	changes := 0
-	// Owner (longname / shortname) — one AdminMessage covers both
-	// fields; firmware overwrites the whole User record, so we round-
-	// trip both even if only one changed. Same path /nick uses.
-	if m.cfgDraft.longName != m.myCallsign() || m.cfgDraft.shortName != m.myShortName() {
-		if _, ok := m.session.Send(mdl.SetOwner{
-			LongName:  m.cfgDraft.longName,
-			ShortName: m.cfgDraft.shortName,
-		}); !ok {
-			m.flash = "/config: SetOwner dropped — outbound buffer full"
-			return 0
-		}
-		changes++
-	}
-	// Radio buzzer — separate AdminMessage path (SetModuleConfig).
 	if m.cfgDraft.buzzer != m.RadioBuzzerEnabled {
-		if _, ok := m.session.Send(mdl.SetBuzzer{
-			Enabled:  m.cfgDraft.buzzer,
-			Snapshot: m.RadioBuzzerSnapshot,
-		}); !ok {
-			m.flash = "/config: buzzer dropped — outbound buffer full"
-			return 0
-		}
-		m.RadioBuzzerEnabled = m.cfgDraft.buzzer
-		v := "on"
-		if !m.cfgDraft.buzzer {
-			v = "off"
-		}
-		m.session.PutSetting(m.RadioID, "radio_buzzer", v)
-		changes++
+		b := m.cfgDraft.buzzer
+		req.Buzzer = &b
 	}
-	if changes == 0 {
+	if req.LongName == nil && req.ShortName == nil && req.Buzzer == nil {
 		m.flash = "/config: no changes to save"
 		return 0
 	}
+	res, err := m.session.UpdateConfig(req)
+	if err != nil {
+		m.flash = fmt.Sprintf("/config: %v", err)
+		return 0
+	}
+	// Local-mirror updates the TUI keeps for instant feedback. The
+	// authoritative state lands when the radio re-broadcasts NodeInfo /
+	// ConfigComplete; these are just for the next render before that.
+	if req.Buzzer != nil {
+		m.RadioBuzzerEnabled = *req.Buzzer
+		v := "on"
+		if !*req.Buzzer {
+			v = "off"
+		}
+		m.session.PutSetting(m.RadioID, "radio_buzzer", v)
+	}
+	changes := len(res.Applied)
 	m.flash = fmt.Sprintf("/config: %d change%s saved — radio updating", changes, plural(changes))
 	m.systemLine(fmt.Sprintf("config: committed %d change%s", changes, plural(changes)))
 	return changes
@@ -1036,13 +1010,13 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			)
 			return nil
 		}
-		pid, ok := m.session.Send(mdl.SendTraceroute{TargetNum: n.NodeNum})
-		if !ok {
-			m.flash = "tr: dropped — outbound buffer full"
+		res, err := m.session.Traceroute(radio.TracerouteRequest{TargetNum: n.NodeNum})
+		if err != nil {
+			m.flash = fmt.Sprintf("tr: %v", err)
 			return nil
 		}
 		m.PendingTraceroute = &radio.PendingTraceroute{
-			PacketID:    pid,
+			PacketID:    res.PacketID,
 			TargetNum:   n.NodeNum,
 			TargetCall:  n.Callsign,
 			RequestedAt: time.Now(),
@@ -1053,9 +1027,9 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		)
 		m.systemLine(fmt.Sprintf(
 			"traceroute %s — request sent (id 0x%x), awaiting reply",
-			n.Callsign, pid,
+			n.Callsign, res.PacketID,
 		))
-		return tracerouteTimeoutCmd(pid)
+		return tracerouteTimeoutCmd(res.PacketID)
 	case "ping":
 		target := rest
 		if target == "" {
@@ -1106,13 +1080,13 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			)
 			return nil
 		}
-		pid, ok := m.session.Send(mdl.SendPing{TargetNum: n.NodeNum})
-		if !ok {
-			m.flash = "ping: dropped — outbound buffer full"
+		res, err := m.session.Ping(radio.PingRequest{TargetNum: n.NodeNum})
+		if err != nil {
+			m.flash = fmt.Sprintf("ping: %v", err)
 			return nil
 		}
 		m.PendingPing = &radio.PendingPing{
-			PacketID:    pid,
+			PacketID:    res.PacketID,
 			TargetNum:   n.NodeNum,
 			TargetCall:  n.Callsign,
 			RequestedAt: time.Now(),
@@ -1123,9 +1097,9 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		)
 		m.systemLine(fmt.Sprintf(
 			"ping %s — request sent (id 0x%x), awaiting echo",
-			n.Callsign, pid,
+			n.Callsign, res.PacketID,
 		))
-		return pingTimeoutCmd(pid)
+		return pingTimeoutCmd(res.PacketID)
 	case "w", "whois":
 		target := rest
 		if target == "" {
@@ -1626,12 +1600,18 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "/reboot: needs a live radio connection"
 			return nil
 		}
-		if _, ok := m.session.Send(mdl.Reboot{Seconds: 5}); !ok {
-			m.flash = "/reboot: dropped — outbound buffer full"
+		res, err := m.session.Reboot(radio.RebootRequest{})
+		if err != nil {
+			m.flash = fmt.Sprintf("/reboot: %v", err)
 			return nil
 		}
-		m.flash = "/reboot: radio will restart in 5s — meshx will reconnect automatically"
-		m.systemLine("reboot: AdminMessage sent — radio restarting in 5s")
+		m.flash = fmt.Sprintf(
+			"/reboot: radio will restart in %ds — meshx will reconnect automatically",
+			res.Seconds,
+		)
+		m.systemLine(
+			fmt.Sprintf("reboot: AdminMessage sent — radio restarting in %ds", res.Seconds),
+		)
 	case "info", "whoami":
 		// /info — dump meshx's current knowledge to the log so you
 		// can diagnose "why don't I have a name for this peer?"
@@ -1702,8 +1682,8 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "/sync needs a live radio connection (demo mode)"
 			return nil
 		}
-		if _, ok := m.session.Send(mdl.RequestSync{}); !ok {
-			m.flash = "/sync dropped — outbound buffer full"
+		if _, err := m.session.Sync(); err != nil {
+			m.flash = fmt.Sprintf("/sync: %v", err)
 			return nil
 		}
 		// Snapshot current ghost count so we can report the delta

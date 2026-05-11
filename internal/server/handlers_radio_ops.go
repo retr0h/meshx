@@ -23,26 +23,23 @@ package server
 import (
 	"context"
 
-	"github.com/danielgtaylor/huma/v2"
-
-	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
-// Radio-op handlers — the HTTP twin of the TUI's /ping, /tr, and
-// /sync slash commands. Each route is a thin POST that dispatches a
-// typed model.Command to the underlying pump. Mirrors POST /reboot's
-// fire-and-forget shape: 202 Accepted, response body echoes the
-// allocated MeshPacket.id (for ping / traceroute, so SSE consumers
-// can correlate against subsequent events) or just acknowledges the
-// dispatch (for sync — fire-and-forget, no correlator).
+// Radio-op handlers — the HTTP twin of the TUI's /ping, /tr, /sync
+// slash commands. Each is a 3-line wrapper over a *radio.Session
+// op. Mirrors POST /reboot's fire-and-forget shape: 202 Accepted,
+// response body echoes the allocated MeshPacket.id (for ping /
+// traceroute, so SSE consumers can correlate against subsequent
+// events) or just acknowledges the dispatch (for sync — no
+// correlator on the wire).
 
 // PingRequest is the inbound POST body for /ping.
 type PingRequest struct {
 	ToNum uint32 `json:"to_num" doc:"peer NodeNum to ping; the firmware echoes a REPLY_APP packet back which lands as a 'ping' SSE event correlated by the returned packet_id" format:"int64" minimum:"1"`
 }
 
-// PingResult acknowledges the dispatch. Clients correlate against
-// the eventual `ping` SSE event using packet_id.
+// PingResult acknowledges the dispatch.
 type PingResult struct {
 	PacketID uint32 `json:"packet_id" doc:"MeshPacket.id allocated for the ping; matches the request_id field on the eventual ping event"`
 	OK       bool   `json:"ok"        doc:"false when the pump's outbound buffer was full or no radio is attached"`
@@ -53,8 +50,7 @@ type TracerouteRequest struct {
 	ToNum uint32 `json:"to_num" doc:"peer NodeNum to trace a route to; the firmware walks the mesh and echoes a TRACEROUTE_APP packet back which lands as a 'traceroute' SSE event correlated by the returned packet_id" format:"int64" minimum:"1"`
 }
 
-// TracerouteResult acknowledges the dispatch. Clients correlate
-// against the eventual `traceroute` SSE event using packet_id.
+// TracerouteResult acknowledges the dispatch.
 type TracerouteResult struct {
 	PacketID uint32 `json:"packet_id" doc:"MeshPacket.id allocated for the traceroute; matches the request_id field on the eventual traceroute event"`
 	OK       bool   `json:"ok"        doc:"false when the pump's outbound buffer was full or no radio is attached"`
@@ -83,15 +79,11 @@ func (s *Server) handlePing(_ context.Context, in *pingInput) (*pingOutput, erro
 	if err != nil {
 		return nil, err
 	}
-	pid, ok := d.Send(mdl.SendPing{TargetNum: in.Body.ToNum})
-	if !ok {
-		return nil, huma.Error503ServiceUnavailable(
-			"radio outbound buffer full or no radio attached",
-		)
+	res, err := d.Ping(radio.PingRequest{TargetNum: in.Body.ToNum})
+	if err != nil {
+		return nil, err
 	}
-	out := &pingOutput{Status: 202}
-	out.Body = PingResult{PacketID: pid, OK: ok}
-	return out, nil
+	return &pingOutput{Status: 202, Body: PingResult{PacketID: res.PacketID, OK: true}}, nil
 }
 
 type tracerouteInput struct {
@@ -112,15 +104,14 @@ func (s *Server) handleTraceroute(
 	if err != nil {
 		return nil, err
 	}
-	pid, ok := d.Send(mdl.SendTraceroute{TargetNum: in.Body.ToNum})
-	if !ok {
-		return nil, huma.Error503ServiceUnavailable(
-			"radio outbound buffer full or no radio attached",
-		)
+	res, err := d.Traceroute(radio.TracerouteRequest{TargetNum: in.Body.ToNum})
+	if err != nil {
+		return nil, err
 	}
-	out := &tracerouteOutput{Status: 202}
-	out.Body = TracerouteResult{PacketID: pid, OK: ok}
-	return out, nil
+	return &tracerouteOutput{
+		Status: 202,
+		Body:   TracerouteResult{PacketID: res.PacketID, OK: true},
+	}, nil
 }
 
 type syncInput struct {
@@ -137,13 +128,9 @@ func (s *Server) handleSync(_ context.Context, in *syncInput) (*syncOutput, erro
 	if err != nil {
 		return nil, err
 	}
-	_, ok := d.Send(mdl.RequestSync{})
-	if !ok {
-		return nil, huma.Error503ServiceUnavailable(
-			"radio outbound buffer full or no radio attached",
-		)
+	res, err := d.Sync()
+	if err != nil {
+		return nil, err
 	}
-	out := &syncOutput{Status: 202}
-	out.Body = SyncResult{OK: ok}
-	return out, nil
+	return &syncOutput{Status: 202, Body: SyncResult{OK: res.OK}}, nil
 }

@@ -34,7 +34,7 @@ import (
 //
 // All radio-scoped resources live under /radios/{radio_id}/… so a
 // single daemon can host multiple radios. {radio_id} is the
-// session.State.RadioID — "0x" + hex of MyNodeNum once handshake
+// radio.State.RadioID — "0x" + hex of MyNodeNum once handshake
 // completes (or "pending:<transport>:<addr>" for a freshly-attached
 // radio still waiting for its first MyInfo). GET /radios lists
 // everything currently attached.

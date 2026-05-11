@@ -20,9 +20,9 @@
 
 // Package sdk is the consumer-facing companion to internal/sdk/gen.
 // gen/ is the generated typed RPC layer over the daemon's HTTP+SSE
-// API; this package provides Remote, the *session.Session-shaped
+// API; this package provides Remote, the *radio.Session-shaped
 // implementation of tui.radioSession that the TUI uses when pointed at
-// a remote daemon. Remote satisfies the same interface *session.Session
+// a remote daemon. Remote satisfies the same interface *radio.Session
 // satisfies in local mode, so the TUI's Update / apply* / View paths
 // don't branch on mode.
 package sdk
@@ -37,15 +37,15 @@ import (
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/radio"
 	"github.com/retr0h/meshx/internal/sdk/gen"
-	"github.com/retr0h/meshx/internal/session"
 )
 
-// Remote is the HTTP+SSE-backed radio session — the *session.Session
+// Remote is the HTTP+SSE-backed radio session — the *radio.Session
 // twin used in remote-client mode (`meshx remote <radio_id>
 // --server URL`).
 //
-// Embeds a *session.Session with nil Pump and nil Store. That gives
+// Embeds a *radio.Session with nil Pump and nil Store. That gives
 // Remote every Apply* and Publish* method for free, and ensures
 // state mutation in remote mode goes through the *exact same code
 // path* the daemon uses on its own State. The only methods Remote
@@ -56,13 +56,13 @@ import (
 //
 // Wire shape:
 //   - *gen.ClientWithResponses for typed outbound calls
-//   - *session.State (via the embedded Driver) seeded from initial
+//   - *radio.State (via the embedded Driver) seeded from initial
 //     GETs and projected forward by the SSE consumer through Apply*
 //   - a goroutine that reads /radios/{id}/events and forwards each
 //     event to teaSend so the TUI's Update sees the same mdl.X
 //     tea.Msg the local pump path would have produced
 type Remote struct {
-	*session.Session
+	*radio.Session
 
 	client    *gen.ClientWithResponses
 	radioID   string
@@ -77,7 +77,7 @@ type Remote struct {
 }
 
 // NewRemote builds a Remote pointed at serverURL, verifies the radio
-// is registered, and seeds *session.State from the daemon's snapshot
+// is registered, and seeds *radio.State from the daemon's snapshot
 // endpoints. The returned Remote is ready to satisfy radioSession but
 // won't receive live events until Start is called.
 func NewRemote(serverURL, radioID string) (*Remote, error) {
@@ -86,7 +86,7 @@ func NewRemote(serverURL, radioID string) (*Remote, error) {
 		return nil, fmt.Errorf("sdk: build client: %w", err)
 	}
 	r := &Remote{
-		Session:   session.New(session.NewState(), nil, nil),
+		Session:   radio.New(radio.NewState(), nil, nil),
 		client:    c,
 		radioID:   radioID,
 		serverURL: serverURL,
@@ -293,37 +293,37 @@ func (r *Remote) dispatch(kind, payload string) {
 		r.teaSend(derefAny(v))
 	}
 	switch kind {
-	case session.EventText:
+	case radio.EventText:
 		send(&mdl.Text{})
-	case session.EventNodeInfo:
+	case radio.EventNodeInfo:
 		send(&mdl.NodeInfo{})
-	case session.EventChannelInfo:
+	case radio.EventChannelInfo:
 		send(&mdl.ChannelInfo{})
-	case session.EventPosition:
+	case radio.EventPosition:
 		send(&mdl.Position{})
-	case session.EventRouting:
+	case radio.EventRouting:
 		send(&mdl.Routing{})
-	case session.EventTraceroute:
+	case radio.EventTraceroute:
 		send(&mdl.Traceroute{})
-	case session.EventPing:
+	case radio.EventPing:
 		send(&mdl.Ping{})
-	case session.EventMyInfo:
+	case radio.EventMyInfo:
 		send(&mdl.MyInfo{})
-	case session.EventMetadata:
+	case radio.EventMetadata:
 		send(&mdl.Metadata{})
-	case session.EventDeviceMetrics:
+	case radio.EventDeviceMetrics:
 		send(&mdl.DeviceMetrics{})
-	case session.EventEnvMetrics:
+	case radio.EventEnvMetrics:
 		send(&mdl.EnvMetrics{})
-	case session.EventLoRaConfig:
+	case radio.EventLoRaConfig:
 		send(&mdl.LoraConfig{})
-	case session.EventDeviceConfig:
+	case radio.EventDeviceConfig:
 		send(&mdl.DeviceConfig{})
-	case session.EventConfigComplete:
+	case radio.EventConfigComplete:
 		send(&mdl.ConfigComplete{})
-	case session.EventReconnecting:
+	case radio.EventReconnecting:
 		send(&mdl.Reconnecting{})
-	case session.EventDisconnected:
+	case radio.EventDisconnected:
 		send(&mdl.Disconnected{})
 	}
 }

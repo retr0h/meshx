@@ -28,7 +28,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/sse"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // eventsTypeMap registers each Go type with the SSE event name that
@@ -36,30 +36,30 @@ import (
 // send.Data against this map and writes `event: <name>\ndata: <json>`.
 // Clients (the generated SDK + hand-written) key on the event name.
 //
-// The kinds match session.Event{Kind} constants so a future
+// The kinds match radio.Event{Kind} constants so a future
 // EventEnvelope-style send (one wire shape, kind discriminator in the
 // JSON) can swap in without changing call sites — just update the map
 // to register a single envelope type.
 var eventsTypeMap = map[string]any{
-	session.EventText:           mdl.Text{},
-	session.EventNodeInfo:       mdl.NodeInfo{},
-	session.EventChannelInfo:    mdl.ChannelInfo{},
-	session.EventPosition:       mdl.Position{},
-	session.EventRouting:        mdl.Routing{},
-	session.EventTraceroute:     mdl.Traceroute{},
-	session.EventPing:           mdl.Ping{},
-	session.EventMyInfo:         mdl.MyInfo{},
-	session.EventMetadata:       mdl.Metadata{},
-	session.EventDeviceMetrics:  mdl.DeviceMetrics{},
-	session.EventEnvMetrics:     mdl.EnvMetrics{},
-	session.EventLoRaConfig:     mdl.LoraConfig{},
-	session.EventDeviceConfig:   mdl.DeviceConfig{},
-	session.EventConfigComplete: mdl.ConfigComplete{},
-	session.EventReconnecting:   mdl.Reconnecting{},
-	session.EventDisconnected:   mdl.Disconnected{},
-	session.EventTransportError: mdl.TransportError{},
-	session.EventMessageStatus:  mdl.MessageStatusUpdate{},
-	session.EventDMReceived:     mdl.DM{},
+	radio.EventText:           mdl.Text{},
+	radio.EventNodeInfo:       mdl.NodeInfo{},
+	radio.EventChannelInfo:    mdl.ChannelInfo{},
+	radio.EventPosition:       mdl.Position{},
+	radio.EventRouting:        mdl.Routing{},
+	radio.EventTraceroute:     mdl.Traceroute{},
+	radio.EventPing:           mdl.Ping{},
+	radio.EventMyInfo:         mdl.MyInfo{},
+	radio.EventMetadata:       mdl.Metadata{},
+	radio.EventDeviceMetrics:  mdl.DeviceMetrics{},
+	radio.EventEnvMetrics:     mdl.EnvMetrics{},
+	radio.EventLoRaConfig:     mdl.LoraConfig{},
+	radio.EventDeviceConfig:   mdl.DeviceConfig{},
+	radio.EventConfigComplete: mdl.ConfigComplete{},
+	radio.EventReconnecting:   mdl.Reconnecting{},
+	radio.EventDisconnected:   mdl.Disconnected{},
+	radio.EventTransportError: mdl.TransportError{},
+	radio.EventMessageStatus:  mdl.MessageStatusUpdate{},
+	radio.EventDMReceived:     mdl.DM{},
 }
 
 // handleEvents subscribes to the resolved Driver's event stream and
@@ -111,8 +111,8 @@ func (s *Server) handleEvents(
 	defer log.Info("unsubscribed")
 
 	var (
-		snapshot []session.Event
-		ch       <-chan session.Event
+		snapshot []radio.Event
+		ch       <-chan radio.Event
 	)
 	if hasCursor {
 		snapshot, ch = d.SubscribeWithReplay(ctx, cursor)

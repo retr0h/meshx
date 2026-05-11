@@ -32,7 +32,7 @@ import (
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // channelHarness wires a Server with one Session that has a fakePump
@@ -44,7 +44,7 @@ func channelHarness(t *testing.T) (*httptest.Server, *fakePump) {
 	t.Helper()
 	s := New(Config{Radios: NewRegistry()})
 	pump := newFakePump()
-	sess := session.New(nil, pump, nil)
+	sess := radio.New(nil, pump, nil)
 	sess.State.RadioID = "0xabcdef01"
 	sess.State.MyNodeNum = 0xdeadbeef
 	sess.State.Channels = []mdl.ChannelItem{

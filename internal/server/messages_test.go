@@ -29,7 +29,7 @@ import (
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // newMessagesHarness pre-seeds State.Messages with a fixed
@@ -46,7 +46,7 @@ import (
 func newMessagesHarness(t *testing.T) *httptest.Server {
 	t.Helper()
 	s := New(Config{Radios: NewRegistry()})
-	sess := session.New(nil, nil, nil)
+	sess := radio.New(nil, nil, nil)
 	sess.State.RadioID = "0xabcdef01"
 	sess.State.MyNodeNum = 0xdeadbeef
 	const peerA = uint32(0xc0ffee)

@@ -27,7 +27,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // Handlers translate HTTP requests into driver-state reads. Every
@@ -356,7 +356,7 @@ func (s *Server) handleSendMessage(
 	// even when ok=false (demo mode / pump disconnected): the row
 	// still belongs in the user's chat log as a pending entry, and
 	// the Routing handler flips it to Fail when no ack arrives.
-	d.RecordOutbound(session.RecordOutboundOptions{
+	d.RecordOutbound(radio.RecordOutboundOptions{
 		Channel:  in.Body.Channel,
 		Text:     in.Body.Text,
 		ReplyID:  in.Body.ReplyID,

@@ -32,8 +32,8 @@ import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
 	"github.com/retr0h/meshx/internal/meshx/storage"
+	"github.com/retr0h/meshx/internal/radio"
 	"github.com/retr0h/meshx/internal/sdk"
-	"github.com/retr0h/meshx/internal/session"
 )
 
 // model uses the canonical item types from model/. Local aliases
@@ -242,13 +242,13 @@ const (
 
 // model is the Bubble Tea state. Session-state fields (nodes,
 // messages, NodeDB indices, radio telemetry, in-flight ping/tr
-// bookkeeping, …) live on the embedded *session.State — which is
+// bookkeeping, …) live on the embedded *radio.State — which is
 // also what a future headless `meshx serve` daemon will construct
 // directly without dragging Bubble Tea in. TUI-only state (focus
 // cursors, search query, splash, key bindings, flash banner, config
 // draft, etc.) stays on model proper.
 type model struct {
-	*session.State
+	*radio.State
 
 	w, h int
 
@@ -292,10 +292,10 @@ type model struct {
 	historyDraft  string // the line the user was typing before Up-arrowing — restored on Down past end
 
 	// driver is the headless radio session layer — owns Pump (outbound
-	// + reconnect) and Store (persistence) along with the *session.State
+	// + reconnect) and Store (persistence) along with the *radio.State
 	// the model embeds. Typed as the narrow radioSession interface
 	// (declared in tui/driver.go) so a test double or future in-process
-	// variant can satisfy it without the concrete *session.Session.
+	// variant can satisfy it without the concrete *radio.Session.
 	// Nil-safe: demo mode leaves PumpHandle and StoreHandle nil and
 	// the session runs in-memory.
 	session radioSession
@@ -304,9 +304,9 @@ type model struct {
 	// driver. Held as a callback rather than as an interface method
 	// so radioSession can stay focused on running-TUI behavior — pump
 	// wiring is a once-per-session construction concern. Set in
-	// newModel from the concrete *session.Session's AttachPump method;
+	// newModel from the concrete *radio.Session's AttachPump method;
 	// nil-safe so demo / remote modes (no local pump) skip cleanly.
-	attachPump func(session.Pump)
+	attachPump func(radio.Pump)
 
 	// remoteMode is true when the model is talking to a remote daemon
 	// over HTTP+SSE rather than owning the radio in-process. Init()
@@ -400,10 +400,10 @@ func RunRadio(dest string) error {
 	// Build the per-radio session. Defaults match a stock Meshtastic
 	// radio + a fresh meshX install (radio buzzer beeps on text,
 	// terminal also dings); persisted prefs override below.
-	sess := session.NewState()
+	sess := radio.NewState()
 	sess.ConnectDest = dest
 	sess.RadioBuzzerEnabled = true
-	drv := session.New(sess, nil, nil)
+	drv := radio.New(sess, nil, nil)
 	// Surface the first persistence failure of the session as a
 	// permanent "-!- storage: ..." row in the messages pane;
 	// subsequent failures drop silently so a degraded sqlite handle
@@ -476,7 +476,7 @@ func RunRadioRemote(serverURL, radioID string) error {
 	m := newModel(r, notices...)
 	// Remote mode never opens a local pump, but bind anyway in case
 	// a future remote-with-fallback flow attaches one. *sdk.Remote
-	// embeds *session.Session, so AttachPump is method-promoted.
+	// embeds *radio.Session, so AttachPump is method-promoted.
 	m.attachPump = r.AttachPump
 	slot := &programSlot{}
 	m.programSlot = slot
@@ -523,7 +523,7 @@ type programSlot struct {
 
 // pumpAttachedMsg hands the transport pump handle into the model so
 // outbound messages (/cq, typed text) can enqueue ToRadio envelopes.
-type pumpAttachedMsg struct{ p session.Pump }
+type pumpAttachedMsg struct{ p radio.Pump }
 
 // shortFirmware trims Meshtastic's long firmware-version strings
 // down to just the semver portion. "2.7.15.567b8ea" → "2.7.15" since
@@ -668,7 +668,7 @@ func newModel(d radioSession, extraNotices ...string) model {
 // Fail-open: any storage error leaves drv with no Store and produces
 // no notices, so the session runs in-memory for that boot. Losing
 // history is preferable to crashing.
-func hydrateLocalSession(drv *session.Session, dest string) []string {
+func hydrateLocalSession(drv *radio.Session, dest string) []string {
 	var notices []string
 	path, err := storage.DefaultPath()
 	if err != nil {
@@ -678,7 +678,7 @@ func hydrateLocalSession(drv *session.Session, dest string) []string {
 	if err != nil {
 		return notices
 	}
-	var store session.Store = sqliteStore
+	var store radio.Store = sqliteStore
 	drv.AttachStore(store)
 
 	// Identity + NodeDB + history + ghost-peer + last-heard backfill
@@ -687,7 +687,7 @@ func hydrateLocalSession(drv *session.Session, dest string) []string {
 	// TUI-side concern that rides along — daemon stores raw bytes,
 	// TUI scrubs on read so historic rows from before the sanitizer
 	// landed pick up the ⚠ marker.
-	res := drv.HydrateFromStore(session.HydrationOptions{
+	res := drv.HydrateFromStore(radio.HydrationOptions{
 		Dest:                     dest,
 		SanitizeText:             sanitizeMessageText,
 		ResolveRadioByConnection: store.ResolveRadioByConnection,
@@ -837,7 +837,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// will overwrite this with the full "reconnecting · attempt
 		// N · …" banner if the first dial fails; the first radio
 		// frame clears it.
-		m.Reconnect = &session.ReconnectState{
+		m.Reconnect = &radio.ReconnectState{
 			Initial: true,
 			ReadyAt: time.Now(),
 		}
@@ -852,7 +852,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// pump.Sink (whose Send takes any) — same underlying type,
 		// different signature, so Go's structural typing needs the
 		// trampoline.
-		var p session.Pump = pump.New(msg.dest, teaProgramSink{p: m.programSlot.p})
+		var p radio.Pump = pump.New(msg.dest, teaProgramSink{p: m.programSlot.p})
 		if m.attachPump != nil {
 			m.attachPump(p)
 		}
@@ -1094,7 +1094,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// counter climb instead of seeing a 5s flash and then nothing
 		// for the rest of a 30s backoff.
 		m.Connected = false
-		m.Reconnect = &session.ReconnectState{
+		m.Reconnect = &radio.ReconnectState{
 			Attempt: msg.Attempt,
 			Err:     msg.Err,
 			ReadyAt: time.Now().Add(msg.After),

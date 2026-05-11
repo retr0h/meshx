@@ -18,7 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package session
+package radio
 
 import (
 	"strconv"
@@ -65,16 +65,16 @@ type HydrationResult struct {
 // the bytes the radio actually sent.
 type Sanitizer func(text string) (cleaned string, corrupted bool)
 
-// RadioResolver looks up the canonical radio_id for a (transport,
+// Resolver looks up the canonical radio_id for a (transport,
 // addr) pair. Backed by *storage.Sqlite.ResolveRadioByConnection.
 // Pulled out as a function type so this package doesn't import
 // storage.
-type RadioResolver func(transport, addr string) (string, error)
+type Resolver func(transport, addr string) (string, error)
 
 // DestParser splits a connection target ("usb:/dev/cu...",
 // "tcp:host:4403", "ble:<uuid>") into (transport, addr) so
-// RadioResolver can consume it. Backed by storage.ParseRadioDest;
-// caller supplies it for the same reason as RadioResolver.
+// Resolver can consume it. Backed by storage.ParseRadioDest;
+// caller supplies it for the same reason as Resolver.
 type DestParser func(dest string) (transport, addr string)
 
 // HydrationOptions tunes the behavior of HydrateFromStore. Zero
@@ -96,7 +96,7 @@ type HydrationOptions struct {
 	// message's Text on read. See Sanitizer for who supplies what.
 	SanitizeText Sanitizer
 	// ResolveRadioByConnection is the dest → radio_id lookup.
-	ResolveRadioByConnection RadioResolver
+	ResolveRadioByConnection Resolver
 	// ParseRadioDest splits Dest for ResolveRadioByConnection.
 	ParseRadioDest DestParser
 }

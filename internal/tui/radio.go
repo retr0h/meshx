@@ -43,7 +43,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // sanitizeMessageText scrubs peer-originated text so one bad packet
@@ -220,7 +220,7 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 //     matches its packet id.
 //   - User-visible flash for our own outbound messages — "ack
 //     received" / "delivery failed: ...". State stays in Driver.
-func (m *model) reactRouting(msg mdl.Routing, res session.ApplyRoutingResult) {
+func (m *model) reactRouting(msg mdl.Routing, res radio.ApplyRoutingResult) {
 	if msg.RequestID == 0 {
 		return
 	}
@@ -286,7 +286,7 @@ func ringTerminalBellCmd() tea.Cmd {
 // at MeshPacket.From / .To), and the resolved callsign of every hop
 // when we know one (placeholder hex when we don't).
 //
-// On match the session.PendingTraceroute slot clears so the user can fire a
+// On match the radio.PendingTraceroute slot clears so the user can fire a
 // fresh /tr without waiting for the timeout to elapse, and the
 // scheduled tracerouteTimeoutMsg becomes a no-op when its tick lands
 // (the packetID guard there falls through silently).
@@ -300,7 +300,7 @@ func (m *model) applyTraceroute(msg mdl.Traceroute) {
 	// TRACEROUTE_APP request with a fresh MeshPacket whose Data does
 	// NOT echo the original packetID, so a strict request_id match
 	// silently times out every time. The fromNum fallback only fires
-	// while a request is in flight, and `session.PendingTraceroute` enforces
+	// while a request is in flight, and `radio.PendingTraceroute` enforces
 	// one-in-flight, so the worst-case false positive is "we accept
 	// a foreign traceroute reply that happens to come from the exact
 	// peer we just asked about" — which IS effectively the right

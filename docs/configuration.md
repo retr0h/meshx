@@ -42,7 +42,8 @@ The bind-aware auth policy:
 ## Client (`meshx client …`)
 
 Persistent flags on the `client` parent — every subcommand (`status`, `scan`,
-`pair`, `connect`) inherits them.
+`pair`, `connect`, `list`, `forget`, `fav`, `unfav`, `send`, `tail`) inherits
+them.
 
 | Flag                | Env                            | Default                 | Purpose                                                                                                                                                    |
 | ------------------- | ------------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |

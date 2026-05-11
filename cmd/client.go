@@ -81,5 +81,11 @@ func init() {
 	clientCmd.AddCommand(clientScanCmd)
 	clientCmd.AddCommand(clientPairCmd)
 	clientCmd.AddCommand(clientConnectCmd)
+	clientCmd.AddCommand(clientListCmd)
+	clientCmd.AddCommand(clientForgetCmd)
+	clientCmd.AddCommand(clientFavCmd)
+	clientCmd.AddCommand(clientUnfavCmd)
+	clientCmd.AddCommand(clientSendCmd)
+	clientCmd.AddCommand(clientTailCmd)
 	rootCmd.AddCommand(clientCmd)
 }

@@ -23,15 +23,53 @@ package server
 import (
 	"context"
 
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/radio"
 )
 
-// HTTP handlers for /channels CRUD — every method is a thin adapter
-// over *radio.Session ops. Business logic (validation, PSK gen, slot
+// HTTP handlers for /channels — GET list + the mint / import / delete /
+// share CRUD surface. Mutating methods are thin adapters over
+// *radio.Session ops. Business logic (validation, PSK gen, slot
 // allocation, optimistic state) lives in internal/radio/ops_channels.go
 // and is shared with the TUI. The handler's only job is to map
 // Huma's input/output structs to and from the session method's plain
 // types.
+
+type listChannelsInput struct {
+	RadioID string `path:"radio_id" doc:"canonical radio identifier — see GET /radios"`
+}
+
+type listChannelsOutput struct {
+	Body struct {
+		Channels []mdl.ChannelItem `json:"channels"`
+	}
+}
+
+// handleListChannels — GET /radios/{radio_id}/channels. Projects the
+// snapshot's channel table without the PSK bytes (HasPSK keeps the
+// has-key signal); /channels/{idx}/share is the dedicated read path
+// for the PSK material (carried inside the meshtastic:// URL).
+func (s *Server) handleListChannels(
+	_ context.Context,
+	in *listChannelsInput,
+) (*listChannelsOutput, error) {
+	d, err := s.resolveRadio(in.RadioID)
+	if err != nil {
+		return nil, err
+	}
+	out := &listChannelsOutput{}
+	out.Body.Channels = []mdl.ChannelItem{}
+	st := d.Snapshot()
+	if st == nil {
+		return out, nil
+	}
+	for _, c := range st.Channels {
+		c.HasPSK = len(c.PSK) > 0
+		c.PSK = nil
+		out.Body.Channels = append(out.Body.Channels, c)
+	}
+	return out, nil
+}
 
 // MintChannelRequest is the inbound POST body. Wire-shape mirror of
 // radio.MintChannelRequest so generated SDK clients see the right

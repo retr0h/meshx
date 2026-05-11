@@ -31,12 +31,12 @@ func newTestSession() *Session {
 	return New(nil, nil, nil)
 }
 
-// TestSessionSubscribe exercises Session.Subscribe — the legacy
+// TestSession_Subscribe exercises Session.Subscribe — the legacy
 // live-only fan-out path the local TUI uses. Each scenario has
 // genuinely divergent mechanics (channel-drain timing, ctx cancel
 // races, fan-out multiplexing) so they live as t.Run sub-tests under
 // one parent rather than rows in a single table.
-func TestSessionSubscribe(t *testing.T) {
+func TestSession_Subscribe(t *testing.T) {
 	t.Run("live-only-skips-pre-subscribe", func(t *testing.T) {
 		s := newTestSession()
 		s.Publish(Event{Kind: EventText})
@@ -159,11 +159,12 @@ func TestSessionSubscribe(t *testing.T) {
 	})
 }
 
-// TestSessionSubscribeWithReplay covers the resumable path the SSE
-// stream uses. Mechanics are uniform across rows — pre-publish N
-// events, subscribe with a cursor, assert snapshot contents — so each
-// scenario is a row, not a sub-test.
-func TestSessionSubscribeWithReplay(t *testing.T) {
+// TestSession_SubscribeWithReplay covers the resumable path the SSE
+// stream uses. Uniform-mechanics scenarios are table rows; divergent-
+// mechanics scenarios (live-events-after-empty-snapshot, the
+// publish/subscribe atomicity fuzz) are t.Run sub-tests under the
+// same parent — the surface is one method, so the func is one.
+func TestSession_SubscribeWithReplay(t *testing.T) {
 	cases := []struct {
 		name        string
 		prePublish  int    // events to publish before subscribing
@@ -262,72 +263,69 @@ func TestSessionSubscribeWithReplay(t *testing.T) {
 			t.Fatal("live event never arrived after cursor-beyond-head subscribe")
 		}
 	})
-}
 
-// TestSessionPublishSubscribeAtomicity is the safety property the
-// resumable-stream design rests on: a publish racing a
-// SubscribeWithReplay must land in EXACTLY ONE of (snapshot, channel)
-// — never both (duplicate) and never neither (lost). Race detector
-// catches sloppy reads on s.subs / s.ring; this test pins the
-// application-level contract by running many concurrent
-// publish/subscribe pairs and asserting per-event count == 1 across
-// the union.
-//
-// Kept separate from TestSessionSubscribeWithReplay because it's a
-// race-property fuzz, not a scenario-shaped table row.
-func TestSessionPublishSubscribeAtomicity(t *testing.T) {
-	const trials = 50
-	for trial := 0; trial < trials; trial++ {
-		s := newTestSession()
-		const publishes = 100
+	// publish-subscribe-atomicity is the safety property the
+	// resumable-stream design rests on: a publish racing a
+	// SubscribeWithReplay must land in EXACTLY ONE of (snapshot,
+	// channel) — never both (duplicate) and never neither (lost).
+	// Race detector catches sloppy reads on s.subs / s.ring; this
+	// sub-test pins the application-level contract by running many
+	// concurrent publish/subscribe pairs and asserting per-event
+	// count == 1 across the union.
+	t.Run("publish-subscribe-atomicity-under-race", func(t *testing.T) {
+		const trials = 50
+		for trial := 0; trial < trials; trial++ {
+			s := newTestSession()
+			const publishes = 100
 
-		ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(context.Background())
 
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < publishes; i++ {
-				s.Publish(Event{Kind: EventText})
-			}
-		}()
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < publishes; i++ {
+					s.Publish(Event{Kind: EventText})
+				}
+			}()
 
-		// Subscribe while publishes are in flight. snapshot picks up
-		// whatever's already in the ring at lock-acquire time; ch
-		// receives whatever publishes after the new sub is added to
-		// s.subs.
-		snapshot, ch := s.SubscribeWithReplay(ctx, 0)
+			// Subscribe while publishes are in flight. snapshot picks
+			// up whatever's already in the ring at lock-acquire time;
+			// ch receives whatever publishes after the new sub is
+			// added to s.subs.
+			snapshot, ch := s.SubscribeWithReplay(ctx, 0)
 
-		seen := make(map[uint64]int, publishes)
-		for _, ev := range snapshot {
-			seen[ev.ID]++
-		}
-
-		wg.Wait()
-
-	drain:
-		for {
-			select {
-			case ev := <-ch:
+			seen := make(map[uint64]int, publishes)
+			for _, ev := range snapshot {
 				seen[ev.ID]++
-			default:
-				break drain
 			}
-		}
-		cancel()
 
-		// Every observed event must appear exactly once across the
-		// union. We can't assert every event is observed — the
-		// channel buffer is finite so a permanently-stuck consumer
-		// can drop — but for fast publishers + consumers like this
-		// test, count != 1 is a real bug.
-		for id, count := range seen {
-			if count != 1 {
-				t.Fatalf(
-					"trial %d: event ID %d delivered %d times (must be 1)",
-					trial, id, count,
-				)
+			wg.Wait()
+
+		drain:
+			for {
+				select {
+				case ev := <-ch:
+					seen[ev.ID]++
+				default:
+					break drain
+				}
+			}
+			cancel()
+
+			// Every observed event must appear exactly once across
+			// the union. We can't assert every event is observed —
+			// the channel buffer is finite so a permanently-stuck
+			// consumer can drop — but for fast publishers + consumers
+			// like this test, count != 1 is a real bug.
+			for id, count := range seen {
+				if count != 1 {
+					t.Fatalf(
+						"trial %d: event ID %d delivered %d times (must be 1)",
+						trial, id, count,
+					)
+				}
 			}
 		}
-	}
+	})
 }

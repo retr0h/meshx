@@ -304,7 +304,7 @@ func TestEndpointMintChannel(t *testing.T) {
 // Parses a meshtastic:// share URL and dispatches SetChannel for each
 // channel that fits a free slot. Multi-channel URLs are handled
 // per-slot — collisions go in skipped[] rather than failing the call.
-func TestEndpointImportChannel(t *testing.T) {
+func TestEndpointImportChannels(t *testing.T) {
 	t.Parallel()
 
 	// Build two share URLs for fixture inputs:

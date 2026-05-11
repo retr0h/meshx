@@ -158,7 +158,7 @@ func runRadioOpCase(t *testing.T, path string, tc radioOpCase) {
 // TestEndpointPing — POST /radios/{id}/ping. Happy path dispatches
 // SendPing to the pump and echoes a non-zero packet_id; validation
 // rejects to_num < 1 with 422; unknown radio_id returns 404.
-func TestEndpointPing(t *testing.T) {
+func TestEndpointPingPeer(t *testing.T) {
 	t.Parallel()
 	cases := []radioOpCase{
 		{

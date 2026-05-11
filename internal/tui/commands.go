@@ -74,19 +74,11 @@ func (m *model) sendDM(targetNum uint32, targetCall, text string, replyToID uint
 		m.flash = "/msg: unknown peer"
 		return
 	}
-	channel := int(m.currentChannelIndex())
-	pid, _ := m.session.Send(mdl.SendText{
-		Channel: channel,
+	res := m.session.SendMessage(radio.SendMessageRequest{
+		Channel: int(m.currentChannelIndex()),
 		Text:    text,
 		ReplyID: replyToID,
 		ToNum:   targetNum,
-	})
-	res := m.session.RecordOutbound(radio.RecordOutboundOptions{
-		Channel:  channel,
-		Text:     text,
-		ReplyID:  replyToID,
-		PacketID: pid,
-		ToNum:    targetNum,
 	})
 	if res.Index >= 0 {
 		m.selectedMsg = res.Index
@@ -111,17 +103,10 @@ func (m *model) sendPlainReply(text string, replyToID uint32) {
 		m.sendDM(m.currentDMNum, call, text, replyToID)
 		return
 	}
-	channel := int(m.currentChannelIndex())
-	pid, _ := m.session.Send(mdl.SendText{
-		Channel: channel,
+	res := m.session.SendMessage(radio.SendMessageRequest{
+		Channel: int(m.currentChannelIndex()),
 		Text:    text,
 		ReplyID: replyToID,
-	})
-	res := m.session.RecordOutbound(radio.RecordOutboundOptions{
-		Channel:  channel,
-		Text:     text,
-		ReplyID:  replyToID,
-		PacketID: pid,
 	})
 	if res.Index >= 0 {
 		m.selectedMsg = res.Index
@@ -1853,18 +1838,11 @@ func (m *model) sendBang(bang, body string) {
 // the same replyID so the renderer can draw a quoted-parent line
 // above the reply.
 func (m *model) sendBangReply(bang, body string, replyToID uint32) {
-	channel := int(m.currentChannelIndex())
-	pid, _ := m.session.Send(mdl.SendText{
-		Channel: channel,
+	res := m.session.SendMessage(radio.SendMessageRequest{
+		Channel: int(m.currentChannelIndex()),
 		Text:    body,
 		ReplyID: replyToID,
-	})
-	res := m.session.RecordOutbound(radio.RecordOutboundOptions{
-		Channel:  channel,
-		Text:     body,
-		Bang:     bang,
-		ReplyID:  replyToID,
-		PacketID: pid,
+		Bang:    bang,
 	})
 	if res.Index >= 0 {
 		m.selectedMsg = res.Index

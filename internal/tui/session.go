@@ -124,4 +124,10 @@ type radioSession interface {
 	Sync() (radio.SyncResult, error)
 	Ping(req radio.PingRequest) (radio.PingResult, error)
 	Traceroute(req radio.TracerouteRequest) (radio.TracerouteResult, error)
+
+	// SendMessage is the single Send-text primitive — couples pump
+	// dispatch + outbound-row append + persist + publish so the TUI's
+	// sendDM / sendPlainReply / sendBangReply paths and the daemon's
+	// handleSendMessage all reach the same lockstep behavior.
+	SendMessage(req radio.SendMessageRequest) radio.SendMessageResult
 }

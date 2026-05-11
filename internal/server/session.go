@@ -102,4 +102,11 @@ type Driver interface {
 	Sync() (radio.SyncResult, error)
 	Ping(req radio.PingRequest) (radio.PingResult, error)
 	Traceroute(req radio.TracerouteRequest) (radio.TracerouteResult, error)
+
+	// SendMessage is the single Send-text primitive — couples pump
+	// dispatch + outbound-row append + persist + publish so HTTP, TUI,
+	// and (future) MCP all reach the same lockstep behavior. The HTTP
+	// handler still owns Idempotency-Key dedupe in front because that's
+	// HTTP-specific; the rest is here.
+	SendMessage(req radio.SendMessageRequest) radio.SendMessageResult
 }

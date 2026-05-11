@@ -18,17 +18,19 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// Package session is the headless radio session layer. It wraps the
-// concrete pump (transport ↔ proto bridge) and storage (SQLite
-// persistence) along with a *session.State value, exposing them
-// through narrow consumer interfaces (Pump, Store) declared in this
-// package per the osapi-io pattern.
+// Package radio is the headless per-radio session layer. It wraps
+// the concrete pump (transport ↔ proto bridge) and storage (SQLite
+// persistence) along with a *State value, exposing them through
+// narrow consumer interfaces (Pump, Store) declared in this package
+// per the osapi-io pattern.
 //
 // Both the TUI and the meshx serve daemon hold a *Session and route
 // inbound mdl.X events through Apply* methods that mutate the
 // canonical State + publish to subscribers, so render layers and
-// HTTP+SSE handlers see the same single source of truth.
-package session
+// HTTP+SSE handlers see the same single source of truth. The type
+// is named Session (the live, stateful interaction with one radio),
+// mirroring ssh.Session / database/sql semantics.
+package radio
 
 import (
 	"time"

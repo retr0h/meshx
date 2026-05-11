@@ -34,8 +34,8 @@ import (
 
 	"github.com/retr0h/meshx/internal/meshx/pump"
 	"github.com/retr0h/meshx/internal/meshx/storage"
+	"github.com/retr0h/meshx/internal/radio"
 	"github.com/retr0h/meshx/internal/server"
-	"github.com/retr0h/meshx/internal/session"
 )
 
 // serverStartCmd boots the daemon — runs the HTTP+SSE server without
@@ -96,7 +96,7 @@ func init() {
 
 func runServerStart(cmd *cobra.Command, _ []string) error {
 	bind := viper.GetString("server.bind")
-	radio := viper.GetString("server.radio")
+	dest := viper.GetString("server.radio")
 	authTokenFile := viper.GetString("server.auth_token_file")
 	authDisabled := viper.GetBool("server.auth_disabled")
 
@@ -110,7 +110,7 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 	log.Info(
 		"config",
 		slog.String("bind", bind),
-		slog.String("radio", radio),
+		slog.String("radio", dest),
 		slog.Bool("debug", viper.GetBool("debug")),
 		slog.Bool("auth", authToken != ""),
 	)
@@ -125,26 +125,26 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 	radios := server.NewRegistry()
 
 	// Open the concrete *storage.Sqlite once; it satisfies both
-	// server.Store (HTTP read paths) and session.Store (apply* +
+	// server.Store (HTTP read paths) and radio.Store (apply* +
 	// identity claim). serverDeps lifts it through the narrower
 	// server.Store interface for the daemon's Config; we hand the
-	// concrete value to session.New so ApplyMyInfo can claim
+	// concrete value to radio.New so ApplyMyInfo can claim
 	// identity and ApplyText can persist messages.
 	concreteStore := openStore(cmd, log)
 	store, scanner, pairer, usbScan := serverDepsWithStore(concreteStore)
 
-	if radio != "" {
-		// session.Store is satisfied by *storage.Sqlite. nil is OK —
-		// session.New + every Apply* method nil-checks before calling
+	if dest != "" {
+		// radio.Store is satisfied by *storage.Sqlite. nil is OK —
+		// radio.New + every Apply* method nil-checks before calling
 		// store methods, so a no-storage daemon still drives State
 		// (just without persistence + identity claim).
-		var drvStore session.Store
+		var drvStore radio.Store
 		if concreteStore != nil {
 			drvStore = concreteStore
 		}
-		drv := session.New(nil, nil, drvStore)
-		drv.State.ConnectDest = radio
-		drv.State.RadioID = "pending:" + radio
+		drv := radio.New(nil, nil, drvStore)
+		drv.State.ConnectDest = dest
+		drv.State.RadioID = "pending:" + dest
 		// Daemon surfaces persistence failures via slog rather than a
 		// State.Messages row — remote clients can spot the slog line
 		// in the daemon's log; injecting a system row would conflict
@@ -158,10 +158,10 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		// through the same Driver.HydrateFromStore the local TUI
 		// uses. Sanitize is nil — daemon stores raw bytes; remote
 		// clients see whatever the radio actually sent.
-		var hyd session.HydrationResult
+		var hyd radio.HydrationResult
 		if concreteStore != nil {
-			hyd = drv.HydrateFromStore(session.HydrationOptions{
-				Dest:                     radio,
+			hyd = drv.HydrateFromStore(radio.HydrationOptions{
+				Dest:                     dest,
 				ResolveRadioByConnection: concreteStore.ResolveRadioByConnection,
 				ParseRadioDest:           storage.ParseRadioDest,
 			})
@@ -172,7 +172,7 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		log.Info(
 			"radio registered",
 			slog.String("radio_id", radioID),
-			slog.String("dest", radio),
+			slog.String("dest", dest),
 			slog.Int("history_messages", hyd.MessagesLoaded),
 			slog.Int("history_nodes", hyd.NodesLoaded),
 			slog.Int("ghost_peers", hyd.GhostsCreated),
@@ -185,13 +185,13 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 
 		// Spawn the pump — same backoff + reconnect engine the local
 		// TUI uses, but the sink dispatches every translated event to
-		// session.Apply* methods that mutate State, persist via Store,
+		// radio.Apply* methods that mutate State, persist via Store,
 		// and publish over SSE. The Registry rekey on identity claim
 		// (pending:... → 0xNNNNNNNN) is handled inside the sink so
 		// /radios reflects the canonical id the moment MyInfo lands.
-		log.Info("dialing radio", slog.String("dest", radio))
+		log.Info("dialing radio", slog.String("dest", dest))
 		sink := &daemonSink{drv: drv, registry: radios, log: log}
-		var p session.Pump = pump.New(radio, sink)
+		var p radio.Pump = pump.New(dest, sink)
 		drv.AttachPump(p)
 		defer drv.Stop()
 	}

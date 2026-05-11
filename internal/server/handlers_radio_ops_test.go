@@ -31,12 +31,12 @@ import (
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // fakePump captures every command Driver.Send dispatches so radio-op
 // handlers can be tested without a real radio. Satisfies the seam
-// session.Pump that Session.Send forwards to.
+// radio.Pump that Session.Send forwards to.
 type fakePump struct {
 	mu       sync.Mutex
 	commands []mdl.Command
@@ -73,7 +73,7 @@ func radioOpsHarness(t *testing.T) (*httptest.Server, *fakePump) {
 	t.Helper()
 	s := New(Config{Radios: NewRegistry()})
 	pump := newFakePump()
-	sess := session.New(nil, pump, nil)
+	sess := radio.New(nil, pump, nil)
 	sess.State.RadioID = "0xabcdef01"
 	sess.State.MyNodeNum = 0xdeadbeef
 	s.radios.Add(sess.State.RadioID, sess)

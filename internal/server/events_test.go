@@ -32,7 +32,7 @@ import (
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // reflectTypeName is a tiny indirection so the typeMap-collision
@@ -47,20 +47,20 @@ func reflectTypeName(v any) string {
 }
 
 // httptest harness — spins up an httptest.Server backed by the same
-// *Server production uses, registers a *session.Session under a
+// *Server production uses, registers a *radio.Session under a
 // known radio_id, hands back URL + session so tests can publish
 // events and read the SSE stream.
 type sseHarness struct {
 	t       *testing.T
 	srv     *httptest.Server
-	session *session.Session
+	session *radio.Session
 	radioID string
 }
 
 func newSSEHarness(t *testing.T) *sseHarness {
 	t.Helper()
 	s := New(Config{Radios: NewRegistry()})
-	sess := session.New(nil, nil, nil)
+	sess := radio.New(nil, nil, nil)
 	sess.State.RadioID = "0xabcdef01"
 	s.radios.Add(sess.State.RadioID, sess)
 	srv := httptest.NewServer(s.http.Handler)

@@ -24,7 +24,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // registry.go — the per-radio Driver registry the server multiplexes
@@ -122,8 +122,8 @@ func (r *Registry) Rekey(oldID, newID string, d Driver) {
 // the registry before Run); when dynamic attach lands, this needs
 // a notify-on-Add hook to re-fan the new driver into in-flight
 // SubscribeAll channels.
-func (r *Registry) SubscribeAll(ctx context.Context) <-chan session.Event {
-	out := make(chan session.Event, registryFanInBuffer)
+func (r *Registry) SubscribeAll(ctx context.Context) <-chan radio.Event {
+	out := make(chan radio.Event, registryFanInBuffer)
 	if r == nil {
 		close(out)
 		return out
@@ -139,7 +139,7 @@ func (r *Registry) SubscribeAll(ctx context.Context) <-chan session.Event {
 	for _, d := range drivers {
 		ch := d.Subscribe(ctx)
 		wg.Add(1)
-		go func(ch <-chan session.Event) {
+		go func(ch <-chan radio.Event) {
 			defer wg.Done()
 			for ev := range ch {
 				select {

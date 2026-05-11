@@ -24,20 +24,20 @@ import (
 	"context"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // driver.go — the narrow Driver interface this package consumes,
 // declared on the consumer seam per the osapi-io pattern. The HTTP
 // handlers depend on *this* shape, not on the concrete
-// *internal/session.Session — so a test (or a future in-memory shim,
+// *internal/radio.Session — so a test (or a future in-memory shim,
 // or a remote-driver-over-grpc variant) can satisfy the seam without
 // pulling in the radio transport layer.
 //
 // Go's structural typing means callers don't `implements Driver` —
-// they hand New() a *session.Session and the compiler verifies the
+// they hand New() a *radio.Session and the compiler verifies the
 // methods line up. New methods get added here first (declare what
-// we need) then on the concrete *session.Session.
+// we need) then on the concrete *radio.Session.
 
 // Driver is the read + dispatch surface the server requires. Grows
 // as the data-wiring follow-up moves channel / node / message
@@ -49,7 +49,7 @@ type Driver interface {
 	// Nil-safe — handlers must check before dereferencing (an
 	// uninitialized daemon, or a /healthz hit before the radio
 	// attaches, gives nil here).
-	Snapshot() *session.State
+	Snapshot() *radio.State
 
 	// Send dispatches an outbound mdl.Command via the underlying
 	// pump. Returns the allocated MeshPacket.id (zero for
@@ -62,7 +62,7 @@ type Driver interface {
 	// before the publish). Closes when ctx cancels — caller is
 	// responsible for ctx lifecycle, the driver detaches the channel
 	// and closes it on cancel. Used by the SSE handler.
-	Subscribe(ctx context.Context) <-chan session.Event
+	Subscribe(ctx context.Context) <-chan radio.Event
 
 	// SubscribeWithReplay returns a chronological snapshot of every
 	// buffered Event with id > sinceID, AND a live channel for
@@ -73,7 +73,7 @@ type Driver interface {
 	SubscribeWithReplay(
 		ctx context.Context,
 		sinceID uint64,
-	) ([]session.Event, <-chan session.Event)
+	) ([]radio.Event, <-chan radio.Event)
 
 	// RecordOutbound mirrors ApplyText for locally-originated text —
 	// appends a "mine" row to State.Messages, persists, indexes by
@@ -82,5 +82,5 @@ type Driver interface {
 	// so remote clients see their own outbound message reflected in
 	// /messages and /events without waiting for a radio echo that
 	// never comes.
-	RecordOutbound(opts session.RecordOutboundOptions) session.ApplyTextResult
+	RecordOutbound(opts radio.RecordOutboundOptions) radio.ApplyTextResult
 }

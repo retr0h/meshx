@@ -29,7 +29,7 @@ import (
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // TestEndpointListNodes — GET /radios/{id}/nodes. Returns the
@@ -92,7 +92,7 @@ func TestEndpointListNodes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := New(Config{Radios: NewRegistry()})
-			sess := session.New(nil, nil, nil)
+			sess := radio.New(nil, nil, nil)
 			sess.State.RadioID = "the-radio"
 			sess.State.MyNodeNum = 0xdeadbeef
 			sess.State.Nodes = tc.seedNodes

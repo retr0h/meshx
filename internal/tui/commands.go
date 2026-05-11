@@ -46,7 +46,7 @@ import (
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 	"github.com/retr0h/meshx/internal/version"
 )
 
@@ -84,7 +84,7 @@ func (m *model) sendDM(targetNum uint32, targetCall, text string, replyToID uint
 		ReplyID: replyToID,
 		ToNum:   targetNum,
 	})
-	res := m.session.RecordOutbound(session.RecordOutboundOptions{
+	res := m.session.RecordOutbound(radio.RecordOutboundOptions{
 		Channel:  channel,
 		Text:     text,
 		ReplyID:  replyToID,
@@ -120,7 +120,7 @@ func (m *model) sendPlainReply(text string, replyToID uint32) {
 		Text:    text,
 		ReplyID: replyToID,
 	})
-	res := m.session.RecordOutbound(session.RecordOutboundOptions{
+	res := m.session.RecordOutbound(radio.RecordOutboundOptions{
 		Channel:  channel,
 		Text:     text,
 		ReplyID:  replyToID,
@@ -585,7 +585,7 @@ func pingTimeoutCmd(packetID uint32) tea.Cmd {
 // a 6-hop round trip on a slow LongFast mesh with retries — same
 // ballpark the official Meshtastic clients use. tracerouteTimeoutCmd
 // returns a tea.Cmd that fires tracerouteTimeoutMsg after the
-// deadline; the handler short-circuits if session.PendingTraceroute already
+// deadline; the handler short-circuits if radio.PendingTraceroute already
 // resolved or got replaced by a newer /tr.
 const tracerouteTimeoutSeconds = 30
 
@@ -1188,7 +1188,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		}
 		// One traceroute in flight at a time. Issuing a second /tr
 		// while the first hasn't resolved would orphan the old
-		// session.PendingTraceroute (the new packetID overwrites the field
+		// radio.PendingTraceroute (the new packetID overwrites the field
 		// and the original timeout tick never finds a match). Refuse
 		// loud rather than silently lose the prior request.
 		if m.PendingTraceroute != nil {
@@ -1203,7 +1203,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "tr: dropped — outbound buffer full"
 			return nil
 		}
-		m.PendingTraceroute = &session.PendingTraceroute{
+		m.PendingTraceroute = &radio.PendingTraceroute{
 			PacketID:    pid,
 			TargetNum:   n.NodeNum,
 			TargetCall:  n.Callsign,
@@ -1273,7 +1273,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 			m.flash = "ping: dropped — outbound buffer full"
 			return nil
 		}
-		m.PendingPing = &session.PendingPing{
+		m.PendingPing = &radio.PendingPing{
 			PacketID:    pid,
 			TargetNum:   n.NodeNum,
 			TargetCall:  n.Callsign,
@@ -2041,7 +2041,7 @@ func (m *model) sendBangReply(bang, body string, replyToID uint32) {
 		Text:    body,
 		ReplyID: replyToID,
 	})
-	res := m.session.RecordOutbound(session.RecordOutboundOptions{
+	res := m.session.RecordOutbound(radio.RecordOutboundOptions{
 		Channel:  channel,
 		Text:     body,
 		Bang:     bang,

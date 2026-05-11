@@ -28,26 +28,26 @@ import (
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // fleetHarness wires a Server with two registered radios so tests
 // can exercise the unified-stream fan-in. Each radio is a real
-// *session.Session with no pump; events get injected via
-// session.Publish.
+// *radio.Session with no pump; events get injected via
+// radio.Publish.
 type fleetHarness struct {
 	srv      *httptest.Server
-	radios   []*session.Session
+	radios   []*radio.Session
 	radioIDs []string
 }
 
 func newFleetHarness(t *testing.T) *fleetHarness {
 	t.Helper()
 	s := New(Config{Radios: NewRegistry()})
-	radioA := session.New(nil, nil, nil)
+	radioA := radio.New(nil, nil, nil)
 	radioA.State.RadioID = "0xradio_a"
 	radioA.State.MyNodeNum = 0xaaaa
-	radioB := session.New(nil, nil, nil)
+	radioB := radio.New(nil, nil, nil)
 	radioB.State.RadioID = "0xradio_b"
 	radioB.State.MyNodeNum = 0xbbbb
 	s.radios.Add(radioA.State.RadioID, radioA)
@@ -56,7 +56,7 @@ func newFleetHarness(t *testing.T) *fleetHarness {
 	t.Cleanup(srv.Close)
 	return &fleetHarness{
 		srv:      srv,
-		radios:   []*session.Session{radioA, radioB},
+		radios:   []*radio.Session{radioA, radioB},
 		radioIDs: []string{radioA.State.RadioID, radioB.State.RadioID},
 	}
 }

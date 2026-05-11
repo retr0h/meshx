@@ -43,7 +43,7 @@ import (
 // This function exists only for `meshx server start`.
 // serverDepsWithStore lets the caller
 // pre-open the concrete *storage.Sqlite when it needs both the
-// narrow server.Store surface AND the wider session.Store surface
+// narrow server.Store surface AND the wider radio.Store surface
 // (the daemon's pump path needs ClaimRadioIdentity / SaveMessage,
 // which aren't part of server.Store). server_start.go uses this so
 // it doesn't open the SQLite handle twice.

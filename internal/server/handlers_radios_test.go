@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/retr0h/meshx/internal/session"
+	"github.com/retr0h/meshx/internal/radio"
 )
 
 // makeMultiRadioSrv wires a Server with two radios so list-radios can
@@ -38,14 +38,14 @@ func makeMultiRadioSrv(t *testing.T) *httptest.Server {
 	t.Helper()
 	s := New(Config{Radios: NewRegistry()})
 
-	a := session.New(nil, nil, nil)
+	a := radio.New(nil, nil, nil)
 	a.State.RadioID = "0xradio_a"
 	a.State.MyNodeNum = 0xaaaa
 	a.State.Connected = true
 	a.State.ConnectDest = "/dev/cu.usb-a"
 	s.radios.Add(a.State.RadioID, a)
 
-	b := session.New(nil, nil, nil)
+	b := radio.New(nil, nil, nil)
 	b.State.RadioID = "0xradio_b"
 	b.State.MyNodeNum = 0xbbbb
 	b.State.Connected = false
@@ -168,7 +168,7 @@ func TestEndpointGetRadio(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := New(Config{Radios: NewRegistry()})
-			sess := session.New(nil, nil, nil)
+			sess := radio.New(nil, nil, nil)
 			sess.State.RadioID = "the-radio"
 			sess.State.MyNodeNum = 0xdeadbeef
 			sess.State.Connected = true

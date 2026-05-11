@@ -165,6 +165,18 @@ func (s *Server) Drivers() *Registry {
 	return s.radios
 }
 
+// Handler returns the configured http.Handler (Huma router + every
+// middleware in the chain). Exported primarily for cmd-level tests
+// that need to drive the daemon through httptest.NewServer without
+// going through Run (which binds a real listener). Production code
+// goes through Run instead.
+func (s *Server) Handler() http.Handler {
+	if s == nil || s.http == nil {
+		return nil
+	}
+	return s.http.Handler
+}
+
 // Run starts the HTTP listener on addr and blocks until ctx is
 // canceled or the listener errors. ctx cancellation triggers a
 // graceful shutdown with a 5s drain window for in-flight requests.

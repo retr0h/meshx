@@ -609,6 +609,27 @@ func TestEndpointSendMessage(t *testing.T) {
 }
 ```
 
+### File naming (non-negotiable)
+
+**One test file per production file: `foo.go` is tested by `foo_test.go` —
+nothing else.** When you write a test for code in `transport_ble.go`, the test
+goes in `transport_ble_test.go`, not `handlers_transport_ble_test.go` or
+`ble_handlers_test.go` or anything else. The pairing must be obvious from a
+directory listing.
+
+Two narrow exceptions, and only these two:
+
+1. **Shared test fixtures / fakes** can live in a `*_test.go` file with no
+   production counterpart — e.g., `helpers_test.go`, `fakes_test.go`. Use only
+   when fixtures are genuinely shared across multiple production files' tests;
+   otherwise inline them.
+2. **`main_test.go`** for `TestMain` / package-wide setup.
+
+Test files for code in `handlers.go` that grew enough to split (e.g., separate
+tests for send-message vs list-messages logic) is a signal that `handlers.go`
+itself should be split into `handlers_send_message.go` + `handlers_messages.go`
+first — never invent a `_test.go` file that doesn't pair with production.
+
 ### Tooling
 
 - **`testing` + `testify/require`** for unit tests. Standard library first;

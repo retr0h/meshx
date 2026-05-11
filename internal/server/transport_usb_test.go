@@ -28,25 +28,27 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/retr0h/meshx/internal/transports"
 )
 
 // TestEndpointScanUSB — POST /transports/usb/scan. Forwards the
 // requested timeout (defaulting to 1500 when zero/missing) to the
-// USBScanner and returns every candidate port's identification
+// transports.USBScanner and returns every candidate port's identification
 // outcome — including ports that didn't respond to a Meshtastic
 // handshake (so callers can distinguish "no Meshtastic radio" from
 // "no serial ports at all").
 func TestEndpointScanUSB(t *testing.T) {
 	t.Parallel()
 
-	hits := []USBSighting{
+	hits := []transports.USBSighting{
 		{Port: "/dev/cu.usbmodem-1", IsMeshtastic: true, NodeNum: 0xc0ffee, ShortName: "BEAM"},
 		{Port: "/dev/cu.usbmodem-2", IsMeshtastic: false, Reason: "no Meshtastic response"},
 	}
 
 	cases := []struct {
 		name       string
-		scanner    USBScanner
+		scanner    transports.USBScanner
 		body       string
 		wantStatus int
 		wantCount  int
@@ -89,7 +91,7 @@ func TestEndpointScanUSB(t *testing.T) {
 		},
 		{
 			name: "scanner-error-returns-500",
-			scanner: func() USBScanner {
+			scanner: func() transports.USBScanner {
 				s := newFakeUSBScanner()
 				s.err = errSentinel
 				return s
@@ -132,7 +134,7 @@ func TestEndpointScanUSB(t *testing.T) {
 				return
 			}
 			var body struct {
-				Devices []USBSighting `json:"devices"`
+				Devices []transports.USBSighting `json:"devices"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 				t.Fatalf("decode: %v", err)
@@ -154,7 +156,7 @@ func TestEndpointScanUSB(t *testing.T) {
 }
 
 // TestEndpointAutoDetectUSB — POST /transports/usb/auto. Walks every
-// candidate port via the USBScanner, then projects the result down to
+// candidate port via the transports.USBScanner, then projects the result down to
 // a single port path: 200 with port when exactly one Meshtastic radio
 // responded, 404 when zero (with a different message for "no ports
 // at all" vs "ports but none Meshtastic"), 409 when more than one
@@ -164,7 +166,7 @@ func TestEndpointAutoDetectUSB(t *testing.T) {
 
 	cases := []struct {
 		name        string
-		scanner     USBScanner
+		scanner     transports.USBScanner
 		body        string
 		wantStatus  int
 		wantPort    string
@@ -173,8 +175,12 @@ func TestEndpointAutoDetectUSB(t *testing.T) {
 		{
 			name: "single-meshtastic-port-returns-200-with-path",
 			scanner: newFakeUSBScanner(
-				USBSighting{Port: "/dev/cu.usbmodem-1", IsMeshtastic: true, NodeNum: 0xc0ffee},
-				USBSighting{Port: "/dev/cu.usbmodem-2", IsMeshtastic: false},
+				transports.USBSighting{
+					Port:         "/dev/cu.usbmodem-1",
+					IsMeshtastic: true,
+					NodeNum:      0xc0ffee,
+				},
+				transports.USBSighting{Port: "/dev/cu.usbmodem-2", IsMeshtastic: false},
 			),
 			body:       `{}`,
 			wantStatus: http.StatusOK,
@@ -190,7 +196,11 @@ func TestEndpointAutoDetectUSB(t *testing.T) {
 		{
 			name: "ports-but-none-meshtastic-returns-404-with-different-message",
 			scanner: newFakeUSBScanner(
-				USBSighting{Port: "/dev/cu.usbmodem-9", IsMeshtastic: false, Reason: "timeout"},
+				transports.USBSighting{
+					Port:         "/dev/cu.usbmodem-9",
+					IsMeshtastic: false,
+					Reason:       "timeout",
+				},
 			),
 			body:        `{}`,
 			wantStatus:  http.StatusNotFound,
@@ -199,8 +209,8 @@ func TestEndpointAutoDetectUSB(t *testing.T) {
 		{
 			name: "multiple-meshtastic-ports-returns-409-with-port-list",
 			scanner: newFakeUSBScanner(
-				USBSighting{Port: "/dev/cu.usbmodem-1", IsMeshtastic: true},
-				USBSighting{Port: "/dev/cu.usbmodem-2", IsMeshtastic: true},
+				transports.USBSighting{Port: "/dev/cu.usbmodem-1", IsMeshtastic: true},
+				transports.USBSighting{Port: "/dev/cu.usbmodem-2", IsMeshtastic: true},
 			),
 			body:        `{}`,
 			wantStatus:  http.StatusConflict,
@@ -208,7 +218,7 @@ func TestEndpointAutoDetectUSB(t *testing.T) {
 		},
 		{
 			name: "scanner-error-returns-500",
-			scanner: func() USBScanner {
+			scanner: func() transports.USBScanner {
 				s := newFakeUSBScanner()
 				s.err = errSentinel
 				return s

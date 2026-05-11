@@ -125,13 +125,13 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 	radios := server.NewRegistry()
 
 	// Open the concrete *storage.Sqlite once; it satisfies both
-	// server.Store (HTTP read paths) and radio.Store (apply* +
-	// identity claim). serverDeps lifts it through the narrower
-	// server.Store interface for the daemon's Config; we hand the
-	// concrete value to radio.New so ApplyMyInfo can claim
+	// transports.Store (the BLE pairing CRUD surface) and radio.Store
+	// (apply* + identity claim). newTransportsManager wires the
+	// hardware-management surface; the concrete sqlite handle is
+	// passed straight into radio.New below so ApplyMyInfo can claim
 	// identity and ApplyText can persist messages.
 	concreteStore := openStore(cmd, log)
-	store, scanner, pairer, usbScan := serverDepsWithStore(concreteStore)
+	tportMgr := newTransportsManager(concreteStore)
 
 	if dest != "" {
 		// radio.Store is satisfied by *storage.Sqlite. nil is OK —
@@ -198,10 +198,7 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 
 	var srv daemonRunner = server.New(server.Config{
 		Radios:     radios,
-		Store:      store,
-		Scanner:    scanner,
-		Pairer:     pairer,
-		USBScanner: usbScan,
+		Transports: tportMgr,
 		Logger:     logger,
 		AuthToken:  authToken,
 	})

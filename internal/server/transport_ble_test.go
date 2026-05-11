@@ -29,23 +29,24 @@ import (
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/transports"
 )
 
 // TestEndpointListBLEDevices — GET /transports/ble/devices. Projects
-// the persisted mdl.BLEDevice into the slim BLEDeviceView wire shape.
+// the persisted mdl.BLEDevice into the slim transports.BLEDeviceView wire shape.
 // 503 when the store isn't wired (a daemon running without sqlite).
 func TestEndpointListBLEDevices(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name       string
-		store      Store
+		store      transports.Store
 		wantStatus int
 		wantUUIDs  []string
 		wantFavs   []bool
 	}{
 		{
-			name: "returns-saved-devices-projected-to-BLEDeviceView",
+			name: "returns-saved-devices-projected-to-transports.BLEDeviceView",
 			store: newFakeStore(
 				mdl.BLEDevice{UUID: "11", LongName: "T-Beam Mobile", Favorite: true},
 				mdl.BLEDevice{UUID: "22", LongName: "Heltec Base"},
@@ -92,7 +93,7 @@ func TestEndpointListBLEDevices(t *testing.T) {
 				return
 			}
 			var body struct {
-				Devices []BLEDeviceView `json:"devices"`
+				Devices []transports.BLEDeviceView `json:"devices"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 				t.Fatalf("decode: %v", err)
@@ -122,14 +123,14 @@ func TestEndpointListBLEDevices(t *testing.T) {
 func TestEndpointScanBLE(t *testing.T) {
 	t.Parallel()
 
-	hits := []BLESighting{
+	hits := []transports.BLESighting{
 		{UUID: "aaa", LocalName: "T-Beam", RSSI: -55},
 		{UUID: "bbb", LocalName: "Heltec", RSSI: -83},
 	}
 
 	cases := []struct {
 		name       string
-		scanner    BLEScanner
+		scanner    transports.BLEScanner
 		body       string
 		wantStatus int
 		wantCount  int
@@ -174,7 +175,7 @@ func TestEndpointScanBLE(t *testing.T) {
 		},
 		{
 			name: "scanner-error-returns-500",
-			scanner: func() BLEScanner {
+			scanner: func() transports.BLEScanner {
 				s := newFakeBLEScanner()
 				s.err = errSentinel
 				return s
@@ -217,7 +218,7 @@ func TestEndpointScanBLE(t *testing.T) {
 				return
 			}
 			var body struct {
-				Devices []BLESighting `json:"devices"`
+				Devices []transports.BLESighting `json:"devices"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 				t.Fatalf("decode: %v", err)
@@ -247,8 +248,8 @@ func TestEndpointPairBLE(t *testing.T) {
 
 	cases := []struct {
 		name        string
-		store       Store
-		pairer      BLEPairer
+		store       transports.Store
+		pairer      transports.BLEPairer
 		body        string
 		wantStatus  int
 		wantUUID    string
@@ -356,7 +357,7 @@ func TestEndpointPairBLE(t *testing.T) {
 			if tc.wantStatus != http.StatusOK {
 				return
 			}
-			var body BLEDeviceView
+			var body transports.BLEDeviceView
 			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
@@ -375,14 +376,14 @@ func btoi(b bool) int {
 }
 
 // TestEndpointForgetBLE — DELETE /transports/ble/devices/{uuid}.
-// Resolves the path arg via Store.LookupBLEDevice (accepts UUID or
+// Resolves the path arg via transports.Store.LookupBLEDevice (accepts UUID or
 // name); 404 when no saved device matches.
 func TestEndpointForgetBLE(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name       string
-		store      Store
+		store      transports.Store
 		path       string
 		wantStatus int
 		wantForgot string // expected store.forgot
@@ -457,7 +458,7 @@ func TestEndpointSetBLEFavorite(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		store      Store
+		store      transports.Store
 		path       string
 		wantStatus int
 		wantFavSet string // expected store.favSet
@@ -517,7 +518,7 @@ func TestEndpointSetBLEFavorite(t *testing.T) {
 			if tc.wantStatus != http.StatusOK {
 				return
 			}
-			var body BLEDeviceView
+			var body transports.BLEDeviceView
 			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
@@ -538,7 +539,7 @@ func TestEndpointClearBLEFavorite(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		store      Store
+		store      transports.Store
 		wantStatus int
 		wantFavSet string // empty string when clear was called
 		wantClear  bool   // verify previously-favored device is no longer flagged

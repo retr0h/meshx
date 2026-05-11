@@ -28,15 +28,16 @@ import (
 	"testing"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
+	"github.com/retr0h/meshx/internal/transports"
 )
 
-// In-memory fakes for the four /transports/* consumer interfaces.
+// In-memory fakes for the four transports.* consumer interfaces.
 // Each captures the calls it received so tests can assert on side
 // effects (e.g., "pair-ble saved the UUID to the store") without
 // touching real hardware. Concurrent-safe so harnesses running under
 // t.Parallel can share them.
 
-// fakeStore implements server.Store with a slice of BLEDevices.
+// fakeStore implements transports.Store with a slice of BLEDevices.
 // Methods record their args; LoadBLEDevices returns a copy so callers
 // can't mutate the in-memory slice.
 type fakeStore struct {
@@ -126,21 +127,21 @@ func (s *fakeStore) ForgetBLEDevice(uuid string) error {
 	return nil
 }
 
-// fakeBLEScanner implements server.BLEScanner with a canned hit list
-// + scriptable error.
+// fakeBLEScanner implements transports.BLEScanner with a canned hit
+// list + scriptable error.
 type fakeBLEScanner struct {
 	mu      sync.Mutex
-	hits    []BLESighting
+	hits    []transports.BLESighting
 	err     error
 	calls   int
 	lastTMO int // last timeout_ms passed to ScanMeshtastic
 }
 
-func newFakeBLEScanner(hits ...BLESighting) *fakeBLEScanner {
-	return &fakeBLEScanner{hits: append([]BLESighting{}, hits...)}
+func newFakeBLEScanner(hits ...transports.BLESighting) *fakeBLEScanner {
+	return &fakeBLEScanner{hits: append([]transports.BLESighting{}, hits...)}
 }
 
-func (b *fakeBLEScanner) ScanMeshtastic(timeoutMS int) ([]BLESighting, error) {
+func (b *fakeBLEScanner) ScanMeshtastic(timeoutMS int) ([]transports.BLESighting, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.calls++
@@ -148,12 +149,12 @@ func (b *fakeBLEScanner) ScanMeshtastic(timeoutMS int) ([]BLESighting, error) {
 	if b.err != nil {
 		return nil, b.err
 	}
-	out := make([]BLESighting, len(b.hits))
+	out := make([]transports.BLESighting, len(b.hits))
 	copy(out, b.hits)
 	return out, nil
 }
 
-// fakeBLEPairer implements server.BLEPairer.
+// fakeBLEPairer implements transports.BLEPairer.
 type fakeBLEPairer struct {
 	mu       sync.Mutex
 	err      error
@@ -173,20 +174,20 @@ func (b *fakeBLEPairer) PairMeshtastic(uuid string) error {
 	return b.err
 }
 
-// fakeUSBScanner implements server.USBScanner.
+// fakeUSBScanner implements transports.USBScanner.
 type fakeUSBScanner struct {
 	mu      sync.Mutex
-	hits    []USBSighting
+	hits    []transports.USBSighting
 	err     error
 	calls   int
 	lastTMO int
 }
 
-func newFakeUSBScanner(hits ...USBSighting) *fakeUSBScanner {
-	return &fakeUSBScanner{hits: append([]USBSighting{}, hits...)}
+func newFakeUSBScanner(hits ...transports.USBSighting) *fakeUSBScanner {
+	return &fakeUSBScanner{hits: append([]transports.USBSighting{}, hits...)}
 }
 
-func (u *fakeUSBScanner) IdentifyAllSerial(timeoutMS int) ([]USBSighting, error) {
+func (u *fakeUSBScanner) IdentifyAllSerial(timeoutMS int) ([]transports.USBSighting, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.calls++
@@ -194,7 +195,7 @@ func (u *fakeUSBScanner) IdentifyAllSerial(timeoutMS int) ([]USBSighting, error)
 	if u.err != nil {
 		return nil, u.err
 	}
-	out := make([]USBSighting, len(u.hits))
+	out := make([]transports.USBSighting, len(u.hits))
 	copy(out, u.hits)
 	return out, nil
 }
@@ -204,20 +205,23 @@ func (u *fakeUSBScanner) IdentifyAllSerial(timeoutMS int) ([]USBSighting, error)
 // returns 503 — exactly what the production daemon does when storage
 // or hardware isn't available.
 type transportHarnessOpts struct {
-	store      Store
-	scanner    BLEScanner
-	pairer     BLEPairer
-	usbScanner USBScanner
+	store      transports.Store
+	scanner    transports.BLEScanner
+	pairer     transports.BLEPairer
+	usbScanner transports.USBScanner
 }
 
 func newTransportHarness(t *testing.T, opts transportHarnessOpts) *httptest.Server {
 	t.Helper()
-	s := New(Config{
-		Radios:     NewRegistry(),
+	mgr := transports.New(transports.Config{
 		Store:      opts.store,
 		Scanner:    opts.scanner,
 		Pairer:     opts.pairer,
 		USBScanner: opts.usbScanner,
+	})
+	s := New(Config{
+		Radios:     NewRegistry(),
+		Transports: mgr,
 	})
 	srv := httptest.NewServer(s.http.Handler)
 	t.Cleanup(srv.Close)

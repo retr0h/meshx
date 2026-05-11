@@ -54,19 +54,21 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+
+	"github.com/retr0h/meshx/internal/transports"
 )
 
-// Config bundles the server's dependencies. Optional fields
-// (Store / Scanner / Pairer) gate corresponding endpoints — the
-// daemon serves whatever surface is wired; missing deps return 503
-// at request time so clients get a real signal instead of a
-// silently-broken route.
+// Config bundles the server's dependencies. Transports is optional
+// — when nil, /transports/* routes return 503 at request time so
+// clients get a real signal instead of a silently-broken route.
 type Config struct {
-	Radios     *Registry
-	Store      Store
-	Scanner    BLEScanner
-	Pairer     BLEPairer
-	USBScanner USBScanner
+	Radios *Registry
+
+	// Transports is the hardware-management surface (BLE/USB scan,
+	// pair, list, …). Constructed by the caller with whatever
+	// adapters are wired (typically *storage.Sqlite + the BLE/USB
+	// adapters in cmd/server_deps.go). nil disables /transports/*.
+	Transports *transports.Manager
 
 	// Logger is the slog handle every middleware (request log, panic
 	// recovery, future audit) emits through. Nil falls back to a
@@ -99,10 +101,7 @@ func (s *Server) OpenAPISpec() ([]byte, error) {
 // driven by Run.
 type Server struct {
 	radios      *Registry
-	store       Store
-	scanner     BLEScanner
-	pairer      BLEPairer
-	usbScanner  USBScanner
+	transports  *transports.Manager
 	http        *http.Server
 	api         huma.API
 	logger      *slog.Logger
@@ -137,10 +136,7 @@ func New(cfg Config) *Server {
 
 	s := &Server{
 		radios:      cfg.Radios,
-		store:       cfg.Store,
-		scanner:     cfg.Scanner,
-		pairer:      cfg.Pairer,
-		usbScanner:  cfg.USBScanner,
+		transports:  cfg.Transports,
 		api:         api,
 		logger:      cfg.Logger.With(slog.String("subsystem", "http")),
 		idempotency: newIdempotencyCache(),

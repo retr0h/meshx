@@ -18,25 +18,58 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-package server
+package transports
 
 import mdl "github.com/retr0h/meshx/internal/meshx/model"
 
-// Store is the narrow persistence surface this package consumes,
-// declared at the consumer seam per the osapi-io pattern. The
-// transport-management endpoints use it for BLE-pairing CRUD; future
-// endpoints (channel PSK round-tripping, message search) will
-// extend it with the methods they actually need.
-//
-// Concrete *storage.Sqlite from internal/meshx/storage satisfies
-// this structurally — Go's structural typing means we don't
-// `implements` anywhere; the compiler verifies.
+// Consumer interfaces — narrow surfaces the package declares for the
+// adapters it consumes. Concrete adapters live in cmd/ (CLI deps) or
+// the server's wiring layer; both satisfy these structurally. Keeping
+// the interfaces here means the package is self-contained — when it
+// moves to a separate meshtastic-agent module, no imports need to
+// follow it.
+
+// Store is the persistence surface — BLE pairing CRUD.
 type Store interface {
 	LoadBLEDevices() ([]mdl.BLEDevice, error)
 	LookupBLEDevice(needle string) (*mdl.BLEDevice, error)
 	SaveBLEDevice(d mdl.BLEDevice) error
 	SetBLEFavorite(uuid string) error
 	ForgetBLEDevice(uuid string) error
+}
+
+// BLEScanner discovers nearby Meshtastic peripherals.
+type BLEScanner interface {
+	ScanMeshtastic(timeoutMS int) ([]BLESighting, error)
+}
+
+// BLEPairer dials a peripheral briefly to trigger OS-level bonding
+// (PIN prompt on macOS, agent on Linux), then closes the handle.
+// Returning nil means the bond was established.
+type BLEPairer interface {
+	PairMeshtastic(uuid string) error
+}
+
+// USBScanner walks every candidate USB-serial port, sends a non-
+// destructive Meshtastic handshake, returns every port's outcome.
+type USBScanner interface {
+	IdentifyAllSerial(timeoutMS int) ([]USBSighting, error)
+}
+
+// Wire types — the public shapes Manager methods return. JSON tags
+// shape both the OpenAPI spec the daemon emits AND the CLI's
+// tabwriter output (CLI reads the same struct fields without going
+// through JSON). Keeping them in this package means consumers don't
+// have to invent their own DTOs.
+
+// BLEDeviceView is the slim wire shape for a saved paired device.
+// Lighter than mdl.BLEDevice — identity + favorite, no internals.
+type BLEDeviceView struct {
+	UUID      string `json:"uuid"`
+	LongName  string `json:"long_name,omitempty"`
+	ShortName string `json:"short_name,omitempty"`
+	HWModel   string `json:"hw_model,omitempty"`
+	Favorite  bool   `json:"favorite"`
 }
 
 // BLESighting is one peripheral observed during a BLE scan.
@@ -46,26 +79,9 @@ type BLESighting struct {
 	RSSI      int16  `json:"rssi"       doc:"signal strength in dBm; closer to zero = stronger"`
 }
 
-// BLEScanner is the narrow scan surface — runs a discovery scan for
-// the configured timeout and returns peripherals advertising the
-// Meshtastic GATT service. Implemented by internal/meshx/transport
-// (or a stub for tests). Nil = scanning unavailable (returns 503).
-type BLEScanner interface {
-	ScanMeshtastic(timeoutMS int) ([]BLESighting, error)
-}
-
-// BLEPairer dials a peripheral briefly to trigger OS-level bonding
-// (PIN prompt on macOS, agent prompt on Linux), then closes the
-// handle. Returning nil means the bond was established.
-type BLEPairer interface {
-	PairMeshtastic(uuid string) error
-}
-
 // USBSighting is one candidate USB-serial port observed during a
 // scan, with whether it responded to a Meshtastic handshake and the
-// node identity if it did. Mirrors transport.DeviceInfo across the
-// API seam without leaking that struct's internal fields (Err is
-// rendered as a string for JSON).
+// node identity if it did.
 type USBSighting struct {
 	Port         string `json:"port"                 doc:"serial device path (/dev/cu.usbmodem*, /dev/ttyUSB*)"`
 	IsMeshtastic bool   `json:"is_meshtastic"        doc:"true when the port responded to a Meshtastic WantConfigId handshake"`
@@ -76,10 +92,14 @@ type USBSighting struct {
 	Reason       string `json:"reason,omitempty"     doc:"why identification failed; empty when IsMeshtastic"`
 }
 
-// USBScanner is the narrow scan surface — walks every candidate
-// USB-serial port, sends a non-destructive Meshtastic handshake on
-// each, returns every port's outcome. Implemented by an adapter in
-// cmd/ that wraps internal/meshx/transport.IdentifyAllSerial.
-type USBScanner interface {
-	IdentifyAllSerial(timeoutMS int) ([]USBSighting, error)
+// viewFromModel projects a persisted mdl.BLEDevice into the wire-
+// shape BLEDeviceView used by every consumer.
+func viewFromModel(d mdl.BLEDevice) BLEDeviceView {
+	return BLEDeviceView{
+		UUID:      d.UUID,
+		LongName:  d.LongName,
+		ShortName: d.ShortName,
+		HWModel:   d.HWModel,
+		Favorite:  d.Favorite,
+	}
 }

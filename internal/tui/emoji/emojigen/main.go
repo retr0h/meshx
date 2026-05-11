@@ -18,15 +18,16 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-//go:build ignore
-
-// main.go (in package emoji) parses Unicode's emoji-data.txt and
-// emits widths.gen.go — a Go source file listing every code-point
-// range we treat as wide-2 in modern terminals, plus a binary-search
-// lookup. Invoked via `go generate ./internal/tui/emoji/` (or
-// `just go::generate`). Build-tagged "ignore" so `go build` and
-// `go test` skip it; only `go run` (which the generate directive
-// uses) compiles it.
+// Command emojigen parses Unicode's emoji-data.txt and emits
+// widths.gen.go in the sibling emoji package — a Go source file
+// listing every code-point range we treat as wide-2 in modern
+// terminals, plus a binary-search lookup.
+//
+// Registered as a `tool` in go.mod (same pattern as gofumpt /
+// golines / oapi-codegen) so jennifer/jen lands in the require
+// block naturally — `go mod tidy` keeps it because this real
+// subpackage imports it. Invoked via `go tool` from the parent
+// emoji/doc.go's go:generate directive.
 package main
 
 import (

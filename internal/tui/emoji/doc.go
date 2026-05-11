@@ -39,4 +39,4 @@
 //	git commit -am "chore(tui): refresh emoji widths to Unicode <ver>"
 package emoji
 
-//go:generate go run main.go -in emoji-data.txt -out widths.gen.go
+//go:generate go tool github.com/retr0h/meshx/internal/tui/emoji/emojigen -in emoji-data.txt -out widths.gen.go

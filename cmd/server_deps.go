@@ -22,38 +22,21 @@ package cmd
 
 import (
 	"log/slog"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/retr0h/meshx/internal/meshx/storage"
-	"github.com/retr0h/meshx/internal/meshx/transport"
-	"github.com/retr0h/meshx/internal/transports"
 )
-
-// newTransportsManager wires the daemon-side *transports.Manager —
-// the single hardware-management surface shared by the HTTP daemon
-// (server.Config.Transports) and (in a follow-up) the local `meshx
-// ble *` / `meshx usb *` CLI subcommands. Each adapter delegates to
-// internal/meshx/transport.* / internal/meshx/storage.*; missing
-// deps (e.g. sqlite open failed) flow through as nil and become 503
-// at request time.
-func newTransportsManager(s *storage.Sqlite) *transports.Manager {
-	var store transports.Store
-	if s != nil {
-		store = s
-	}
-	return transports.New(transports.Config{
-		Store:      store,
-		Scanner:    daemonBLEScanner{},
-		Pairer:     daemonBLEPairer{},
-		USBScanner: daemonUSBScanner{},
-	})
-}
 
 // openStore opens the shared sqlite handle (~/.meshx/meshx.db),
 // running migrations as needed. Returns nil on failure with a
 // structured warning — read-only HTTP routes still serve.
+//
+// The daemon (`meshx server start`) keeps the handle for the
+// process lifetime so the per-radio session can persist messages
+// and the /transports/* surface can CRUD pairings. The CLI
+// one-shots open + close on every invocation via cliTransports
+// instead.
 func openStore(_ *cobra.Command, log *slog.Logger) *storage.Sqlite {
 	path, err := storage.DefaultPath()
 	if err != nil {
@@ -71,61 +54,4 @@ func openStore(_ *cobra.Command, log *slog.Logger) *storage.Sqlite {
 	}
 	log.Info("storage opened", slog.String("path", path))
 	return s
-}
-
-// daemonBLEScanner satisfies transports.BLEScanner by delegating to
-// transport.ScanBLE and lifting the result into the transports
-// package's wire shape.
-type daemonBLEScanner struct{}
-
-func (daemonBLEScanner) ScanMeshtastic(timeoutMS int) ([]transports.BLESighting, error) {
-	hits, err := transport.ScanBLE(time.Duration(timeoutMS) * time.Millisecond)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]transports.BLESighting, 0, len(hits))
-	for _, h := range hits {
-		out = append(out, transports.BLESighting{
-			UUID:      h.UUID,
-			LocalName: h.LocalName,
-			RSSI:      h.RSSI,
-		})
-	}
-	return out, nil
-}
-
-// daemonBLEPairer satisfies transports.BLEPairer by delegating to
-// transport.PairBLE.
-type daemonBLEPairer struct{}
-
-func (daemonBLEPairer) PairMeshtastic(uuid string) error {
-	return transport.PairBLE(uuid)
-}
-
-// daemonUSBScanner satisfies transports.USBScanner by delegating to
-// transport.IdentifyAllSerial and lifting each transport.DeviceInfo
-// into the wire shape (Err → Reason as a string).
-type daemonUSBScanner struct{}
-
-func (daemonUSBScanner) IdentifyAllSerial(timeoutMS int) ([]transports.USBSighting, error) {
-	infos, err := transport.IdentifyAllSerial(time.Duration(timeoutMS) * time.Millisecond)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]transports.USBSighting, 0, len(infos))
-	for _, d := range infos {
-		hit := transports.USBSighting{
-			Port:         d.Port,
-			IsMeshtastic: d.IsMeshtastic,
-			NodeNum:      d.NodeNum,
-			ShortName:    d.ShortName,
-			LongName:     d.LongName,
-			HWModel:      d.HWModel,
-		}
-		if d.Err != nil {
-			hit.Reason = d.Err.Error()
-		}
-		out = append(out, hit)
-	}
-	return out, nil
 }

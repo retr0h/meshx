@@ -21,6 +21,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -34,22 +35,16 @@ var bleFavCmd = &cobra.Command{
 	RunE: func(_ *cobra.Command, args []string) error {
 		logger.With(slog.String("subsystem", "ble.fav")).
 			Debug("running", slog.String("target", args[0]))
-		store, err := cliOpenBLEStore()
+		mgr, closeFn, err := cliTransports()
 		if err != nil {
 			return fmt.Errorf("open store: %w", err)
 		}
-		defer func() { _ = store.Close() }()
-		d, err := store.LookupBLEDevice(args[0])
+		defer closeFn()
+		view, err := mgr.SetBLEFavorite(context.Background(), args[0])
 		if err != nil {
-			return fmt.Errorf("lookup: %w", err)
+			return err
 		}
-		if d == nil {
-			return fmt.Errorf("no saved device matches %q (run `meshx ble list`)", args[0])
-		}
-		if err := store.SetBLEFavorite(d.UUID); err != nil {
-			return fmt.Errorf("set favorite: %w", err)
-		}
-		fmt.Printf("★ %s is now the auto-connect favorite\n", d.UUID)
+		fmt.Printf("★ %s is now the auto-connect favorite\n", view.UUID)
 		return nil
 	},
 }

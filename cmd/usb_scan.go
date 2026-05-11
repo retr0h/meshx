@@ -21,6 +21,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -37,7 +38,9 @@ Meshtastic handshake, and prints whether each port responded.`,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		logger.With(slog.String("subsystem", "usb.scan")).
 			Debug("running", slog.Int("timeout_ms", 1500))
-		hits, err := cliUSBScanner.Identify(1500)
+		// Scan doesn't touch the pairing store — storeless Manager.
+		mgr := newTransportsManager(nil)
+		hits, err := mgr.ScanUSB(context.Background(), 1500)
 		if err != nil {
 			return err
 		}
@@ -66,12 +69,11 @@ Meshtastic handshake, and prints whether each port responded.`,
 					name = fmt.Sprintf("0x%x", h.NodeNum)
 				}
 				hw = h.HWModel
-			} else if h.Err != nil {
-				name = h.Err.Error()
+			} else if h.Reason != "" {
+				name = h.Reason
 			}
 			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", h.Port, marker, name, hw)
 		}
-		_ = tw.Flush()
-		return nil
+		return tw.Flush()
 	},
 }

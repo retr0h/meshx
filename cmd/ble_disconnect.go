@@ -21,6 +21,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -32,11 +33,11 @@ var bleDisconnectCmd = &cobra.Command{
 	Short: "Clear the auto-connect favorite",
 	RunE: func(_ *cobra.Command, _ []string) error {
 		logger.With(slog.String("subsystem", "ble.disconnect")).Debug("running")
-		store, err := cliOpenBLEStore()
+		mgr, closeFn, err := cliTransports()
 		if err != nil {
 			return fmt.Errorf("open store: %w", err)
 		}
-		defer func() { _ = store.Close() }()
-		return store.SetBLEFavorite("")
+		defer closeFn()
+		return mgr.ClearBLEFavorite(context.Background())
 	},
 }

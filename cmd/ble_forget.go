@@ -21,6 +21,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -34,20 +35,13 @@ var bleForgetCmd = &cobra.Command{
 	RunE: func(_ *cobra.Command, args []string) error {
 		logger.With(slog.String("subsystem", "ble.forget")).
 			Debug("running", slog.String("target", args[0]))
-		store, err := cliOpenBLEStore()
+		mgr, closeFn, err := cliTransports()
 		if err != nil {
 			return fmt.Errorf("open store: %w", err)
 		}
-		defer func() { _ = store.Close() }()
-		d, err := store.LookupBLEDevice(args[0])
-		if err != nil {
-			return fmt.Errorf("lookup: %w", err)
-		}
-		if d == nil {
-			return fmt.Errorf("no saved device matches %q (run `meshx ble list`)", args[0])
-		}
-		if err := store.ForgetBLEDevice(d.UUID); err != nil {
-			return fmt.Errorf("forget: %w", err)
+		defer closeFn()
+		if err := mgr.ForgetBLE(context.Background(), args[0]); err != nil {
+			return err
 		}
 		fmt.Printf("forgot %s\n", args[0])
 		return nil

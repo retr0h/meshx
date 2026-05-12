@@ -21,9 +21,19 @@
 package cmd
 
 import (
+	"context"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
+
+// mcpRunner is the narrow consumer-seam interface this cobra command
+// depends on, declared per the osapi-io pattern. Concrete
+// *mcp.Server satisfies it structurally — the compiler verifies at
+// the assignment site in mcp_start.go.
+type mcpRunner interface {
+	Run(ctx context.Context) error
+}
 
 // mcpCmd is the parent for `meshx mcp` — the Model Context Protocol
 // server surface. Spawned per agent session (Claude Code / Cursor /

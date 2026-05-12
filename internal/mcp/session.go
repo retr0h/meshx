@@ -138,7 +138,18 @@ type Driver interface {
 		reqEditors ...gen.RequestEditorFn,
 	) (*gen.TraceroutePeerResponse, error)
 
+	// Meta.
+	HealthWithResponse(
+		ctx context.Context,
+		reqEditors ...gen.RequestEditorFn,
+	) (*gen.HealthResponse, error)
+
 	// Transport admin.
+	AutoDetectUsbWithResponse(
+		ctx context.Context,
+		body gen.AutoDetectUsbJSONRequestBody,
+		reqEditors ...gen.RequestEditorFn,
+	) (*gen.AutoDetectUsbResponse, error)
 	ListBleDevicesWithResponse(
 		ctx context.Context,
 		reqEditors ...gen.RequestEditorFn,

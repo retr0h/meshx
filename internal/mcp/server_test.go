@@ -122,6 +122,8 @@ func TestServer_ListTools(t *testing.T) {
 	}
 
 	want := []string{
+		// meta
+		"health",
 		// radios
 		"list_radios", "get_radio", "list_channels", "list_nodes", "list_messages",
 		// messages
@@ -133,7 +135,7 @@ func TestServer_ListTools(t *testing.T) {
 		// radio ops
 		"ping_peer", "traceroute_peer", "sync_radio",
 		// transports
-		"scan_ble", "scan_usb", "pair_ble",
+		"scan_ble", "scan_usb", "auto_detect_usb", "pair_ble",
 		"list_ble_devices", "forget_ble_device",
 		"set_ble_favorite", "clear_ble_favorite",
 	}

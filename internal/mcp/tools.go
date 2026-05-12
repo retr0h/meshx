@@ -20,26 +20,32 @@
 
 package mcp
 
-// Tool registration hub. Each tool_*.go file owns one operation
-// family (matching the internal/server/handlers_*.go split) and
-// exports a register<Family>Tools(s) function that wires that
-// family's tools onto s.mcp. registerTools below is the single
-// entry point New() calls.
+import mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+// Tool registration hub. tools_gen.go (produced by mcpgen from
+// api.yaml) owns every tool; this file just calls the generated
+// entry point. When you add a new HTTP endpoint to the daemon,
+// run `just generate` and the MCP tool appears automatically —
+// no hand-wiring.
 
 func (s *Server) registerTools() {
-	s.registerRadioTools()
-	s.registerChannelTools()
-	s.registerMessageTools()
-	s.registerConfigTools()
-	s.registerRadioOpTools()
-	s.registerTransportTools()
+	s.registerGeneratedTools()
+}
+
+// textResult wraps a string as an MCP CallToolResult with a single
+// TextContent block — the canonical response shape for every
+// JSON-returning tool the generator emits.
+func textResult(text string) *mcpsdk.CallToolResult {
+	return &mcpsdk.CallToolResult{
+		Content: []mcpsdk.Content{
+			&mcpsdk.TextContent{Text: text},
+		},
+	}
 }
 
 // jsonOrErr renders a value as pretty JSON for an MCP TextContent
 // response, or returns an mcp-typed error string if marshaling
-// fails. Used by read-shaped tools whose canonical output is the
-// daemon's JSON response — preserves field names so the agent sees
-// the same shape `curl … | jq` would yield.
+// fails.
 func jsonOrErr(v any) string {
 	b, err := jsonMarshalIndent(v)
 	if err != nil {

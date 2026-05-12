@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/danielgtaylor/huma/v2 v2.37.3
 	github.com/dave/jennifer v1.7.1
+	github.com/getkin/kin-openapi v0.137.0
 	github.com/lmatte7/gomesh v0.2.1
 	github.com/lmittmann/tint v1.1.3
 	github.com/mattn/go-sqlite3 v1.14.44
@@ -101,7 +102,6 @@ require (
 	github.com/firefart/nonamedreturns v1.0.6 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fzipp/gocyclo v0.6.0 // indirect
-	github.com/getkin/kin-openapi v0.137.0 // indirect
 	github.com/ghostiam/protogetter v0.3.20 // indirect
 	github.com/go-critic/go-critic v0.14.3 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -295,6 +295,7 @@ tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 	github.com/oasdiff/oasdiff
+	github.com/retr0h/meshx/internal/mcp/mcpgen
 	github.com/retr0h/meshx/internal/sdk/gen/dumpspec
 	github.com/retr0h/meshx/internal/tui/emoji/emojigen
 	github.com/segmentio/golines

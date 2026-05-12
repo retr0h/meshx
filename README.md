@@ -67,27 +67,24 @@ meshx --help    # usb, tcp, ble subcommand trees
 
 Full command + keybinding reference in [`docs/commands.md`](docs/commands.md).
 
-## 🤖 Claude Code / MCP
+## 🤖 MCP Server
 
-meshX ships a [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces)
-so Claude Code (or any MCP-aware agent) can operate the mesh directly.
+meshX ships a native MCP server so any MCP-aware agent can operate
+the mesh. The repo includes a [`.mcp.json`](.mcp.json) that MCP
+hosts auto-discover.
 
-**Add the marketplace and install:**
-
-```sh
-/plugin marketplace add retr0h/meshx
-/plugin install meshx-mcp@meshx
-```
-
-**Requires a running daemon** — the MCP server is a thin stdio adapter
-that proxies every call to the HTTP+SSE daemon:
+**Requires a running daemon:**
 
 ```sh
 meshx server start
+meshx mcp start          # stdio — agents spawn this per session
 ```
 
-24 tools are exposed — the agent can scan for radios, pair BLE
-devices, send messages, manage channels, ping peers, and more.
+26 tools are exposed — the agent can scan for radios, pair BLE
+devices, send messages, manage channels, ping peers, subscribe to
+live events, and more. Tools are auto-generated from the daemon's
+OpenAPI spec; see [`docs/development.md`](docs/development.md) for
+the codegen pipeline.
 
 ## ⚙️ How It Works
 

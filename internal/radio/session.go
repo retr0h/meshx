@@ -33,6 +33,7 @@
 package radio
 
 import (
+	"sync"
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
@@ -43,6 +44,13 @@ import (
 // TUI today and the future meshx serve daemon both read State while
 // Session mutates it through the apply* path.
 type Session struct {
+	// mu protects *State from concurrent read/write access between
+	// the pump goroutine (Apply* methods) and HTTP handler goroutines
+	// (Snapshot reads). Writers (Apply*, RecordOutbound, ops, hydrate)
+	// take a full Lock; Snapshot takes an RLock and returns a shallow
+	// struct copy so readers iterate a frozen snapshot.
+	mu sync.RWMutex
+
 	// State is the canonical in-memory state — channels, nodes,
 	// messages, telemetry, in-flight ping/tr bookkeeping. Shared by
 	// pointer with consumers; Session is the sole writer.
@@ -117,6 +125,8 @@ func (s *Session) SaveNodePrefs(radioID string, nodeNum uint32, favorite, muted 
 // Daemon callers may prefer a slog-only sink instead — they wire
 // their own callback that does not touch State.Messages.
 func (s *Session) AlertStorageError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err == nil || s.State.StorageAlerted {
 		return
 	}
@@ -172,7 +182,15 @@ func (s *Session) Stop() {
 // and shadow a Session() method, which Go silently allows but breaks
 // callers expecting the method.
 func (s *Session) Snapshot() *State {
-	return s.State
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.State == nil {
+		return nil
+	}
+	// Shallow struct copy freezes slice headers so concurrent
+	// appends by the writer don't race the reader's iteration.
+	snap := *s.State
+	return &snap
 }
 
 // AttachPump sets the pump handle. Called by the TUI once the tea

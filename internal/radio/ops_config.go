@@ -21,10 +21,6 @@
 package radio
 
 import (
-	"fmt"
-
-	"github.com/danielgtaylor/huma/v2"
-
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
@@ -33,8 +29,8 @@ import (
 // TUI slash commands both call into these methods. Validation +
 // dispatch happens once; consumers add UI feedback / wire shaping.
 //
-// Errors are huma-typed so HTTP gets correct status codes (400 for
-// validation, 503 for buffer full / no radio) without translation.
+// Errors are OpError-typed so the HTTP layer can translate to the
+// appropriate status code (400 for validation, 503 for buffer full).
 
 // ownerByteLongMax / ownerByteShortMax mirror the firmware's User
 // record byte limits. UTF-8-byte-counted, not rune-counted, because
@@ -89,17 +85,23 @@ type RebootResult struct {
 // instead of dispatching a doomed AdminMessage and watching the
 // radio silently drop it.
 func (s *Session) UpdateConfig(req UpdateConfigRequest) (UpdateConfigResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if req.LongName != nil {
 		if n := len(*req.LongName); n == 0 || n > ownerByteLongMax {
-			return UpdateConfigResult{}, huma.Error400BadRequest(
-				fmt.Sprintf("longname %d bytes; must be 1..%d", n, ownerByteLongMax),
+			return UpdateConfigResult{}, ErrBadRequestf(
+				"longname %d bytes; must be 1..%d",
+				n,
+				ownerByteLongMax,
 			)
 		}
 	}
 	if req.ShortName != nil {
 		if n := len(*req.ShortName); n == 0 || n > ownerByteShortMax {
-			return UpdateConfigResult{}, huma.Error400BadRequest(
-				fmt.Sprintf("shortname %d bytes; must be 1..%d", n, ownerByteShortMax),
+			return UpdateConfigResult{}, ErrBadRequestf(
+				"shortname %d bytes; must be 1..%d",
+				n,
+				ownerByteShortMax,
 			)
 		}
 	}
@@ -129,7 +131,7 @@ func (s *Session) UpdateConfig(req UpdateConfigRequest) (UpdateConfigResult, err
 			ShortName:  short,
 			IsLicensed: licensed,
 		}); !ok {
-			return UpdateConfigResult{}, huma.Error503ServiceUnavailable(
+			return UpdateConfigResult{}, ErrUnavailable(
 				"radio outbound buffer full or no radio attached",
 			)
 		}
@@ -144,7 +146,7 @@ func (s *Session) UpdateConfig(req UpdateConfigRequest) (UpdateConfigResult, err
 			Enabled:  *req.Buzzer,
 			Snapshot: snap,
 		}); !ok {
-			return UpdateConfigResult{}, huma.Error503ServiceUnavailable(
+			return UpdateConfigResult{}, ErrUnavailable(
 				"radio outbound buffer full or no radio attached",
 			)
 		}
@@ -166,7 +168,7 @@ func (s *Session) UpdateConfig(req UpdateConfigRequest) (UpdateConfigResult, err
 // the licensed flag — clients that want to keep it set must pass
 // is_licensed=true explicitly.
 func (s *Session) currentOwner() (string, string, bool) {
-	if s == nil || s.State == nil || s.State.MyNodeNum == 0 {
+	if s.State == nil || s.State.MyNodeNum == 0 {
 		return "", "", false
 	}
 	idx, ok := s.State.NodesByNum[s.State.MyNodeNum]
@@ -182,14 +184,14 @@ func (s *Session) currentOwner() (string, string, bool) {
 // reconnect loop reattaches when it comes back, so callers don't
 // have to do anything special after dispatch.
 func (s *Session) Reboot(req RebootRequest) (RebootResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	secs := req.Seconds
 	if secs <= 0 {
 		secs = defaultRebootSeconds
 	}
 	if _, ok := s.Send(mdl.Reboot{Seconds: secs}); !ok {
-		return RebootResult{}, huma.Error503ServiceUnavailable(
-			"radio outbound buffer full or no radio attached",
-		)
+		return RebootResult{}, ErrUnavailable("radio outbound buffer full or no radio attached")
 	}
 	return RebootResult{Seconds: secs}, nil
 }

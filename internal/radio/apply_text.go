@@ -55,6 +55,8 @@ func (s *Session) ApplyText(
 	sanitizedText string,
 	corrupted, alert bool,
 ) ApplyTextResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// Inbound DMs addressed to MyNodeNum fire dm_received; channel
 	// broadcasts (and pre-handshake packets where MyNodeNum=0) fire
 	// text. Mutually exclusive — agents subscribe to whichever they

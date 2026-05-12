@@ -75,7 +75,10 @@ func mcpServerHarness(
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	// Run the MCP server on its half of the pair in a goroutine.
+	// Run the MCP server in a goroutine. Cleanup ordering:
+	// cancel (registered first, fires last) terminates Run via ctx;
+	// cs.Close (registered last, fires first) tears down the client
+	// session. Both paths unblock the goroutine.
 	go func() { _ = mcpSrv.mcp.Run(ctx, serverT) }()
 
 	client := mcpsdk.NewClient(

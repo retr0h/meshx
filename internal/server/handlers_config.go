@@ -71,7 +71,7 @@ func (s *Server) handleUpdateConfig(
 ) (*updateConfigOutput, error) {
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	res, err := d.UpdateConfig(radio.UpdateConfigRequest{
 		LongName:   in.Body.LongName,
@@ -80,7 +80,7 @@ func (s *Server) handleUpdateConfig(
 		Buzzer:     in.Body.Buzzer,
 	})
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	out := &updateConfigOutput{Status: 202}
 	out.Body = UpdateConfigResult{Applied: res.Applied}
@@ -100,11 +100,11 @@ type rebootOutput struct {
 func (s *Server) handleReboot(_ context.Context, in *rebootInput) (*rebootOutput, error) {
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	res, err := d.Reboot(radio.RebootRequest{Seconds: in.Body.Seconds})
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	return &rebootOutput{Status: 202, Body: RebootResult{Seconds: res.Seconds}}, nil
 }

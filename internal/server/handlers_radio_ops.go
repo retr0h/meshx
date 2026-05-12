@@ -77,11 +77,11 @@ type pingOutput struct {
 func (s *Server) handlePing(_ context.Context, in *pingInput) (*pingOutput, error) {
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	res, err := d.Ping(radio.PingRequest{TargetNum: in.Body.ToNum})
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	return &pingOutput{Status: 202, Body: PingResult{PacketID: res.PacketID, OK: true}}, nil
 }
@@ -102,11 +102,11 @@ func (s *Server) handleTraceroute(
 ) (*tracerouteOutput, error) {
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	res, err := d.Traceroute(radio.TracerouteRequest{TargetNum: in.Body.ToNum})
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	return &tracerouteOutput{
 		Status: 202,
@@ -126,11 +126,11 @@ type syncOutput struct {
 func (s *Server) handleSync(_ context.Context, in *syncInput) (*syncOutput, error) {
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	res, err := d.Sync()
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	return &syncOutput{Status: 202, Body: SyncResult{OK: res.OK}}, nil
 }

@@ -121,6 +121,8 @@ func (s *Server) handleEvents(
 	}
 
 	for _, ev := range snapshot {
+		// ev.ID is uint64; sse.Message.ID is int. Lossless on
+		// 64-bit targets (the only build targets meshx supports).
 		if err := send(sse.Message{ID: int(ev.ID), Data: ev.Data}); err != nil {
 			log.Debug(
 				"replay send failed",

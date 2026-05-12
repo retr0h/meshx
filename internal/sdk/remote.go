@@ -284,13 +284,12 @@ func (r *Remote) runSSE(ctx context.Context) {
 			if data.Len() > 0 {
 				data.WriteByte('\n')
 			}
-			data.WriteString(strings.TrimPrefix(line, "data:"))
-			// Huma emits "data: <json>" with one leading space; trim it.
-			// Multiple data: lines concatenate per the SSE spec, so we
-			// preserve newlines between them. Comment lines (": ...",
-			// SSE heartbeat keepalive) and unknown prefixes fall
-			// through the switch and are ignored — the next iteration
-			// reads the following line.
+			raw := strings.TrimPrefix(line, "data:")
+			data.WriteString(strings.TrimLeft(raw, " "))
+			// Huma emits "data: <json>" with one leading space after
+			// the colon; TrimLeft strips it so multi-line data: events
+			// concatenate without embedded spaces. Comment lines
+			// (": …") and unknown prefixes fall through the switch.
 		}
 	}
 }

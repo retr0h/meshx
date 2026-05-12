@@ -42,6 +42,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -75,9 +76,14 @@ type Config struct {
 // holds the only concrete-type reference (in New, at the assignment
 // site where the compiler verifies the structural fit).
 type Server struct {
-	mcp    *mcpsdk.Server
-	client Driver
-	logger *slog.Logger
+	mcp       *mcpsdk.Server
+	client    Driver
+	logger    *slog.Logger
+	serverURL string
+	authToken string
+
+	eventsMu  sync.Mutex
+	eventSubs map[string]context.CancelFunc
 }
 
 // New wires an MCP server pointed at cfg.ServerURL with optional
@@ -118,9 +124,12 @@ func New(cfg Config) (*Server, error) {
 	)
 
 	s := &Server{
-		mcp:    mcpSrv,
-		client: c,
-		logger: cfg.Logger.With(slog.String("subsystem", "mcp")),
+		mcp:       mcpSrv,
+		client:    c,
+		logger:    cfg.Logger.With(slog.String("subsystem", "mcp")),
+		serverURL: cfg.ServerURL,
+		authToken: cfg.AuthToken,
+		eventSubs: make(map[string]context.CancelFunc),
 	}
 	s.registerTools()
 	return s, nil

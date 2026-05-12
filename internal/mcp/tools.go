@@ -30,6 +30,7 @@ import mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 func (s *Server) registerTools() {
 	s.registerGeneratedTools()
+	s.registerEventTools()
 }
 
 // textResult wraps a string as an MCP CallToolResult with a single

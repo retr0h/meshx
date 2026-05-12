@@ -67,6 +67,10 @@ Key invariants:
   constructor (`New`), where the compiler verifies structural fit.
 - **Transports are exclusive.** When the daemon is running, it owns
   the BLE/USB adapter — clients (CLI, MCP) route through HTTP.
+- **`internal/radio` is framework-free.** Ops methods return
+  `radio.OpError` (a domain error with an HTTP-like status code);
+  `internal/server` translates to `huma.Error*` at the handler
+  boundary. The radio package never imports HTTP frameworks.
 
 ## Code standards
 

@@ -26,8 +26,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/danielgtaylor/huma/v2"
-
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
 )
@@ -39,8 +37,8 @@ import (
 // state update; consumers add their own UI feedback (TUI flash
 // messages, HTTP response shaping) without duplicating logic.
 //
-// Errors are huma-typed so HTTP callers get the right status code
-// without translation; the message string is the human-readable
+// Errors are OpError-typed so the HTTP layer can translate to the
+// appropriate status code; the message string is the human-readable
 // form the TUI surfaces verbatim.
 
 // channelSlotsMax mirrors the firmware's hard cap on simultaneous
@@ -135,38 +133,41 @@ type ChannelShareResult struct {
 // updates State.Channels so a follow-up Mint doesn't race, builds
 // the share URL.
 func (s *Session) MintChannel(req MintChannelRequest) (MintChannelResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	name := strings.TrimSpace(req.Name)
 	name = strings.TrimPrefix(name, "#")
 	if name == "" {
-		return MintChannelResult{}, huma.Error400BadRequest("channel name is empty")
+		return MintChannelResult{}, ErrBadRequest("channel name is empty")
 	}
 	if len(name) > channelNameMax {
-		return MintChannelResult{}, huma.Error400BadRequest(
-			fmt.Sprintf("channel name %d bytes; max %d", len(name), channelNameMax),
+		return MintChannelResult{}, ErrBadRequestf(
+			"channel name %d bytes; max %d",
+			len(name),
+			channelNameMax,
 		)
 	}
-	if s == nil || s.State == nil {
-		return MintChannelResult{}, huma.Error503ServiceUnavailable("radio state unavailable")
+	if s.State == nil {
+		return MintChannelResult{}, ErrUnavailable("radio state unavailable")
 	}
 	if existingChannelIndex(s.State.Channels, name) >= 0 {
-		return MintChannelResult{}, huma.Error409Conflict(
-			fmt.Sprintf("channel %q already exists; delete it first", name),
-		)
+		return MintChannelResult{}, ErrConflictf("channel %q already exists; delete it first", name)
 	}
 	slot := firstFreeChannelSlot(s.State.Channels)
 	if slot < 0 {
-		return MintChannelResult{}, huma.Error409Conflict(
-			fmt.Sprintf("no free channel slot (max %d secondary slots)", channelSlotsMax-1),
+		return MintChannelResult{}, ErrConflictf(
+			"no free channel slot (max %d secondary slots)",
+			channelSlotsMax-1,
 		)
 	}
 
 	psk := make([]byte, 32)
 	if _, err := rand.Read(psk); err != nil {
-		return MintChannelResult{}, huma.Error500InternalServerError("crypto/rand: " + err.Error())
+		return MintChannelResult{}, ErrInternal("crypto/rand: " + err.Error())
 	}
 	channelID, err := randUint32()
 	if err != nil {
-		return MintChannelResult{}, huma.Error500InternalServerError("crypto/rand: " + err.Error())
+		return MintChannelResult{}, ErrInternal("crypto/rand: " + err.Error())
 	}
 
 	slotInfo := mdl.ChannelInfo{
@@ -178,7 +179,7 @@ func (s *Session) MintChannel(req MintChannelRequest) (MintChannelResult, error)
 		PSK:    psk,
 	}
 	if _, ok := s.Send(mdl.SetChannel{Slot: slotInfo}); !ok {
-		return MintChannelResult{}, huma.Error503ServiceUnavailable(
+		return MintChannelResult{}, ErrUnavailable(
 			"radio outbound buffer full or no radio attached",
 		)
 	}
@@ -198,9 +199,7 @@ func (s *Session) MintChannel(req MintChannelRequest) (MintChannelResult, error)
 
 	shareURL, err := pump.BuildChannelShareURL(slotInfo)
 	if err != nil {
-		return MintChannelResult{}, huma.Error500InternalServerError(
-			"build share url: " + err.Error(),
-		)
+		return MintChannelResult{}, ErrInternal("build share url: " + err.Error())
 	}
 	return MintChannelResult{
 		Index:    slot,
@@ -216,16 +215,18 @@ func (s *Session) MintChannel(req MintChannelRequest) (MintChannelResult, error)
 // conditions are recorded in Skipped[] rather than failing the whole
 // call (matches the TUI's "additive only" semantics).
 func (s *Session) ImportChannel(req ImportChannelRequest) (ImportChannelResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	url := strings.TrimSpace(req.URL)
 	if url == "" {
-		return ImportChannelResult{}, huma.Error400BadRequest("share url is empty")
+		return ImportChannelResult{}, ErrBadRequest("share url is empty")
 	}
 	parsed, err := pump.ParseChannelShareURL(url)
 	if err != nil {
-		return ImportChannelResult{}, huma.Error400BadRequest("parse share url: " + err.Error())
+		return ImportChannelResult{}, ErrBadRequest("parse share url: " + err.Error())
 	}
-	if s == nil || s.State == nil {
-		return ImportChannelResult{}, huma.Error503ServiceUnavailable("radio state unavailable")
+	if s.State == nil {
+		return ImportChannelResult{}, ErrUnavailable("radio state unavailable")
 	}
 
 	// Mutate a copy of State.Channels so slot allocation stays honest
@@ -294,20 +295,24 @@ func (s *Session) ImportChannel(req ImportChannelRequest) (ImportChannelResult, 
 // the firmware requires one to operate. Optimistically clears local
 // state.
 func (s *Session) DeleteChannel(req DeleteChannelRequest) (DeleteChannelResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if req.Index <= 0 || req.Index >= channelSlotsMax {
-		return DeleteChannelResult{}, huma.Error400BadRequest(
-			fmt.Sprintf("slot %d out of range (1..%d)", req.Index, channelSlotsMax-1),
+		return DeleteChannelResult{}, ErrBadRequestf(
+			"slot %d out of range (1..%d)",
+			req.Index,
+			channelSlotsMax-1,
 		)
 	}
-	if s == nil || s.State == nil {
-		return DeleteChannelResult{}, huma.Error503ServiceUnavailable("radio state unavailable")
+	if s.State == nil {
+		return DeleteChannelResult{}, ErrUnavailable("radio state unavailable")
 	}
 	var deletedName string
 	if req.Index < len(s.State.Channels) {
 		deletedName = s.State.Channels[req.Index].Name
 	}
 	if _, ok := s.Send(mdl.DeleteChannel{Index: req.Index}); !ok {
-		return DeleteChannelResult{}, huma.Error503ServiceUnavailable(
+		return DeleteChannelResult{}, ErrUnavailable(
 			"radio outbound buffer full or no radio attached",
 		)
 	}
@@ -323,17 +328,15 @@ func (s *Session) DeleteChannel(req DeleteChannelRequest) (DeleteChannelResult, 
 // ShareChannel — builds a meshtastic:// URL for the named slot. 404
 // for slot indexes beyond the channel table or for DISABLED slots.
 func (s *Session) ShareChannel(req ShareChannelRequest) (ChannelShareResult, error) {
-	if s == nil || s.State == nil ||
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.State == nil ||
 		req.Index < 0 || req.Index >= len(s.State.Channels) {
-		return ChannelShareResult{}, huma.Error404NotFound(
-			fmt.Sprintf("no channel at slot %d", req.Index),
-		)
+		return ChannelShareResult{}, ErrNotFoundf("no channel at slot %d", req.Index)
 	}
 	c := s.State.Channels[req.Index]
 	if c.Role == "" || c.Role == string(mdl.ChannelDisabled) {
-		return ChannelShareResult{}, huma.Error404NotFound(
-			fmt.Sprintf("slot %d is disabled", req.Index),
-		)
+		return ChannelShareResult{}, ErrNotFoundf("slot %d is disabled", req.Index)
 	}
 	url, err := pump.BuildChannelShareURL(mdl.ChannelInfo{
 		Index:  c.Index,
@@ -344,9 +347,7 @@ func (s *Session) ShareChannel(req ShareChannelRequest) (ChannelShareResult, err
 		PSK:    c.PSK,
 	})
 	if err != nil {
-		return ChannelShareResult{}, huma.Error500InternalServerError(
-			"build share url: " + err.Error(),
-		)
+		return ChannelShareResult{}, ErrInternal("build share url: " + err.Error())
 	}
 	return ChannelShareResult{
 		Index:    c.Index,
@@ -363,7 +364,9 @@ func (s *Session) ShareChannel(req ShareChannelRequest) (ChannelShareResult, err
 // Lives here so the TUI's findChannelByName + the daemon's
 // future name-based admin commands share one resolution rule.
 func (s *Session) LookupChannelByName(typed string) int {
-	if s == nil || s.State == nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.State == nil {
 		return -1
 	}
 	want := bareChannelName(strings.TrimSpace(typed))

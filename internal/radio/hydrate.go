@@ -132,6 +132,8 @@ type HydrationOptions struct {
 // Returns counters for the caller to surface and the boot notes the
 // store accumulated during migration / open.
 func (s *Session) HydrateFromStore(opts HydrationOptions) HydrationResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var res HydrationResult
 	if s.store == nil {
 		return res

@@ -55,7 +55,7 @@ func (s *Server) handleListChannels(
 ) (*listChannelsOutput, error) {
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	out := &listChannelsOutput{}
 	out.Body.Channels = []mdl.ChannelItem{}
@@ -132,11 +132,11 @@ func (s *Server) handleMintChannel(
 ) (*mintChannelOutput, error) {
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	res, err := d.MintChannel(radio.MintChannelRequest{Name: in.Body.Name})
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	return &mintChannelOutput{
 		Status: 202,
@@ -164,11 +164,11 @@ func (s *Server) handleImportChannel(
 ) (*importChannelOutput, error) {
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	res, err := d.ImportChannel(radio.ImportChannelRequest{URL: in.Body.URL})
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	out := &importChannelOutput{Status: 202}
 	out.Body.Imported = make([]ImportedChannel, 0, len(res.Imported))
@@ -203,10 +203,10 @@ func (s *Server) handleDeleteChannel(
 ) (*deleteChannelOutput, error) {
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	if _, err := d.DeleteChannel(radio.DeleteChannelRequest{Index: in.Index}); err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	return &deleteChannelOutput{Status: 202}, nil
 }
@@ -226,11 +226,11 @@ func (s *Server) handleShareChannel(
 ) (*shareChannelOutput, error) {
 	d, err := s.resolveRadio(in.RadioID)
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	res, err := d.ShareChannel(radio.ShareChannelRequest{Index: in.Index})
 	if err != nil {
-		return nil, err
+		return nil, toHumaError(err)
 	}
 	return &shareChannelOutput{
 		Body: ChannelShareResult{

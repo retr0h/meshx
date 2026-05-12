@@ -56,6 +56,8 @@ type ApplyRoutingResult struct {
 // silently. Ping-correlation lives in the TUI's reactRouting; this
 // path only handles the message-status flip + ack roll-up.
 func (s *Session) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.PublishRouting(msg)
 	if msg.RequestID == 0 {
 		return ApplyRoutingResult{}
@@ -78,11 +80,11 @@ func (s *Session) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 				row.Message,
 			))
 		}
-		// Surface the terminal flip as its own SSE event so consumers
-		// don't have to diff /messages to detect ack/fail. Ackers
-		// snapshot reflects the row's per-peer echoes at flip time;
-		// later Routing replies for the same packet refresh the row's
-		// Ackers but don't re-publish (the row has already terminated).
+		// Surface the status flip as its own SSE event so consumers
+		// don't have to diff /messages to detect ack/fail. Later
+		// Routing replies for the same packet re-enter this loop,
+		// re-match, and re-publish — each echo updates Ackers and
+		// re-issues a message_status event.
 		ackersCopy := append([]mdl.Acker(nil), row.Ackers...)
 		s.PublishMessageStatus(mdl.MessageStatusUpdate{
 			PacketID: row.PacketID,

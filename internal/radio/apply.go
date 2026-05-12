@@ -62,6 +62,8 @@ type ApplyMyInfoResult struct {
 // we keep the old RadioID so apply* paths don't crash later trying
 // to scope by an empty key.
 func (s *Session) ApplyMyInfo(msg mdl.MyInfo) ApplyMyInfoResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.Publish(Event{Kind: EventMyInfo, Data: msg})
 	res := ApplyMyInfoResult{OldRadioID: s.State.RadioID}
 	s.State.MyNodeNum = msg.NodeNum
@@ -78,6 +80,8 @@ func (s *Session) ApplyMyInfo(msg mdl.MyInfo) ApplyMyInfoResult {
 // ApplyMetadata stamps firmware + hw flags from the radio's one-shot
 // Metadata envelope. Surfaces in the status bar.
 func (s *Session) ApplyMetadata(msg mdl.Metadata) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.Publish(Event{Kind: EventMetadata, Data: msg})
 	s.State.RadioFirmware = msg.FirmwareVersion
 	s.State.RadioDeviceState = msg.DeviceStateVer
@@ -88,6 +92,8 @@ func (s *Session) ApplyMetadata(msg mdl.Metadata) {
 // ApplyLoraConfig stamps the radio's tx_power, region, and modem
 // preset.
 func (s *Session) ApplyLoraConfig(msg mdl.LoraConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.Publish(Event{Kind: EventLoRaConfig, Data: msg})
 	s.State.RadioTxPower = msg.TxPowerDBm
 	s.State.RadioRegion = string(msg.Region)
@@ -97,6 +103,8 @@ func (s *Session) ApplyLoraConfig(msg mdl.LoraConfig) {
 // ApplyDeviceConfig stamps the radio's role (Client / Router /
 // Repeater / Tracker).
 func (s *Session) ApplyDeviceConfig(msg mdl.DeviceConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.Publish(Event{Kind: EventDeviceConfig, Data: msg})
 	s.State.RadioRole = string(msg.Role)
 }
@@ -105,6 +113,8 @@ func (s *Session) ApplyDeviceConfig(msg mdl.DeviceConfig) {
 // telemetry. Peer metrics are ignored here for now (peer metrics
 // land in PeerEnv via ApplyEnvMetrics).
 func (s *Session) ApplyDeviceMetrics(msg mdl.DeviceMetrics) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.Publish(Event{Kind: EventDeviceMetrics, Data: msg})
 	if msg.FromNodeNum == s.State.MyNodeNum || msg.FromNodeNum == 0 {
 		s.State.BatteryLevel = msg.BatteryLevel
@@ -119,6 +129,8 @@ func (s *Session) ApplyDeviceMetrics(msg mdl.DeviceMetrics) {
 // temperature / humidity / pressure / gas. Indexed by FromNodeNum
 // so /env or per-peer dashboards can render the freshest reading.
 func (s *Session) ApplyEnvMetrics(msg mdl.EnvMetrics) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.Publish(Event{Kind: EventEnvMetrics, Data: msg})
 	if s.State.PeerEnv == nil {
 		s.State.PeerEnv = make(map[uint32]PeerEnvMetrics)
@@ -142,6 +154,8 @@ type ApplyPositionResult struct {
 // ApplyPosition mutates PeerPositions and (for self) MyLatitude /
 // MyLongitude / MyAltitude.
 func (s *Session) ApplyPosition(msg mdl.Position, grid string) ApplyPositionResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.PublishPosition(msg)
 	if s.State.PeerPositions == nil {
 		s.State.PeerPositions = make(map[uint32]PeerPosition)
@@ -171,6 +185,8 @@ func (s *Session) ApplyPosition(msg mdl.Position, grid string) ApplyPositionResu
 // counts across re-apply. Publishes after mutation so SSE
 // subscribers see the event in lockstep with State.
 func (s *Session) ApplyChannelInfo(msg mdl.ChannelInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.PublishChannelInfo(msg)
 	const roleDisabled = "DISABLED"
 	for len(s.State.Channels) <= msg.Index {
@@ -222,6 +238,8 @@ type ApplyNodeInfoResult struct {
 // only forwarded for). Preserves user prefs (Fav) and the freshest
 // LastHeardAt across updates. Publishes after mutation.
 func (s *Session) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.PublishNodeInfo(msg)
 	unresolved := false
 	if msg.LongName == "" && msg.ShortName == "" {
@@ -297,6 +315,8 @@ func (s *Session) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
 // /whois on a peer that just answered a /ping reads the freshest
 // signal numbers without needing the TUI's correlation logic.
 func (s *Session) ApplyPing(msg mdl.Ping) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.PublishPing(msg)
 	if idx, ok := s.State.NodesByNum[msg.FromNum]; ok && idx < len(s.State.Nodes) {
 		s.State.Nodes[idx].LastHops = msg.Hops
@@ -316,6 +336,8 @@ func (s *Session) ApplyPing(msg mdl.Ping) {
 // the TUI — it's presentation, and the daemon doesn't know which
 // callsigns the consumer wants to see.
 func (s *Session) ApplyTraceroute(msg mdl.Traceroute) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.PublishTraceroute(msg)
 	if idx, ok := s.State.NodesByNum[msg.FromNum]; ok && idx < len(s.State.Nodes) {
 		s.State.Nodes[idx].LastHops = len(msg.Route)
@@ -348,6 +370,15 @@ type RecordOutboundOptions struct {
 // Without it, remote-mode TUIs would type a message, see it
 // disappear, and never know the daemon actually accepted it.
 func (s *Session) RecordOutbound(opts RecordOutboundOptions) ApplyTextResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recordOutbound(opts)
+}
+
+// recordOutbound is the lock-free core of RecordOutbound. Caller must
+// hold s.mu. Split out so SendMessage (which already holds the lock)
+// can call this without re-entering the mutex.
+func (s *Session) recordOutbound(opts RecordOutboundOptions) ApplyTextResult {
 	channelName := s.State.CurrentChannel
 	if opts.Channel >= 0 && opts.Channel < len(s.State.Channels) {
 		if name := s.State.Channels[opts.Channel].Name; name != "" {
@@ -402,6 +433,8 @@ func timeHHMM(t time.Time) string {
 // daemon would only learn the radio dropped when text packets stop
 // arriving.
 func (s *Session) ApplyReconnecting(ev mdl.Reconnecting) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.Publish(Event{Kind: EventReconnecting, Data: ev})
 	s.State.Reconnect = &ReconnectState{
 		Attempt: ev.Attempt,
@@ -414,6 +447,8 @@ func (s *Session) ApplyReconnecting(ev mdl.Reconnecting) {
 // reconnect banner is left intact; ApplyReconnecting owns its
 // lifecycle (clear happens on the next ApplyConfigComplete).
 func (s *Session) ApplyDisconnected(ev mdl.Disconnected) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	defer s.Publish(Event{Kind: EventDisconnected, Data: ev})
 	s.State.Connected = false
 }
@@ -423,6 +458,8 @@ func (s *Session) ApplyDisconnected(ev mdl.Disconnected) {
 // the first ConfigComplete (TUI uses it to decide whether to emit
 // the "sync complete" system line).
 func (s *Session) ApplyConfigComplete() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	wasDisconnected := !s.State.Connected
 	s.State.Connected = true
 	s.State.Reconnect = nil

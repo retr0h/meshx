@@ -141,6 +141,8 @@ func TestServer_ListTools(t *testing.T) {
 		"scan_ble", "scan_usb", "auto_detect_usb", "pair_ble",
 		"list_ble_devices", "forget_ble_device",
 		"set_ble_favorite", "clear_ble_favorite",
+		// events
+		"subscribe_events", "unsubscribe_events",
 	}
 	for _, name := range want {
 		if !got[name] {

@@ -67,6 +67,28 @@ meshx --help    # usb, tcp, ble subcommand trees
 
 Full command + keybinding reference in [`docs/commands.md`](docs/commands.md).
 
+## 🤖 Claude Code / MCP
+
+meshX ships a [plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces)
+so Claude Code (or any MCP-aware agent) can operate the mesh directly.
+
+**Add the marketplace and install:**
+
+```sh
+/plugin marketplace add retr0h/meshx
+/plugin install meshx-mcp@meshx
+```
+
+**Requires a running daemon** — the MCP server is a thin stdio adapter
+that proxies every call to the HTTP+SSE daemon:
+
+```sh
+meshx server start
+```
+
+24 tools are exposed — the agent can scan for radios, pair BLE
+devices, send messages, manage channels, ping peers, and more.
+
 ## ⚙️ How It Works
 
 meshX is a **Meshtastic client**. It connects to a radio you already

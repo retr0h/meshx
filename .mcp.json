@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "meshx": {
+      "command": "go",
+      "args": ["run", "github.com/retr0h/meshx", "mcp", "start"],
+      "env": {}
+    }
+  }
+}

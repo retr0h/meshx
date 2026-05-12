@@ -144,18 +144,31 @@ func (s *Server) Run(ctx context.Context) error {
 const instructions = `meshx — Meshtastic LoRa mesh-radio bridge.
 
 This server proxies every operation of a running meshx daemon
-(meshx server start) over MCP. Use the tools to:
+(meshx server start) over MCP.
 
-  - send chat / DM messages on the mesh
-  - list / mint / import / delete / share channels
-  - ping or traceroute peers
-  - read live radio + node + message state
-  - manage paired BLE devices
+## Getting started
 
-Every radio-scoped tool takes a radio_id parameter. Call list_radios
-first to enumerate every attached radio; tool inputs accept the
-0x-prefixed canonical id that endpoint returns.
+1. Call health to confirm the daemon is reachable.
+2. Call list_radios to see attached radios.
+   - If a radio is already connected, its radio_id is returned —
+     skip to step 4.
+3. If no radio is attached, discover and connect one:
+   - USB: call auto_detect_usb (single radio) or scan_usb (multiple).
+   - BLE: call scan_ble to discover nearby devices, then pair_ble to
+     bond one. Use set_ble_favorite to mark it for auto-connect.
+   - list_ble_devices shows previously paired BLE radios.
+4. Use the radio_id from step 2 in every radio-scoped tool:
+   send_message, list_channels, list_nodes, list_messages,
+   mint_channel, import_channels, delete_channel, share_channel,
+   ping_peer, traceroute_peer, update_config, reboot_radio,
+   sync_radio.
 
-The daemon owns the hardware and persists state — this server is
-ephemeral. When you disconnect the daemon and its radio attachment
-keep running for the next session.`
+## Key concepts
+
+- Every radio-scoped tool takes a radio_id parameter. Use the
+  0x-prefixed canonical id that list_radios returns.
+- send_message targets a channel slot index (0..7) and optionally a
+  to_num for DMs. Look up NodeNums via list_nodes.
+- The daemon owns the hardware and persists state — this MCP server
+  is ephemeral. When you disconnect, the daemon and its radio
+  attachment keep running for the next session.`

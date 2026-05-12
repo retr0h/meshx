@@ -1,0 +1,18 @@
+{
+  "name": "meshx",
+  "description": "Meshtastic LoRa mesh-radio tools for Claude Code",
+  "owner": {
+    "name": "John Dewey",
+    "email": "john@dewey.ws"
+  },
+  "plugins": [
+    {
+      "name": "meshx-mcp",
+      "source": "./",
+      "description": "MCP server bridging Claude Code to a running meshx daemon — send messages, manage channels, ping peers, scan radios, and more over LoRa mesh",
+      "category": "iot",
+      "tags": ["meshtastic", "lora", "mesh", "radio", "iot"],
+      "license": "MIT"
+    }
+  ]
+}

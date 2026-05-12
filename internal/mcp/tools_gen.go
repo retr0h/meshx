@@ -5,6 +5,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	gen "github.com/retr0h/meshx/internal/sdk/gen"
 )

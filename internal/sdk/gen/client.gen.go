@@ -385,6 +385,9 @@ type MeshxEvent struct {
 
 // Message defines model for Message.
 type Message struct {
+	// Alert sender included a BEL (0x07) — Meshtastic external_notification ring; renderer surfaces 🔔
+	Alert *bool `json:"alert,omitempty"`
+
 	// Corrupted sanitization replaced/dropped bytes
 	Corrupted *bool `json:"corrupted,omitempty"`
 
@@ -431,6 +434,9 @@ type MessageStatus string
 // MessageItem defines model for MessageItem.
 type MessageItem struct {
 	Ackers *[]Acker `json:"ackers,omitempty"`
+
+	// Alert sender included a BEL (0x07) — Meshtastic external_notification ring; renderer surfaces 🔔
+	Alert *bool `json:"alert,omitempty"`
 
 	// Corrupted sanitization replaced/dropped bytes
 	Corrupted *bool `json:"corrupted,omitempty"`

@@ -249,6 +249,13 @@ func chatRowRender(
 			Italic(true)
 		bodyForFirst = "(?) " + bodyForFirst
 	}
+	// Alert bell — sender embedded a BEL (0x07), the Meshtastic
+	// external_notification "ring the buzzer" signal. Prefix with
+	// 🔔 but keep normal (not dim-italic) styling: this is the
+	// sender being emphatic, not a corruption marker.
+	if msg.Alert {
+		bodyForFirst = "🔔 " + bodyForFirst
+	}
 	if isAction {
 		// Italic + drained color signals "this is an action" the
 		// same way irssi renders /me output — distinct enough from

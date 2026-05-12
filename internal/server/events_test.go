@@ -183,7 +183,7 @@ func TestEndpointEventsStream(t *testing.T) {
 				FromNum: peer, Text: "hi from peer",
 				PacketID: 99, SentAt: time.Now(),
 			},
-		}, "hi from peer", false)
+		}, "hi from peer", false, false)
 	}
 	applyBroadcast := func(h *sseHarness) {
 		h.session.State.MyNodeNum = myNum
@@ -194,7 +194,7 @@ func TestEndpointEventsStream(t *testing.T) {
 				FromNum: peer, Text: "channel chat",
 				PacketID: 100, SentAt: time.Now(),
 			},
-		}, "channel chat", false)
+		}, "channel chat", false, false)
 	}
 
 	cases := []struct {

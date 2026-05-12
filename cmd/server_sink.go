@@ -84,7 +84,7 @@ func (s *daemonSink) Send(msg any) {
 	case mdl.Text:
 		// Daemon takes the text as-is — sanitization is a TUI render
 		// concern; persistence stores the raw bytes the radio sent.
-		s.drv.ApplyText(ev, ev.Body.Text, false)
+		s.drv.ApplyText(ev, ev.Body.Text, false, false)
 	case mdl.Routing:
 		s.drv.ApplyRouting(ev)
 	case mdl.Ping:

@@ -100,4 +100,5 @@ type Message struct {
 	ToNum     uint32        `json:"to_num"              doc:"addressee node num; 0xFFFFFFFF = broadcast"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           format:"int64" minimum:"0"`
 	SentAt    time.Time     `json:"sent_at"             doc:"absolute time of receive / persist"`
 	Corrupted bool          `json:"corrupted,omitempty" doc:"sanitization replaced/dropped bytes"`
+	Alert     bool          `json:"alert,omitempty"     doc:"sender included a BEL (0x07) — Meshtastic external_notification ring; renderer surfaces 🔔"`
 }

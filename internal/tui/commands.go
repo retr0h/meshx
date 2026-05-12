@@ -1499,10 +1499,10 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		m.session.PutSetting("", "ding_muted", v)
 		if m.DingMuted {
 			m.flash = "/mute on — terminal ding silenced"
-			m.systemLine("ding muted — terminal won't beep on incoming text")
+			m.systemLine("ding muted — terminal won't beep on alert-flagged text")
 		} else {
 			m.flash = "/mute off — terminal ding restored"
-			m.systemLine("ding unmuted — terminal will beep on incoming text")
+			m.systemLine("ding unmuted — terminal will beep on alert-flagged text (sender BEL)")
 		}
 	case "me":
 		// IRC ASCII-action convention. /me waves → broadcasts the

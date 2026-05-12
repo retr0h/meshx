@@ -171,7 +171,7 @@ var helpEntries = map[string]helpEntry{
 	},
 	"mute": {
 		usage:   "/mute",
-		summary: "toggle the meshX terminal ding (BEL on incoming text). Persists across restarts. The radio's own buzzer is unaffected — for that, use /config → \"radio buzzer\"",
+		summary: "toggle the meshX terminal ding (BEL on alert-flagged inbound text — messages whose sender embedded a 0x07 BEL; renderer also surfaces 🔔 on those rows). Persists across restarts. The radio's own buzzer is unaffected — for that, use /config → \"radio buzzer\"",
 	},
 	// /dingtest is intentionally NOT listed here. It's a hidden
 	// diagnostic that fires the BEL verification path. Available

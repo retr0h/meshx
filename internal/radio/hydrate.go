@@ -58,12 +58,15 @@ type HydrationResult struct {
 	BootNotes []string
 }
 
-// Sanitizer scrubs a message's Text and reports whether any
-// substitution / drop happened. The TUI passes its own
-// sanitizeMessageText (UTF-8 + control-byte hardening for the
-// terminal-layout invariants); the daemon leaves it nil and stores
-// the bytes the radio actually sent.
-type Sanitizer func(text string) (cleaned string, corrupted bool)
+// Sanitizer scrubs a message's Text and reports two independent
+// signals: `corrupted` (sanitization had to drop or substitute
+// bytes — terminal-layout hazards like invalid UTF-8 or non-BEL
+// control chars) and `alert` (sender embedded one or more BEL
+// bytes, 0x07 — the Meshtastic external_notification "ring the
+// buzzer" signal; render row with 🔔, NOT (?) corruption styling).
+// The TUI passes its own sanitizeMessageText; the daemon leaves
+// the field nil and stores the bytes the radio actually sent.
+type Sanitizer func(text string) (cleaned string, corrupted, alert bool)
 
 // Resolver looks up the canonical radio_id for a (transport,
 // addr) pair. Backed by *storage.Sqlite.ResolveRadioByConnection.
@@ -179,7 +182,7 @@ func (s *Session) HydrateFromStore(opts HydrationOptions) HydrationResult {
 		past := make([]mdl.MessageItem, 0, len(pastModels))
 		for _, mm := range pastModels {
 			if opts.SanitizeText != nil {
-				mm.Text, mm.Corrupted = opts.SanitizeText(mm.Text)
+				mm.Text, mm.Corrupted, mm.Alert = opts.SanitizeText(mm.Text)
 			}
 			past = append(past, mdl.MessageItem{Message: mm})
 		}

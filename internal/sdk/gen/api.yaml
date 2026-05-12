@@ -509,6 +509,9 @@ components:
     Message:
       additionalProperties: false
       properties:
+        alert:
+          description: sender included a BEL (0x07) — Meshtastic external_notification ring; renderer surfaces 🔔
+          type: boolean
         corrupted:
           description: sanitization replaced/dropped bytes
           type: boolean
@@ -585,6 +588,9 @@ components:
             $ref: "#/components/schemas/Acker"
           nullable: true
           type: array
+        alert:
+          description: sender included a BEL (0x07) — Meshtastic external_notification ring; renderer surfaces 🔔
+          type: boolean
         corrupted:
           description: sanitization replaced/dropped bytes
           type: boolean

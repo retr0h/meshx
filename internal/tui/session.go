@@ -78,7 +78,7 @@ type radioSession interface {
 	ApplyPosition(msg mdl.Position, grid string) radio.ApplyPositionResult
 	ApplyChannelInfo(msg mdl.ChannelInfo)
 	ApplyNodeInfo(msg mdl.NodeInfo) radio.ApplyNodeInfoResult
-	ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) radio.ApplyTextResult
+	ApplyText(ev mdl.Text, sanitizedText string, corrupted, alert bool) radio.ApplyTextResult
 	ApplyRouting(msg mdl.Routing) radio.ApplyRoutingResult
 	ApplyTraceroute(msg mdl.Traceroute)
 	ApplyPing(msg mdl.Ping)

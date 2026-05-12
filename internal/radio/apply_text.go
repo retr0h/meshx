@@ -47,8 +47,14 @@ type ApplyTextResult struct {
 // appends or refreshes the message row, bumps unread on non-active
 // channels, and persists if a Store is wired. Sanitization of the
 // text body is the caller's concern (lives in TUI today; daemon
-// passes pre-sanitized text or ignores cleanup).
-func (s *Session) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) ApplyTextResult {
+// passes pre-sanitized text or ignores cleanup). The `alert` flag
+// rides alongside `corrupted` — sender embedded a BEL (0x07), the
+// Meshtastic external_notification trigger; renderer surfaces 🔔.
+func (s *Session) ApplyText(
+	ev mdl.Text,
+	sanitizedText string,
+	corrupted, alert bool,
+) ApplyTextResult {
 	// Inbound DMs addressed to MyNodeNum fire dm_received; channel
 	// broadcasts (and pre-handshake packets where MyNodeNum=0) fire
 	// text. Mutually exclusive — agents subscribe to whichever they
@@ -96,6 +102,7 @@ func (s *Session) ApplyText(ev mdl.Text, sanitizedText string, corrupted bool) A
 		Mine:      mine,
 		Text:      sanitizedText,
 		Corrupted: corrupted,
+		Alert:     alert,
 		Status:    mdl.StatusAck,
 		Hops:      body.Hops,
 		SNR:       body.SNR,

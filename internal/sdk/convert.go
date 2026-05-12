@@ -91,6 +91,9 @@ func messageFromGen(g gen.MessageItem) mdl.MessageItem {
 	if g.Corrupted != nil {
 		m.Corrupted = *g.Corrupted
 	}
+	if g.Alert != nil {
+		m.Alert = *g.Alert
+	}
 	if g.Ackers != nil {
 		m.Ackers = make([]mdl.Acker, 0, len(*g.Ackers))
 		for _, a := range *g.Ackers {

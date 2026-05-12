@@ -91,7 +91,7 @@ func TestSession_ApplyText(t *testing.T) {
 					PacketID: 99,
 					SentAt:   time.Now(),
 				},
-			}, "hi", false)
+			}, "hi", false, false)
 
 			events := drainKinds(ch, 1, 200*time.Millisecond)
 			if got := len(events); got != 1 {

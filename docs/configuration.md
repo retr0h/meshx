@@ -55,6 +55,21 @@ command errors out cleanly; if it's empty after `strings.TrimSpace`, same.
 Tokens rotate by daemon restart (write a new file, restart the daemon, hand the
 new file to clients).
 
+## MCP server (`meshx mcp …`)
+
+Persistent flags on the `mcp` parent. Same shape as the `client` parent — the
+MCP server is the third client of the daemon (alongside the TUI and the
+`meshx client` CLI), spawned by an agent (Claude Code, Cursor, …) per session.
+
+| Flag                | Env                         | Default                 | Purpose                                                                                   |
+| ------------------- | --------------------------- | ----------------------- | ----------------------------------------------------------------------------------------- |
+| `--server`, `-s`    | `MESHX_MCP_SERVER`          | `http://127.0.0.1:4404` | Daemon URL the MCP server proxies to                                                      |
+| `--auth-token-file` | `MESHX_MCP_AUTH_TOKEN_FILE` | _(none)_                | Path to the daemon's bearer-token file; same file `--auth-token-file` on the server wrote |
+
+Subcommand: `meshx mcp start` runs the MCP server over stdio. Logs go to stderr
+only — stdout is the JSON-RPC wire and writing anything else there corrupts the
+protocol.
+
 ## TUI launcher (`meshx`, `meshx usb connect`, `meshx ble connect`)
 
 Bare `meshx` (no subcommand) auto-detects: if a favorite BLE radio is saved, it

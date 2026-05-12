@@ -82,12 +82,15 @@ import (
 //
 // Called at the ingress boundary (applyTextMessage) and on replay
 // from SQLite (loadMessages) so historic rows written before this
-// fix get cleaned on read. Returns the cleaned text and a boolean
-// reporting whether any sanitization beyond CRLF normalization
-// actually had to happen — caller stores the flag on the message
-// so the renderer can tag the row with a ⚠ marker + dim styling
-// (corrupted text we can partially read is more useful than
-// silently-cleaned text the user has no reason to distrust).
+// fix get cleaned on read. Returns the cleaned text, a `corrupted`
+// flag (sanitization had to drop or substitute bytes — render row
+// dim italic with a (?) marker), and an `alert` flag (sender
+// included one or more BEL bytes, 0x07 — render row with a 🔔
+// badge; the firmware's external_notification module fires the
+// radio's buzzer on BEL for the same reason, so we treat it as
+// meaningful payload rather than garbage. BEL is stripped from
+// the returned text either way — terminals would re-ring on every
+// redraw if we left it in).
 var messageTextSanitizer = strings.NewReplacer("\r\n", "\n", "\r", "")
 
 // okMessageRune is the allow-list for sanitizeMessageText. The only
@@ -107,14 +110,15 @@ func okMessageRune(r rune) bool {
 	return !unicode.Is(unicode.Cc, r)
 }
 
-func sanitizeMessageText(s string) (string, bool) {
+func sanitizeMessageText(s string) (string, bool, bool) {
 	s = messageTextSanitizer.Replace(s)
 	// Trim edge whitespace — leading/trailing spaces, tabs, newlines.
 	// Internal \n is preserved (multi-line reports stay multi-line);
 	// only the edges get touched. See the doc comment above for why.
 	s = strings.TrimSpace(s)
-	// Fast path: well-behaved UTF-8 with no control bytes goes
-	// straight through. Saves an allocation on the common case
+	// Fast path: well-behaved UTF-8 with no control bytes (BEL
+	// included — BEL needs the slow path to flip the alert flag)
+	// goes straight through. Saves an allocation on the common case
 	// (every legitimate chat message).
 	if utf8.ValidString(s) && !strings.ContainsRune(s, utf8.RuneError) {
 		clean := true
@@ -125,12 +129,13 @@ func sanitizeMessageText(s string) (string, bool) {
 			}
 		}
 		if clean {
-			return s, false
+			return s, false, false
 		}
 	}
 	var b strings.Builder
 	b.Grow(len(s))
 	corrupted := false
+	alert := false
 	for _, r := range s {
 		switch {
 		case r == utf8.RuneError:
@@ -140,16 +145,22 @@ func sanitizeMessageText(s string) (string, bool) {
 			// width.
 			b.WriteByte('?')
 			corrupted = true
+		case r == '\x07':
+			// BEL — Meshtastic firmware's external_notification trigger.
+			// Strip the byte (terminals would re-interpret on every
+			// redraw) and flag alert so the renderer can show 🔔
+			// without falsely flagging the row as corrupted.
+			alert = true
 		case okMessageRune(r):
 			b.WriteRune(r)
 		default:
-			// Drop the rune. Control chars (NUL, ESC, BEL, etc.),
+			// Drop the rune. Control chars (NUL, ESC, etc.),
 			// surrogates, and other non-printable runes have no place
 			// in a chat message and only ever break things downstream.
 			corrupted = true
 		}
 	}
-	return b.String(), corrupted
+	return b.String(), corrupted, alert
 }
 
 // applyTextMessage appends a received text packet to the message log.
@@ -162,7 +173,7 @@ func sanitizeMessageText(s string) (string, bool) {
 // to ApplyText, then layers the autoscroll cursor advance + the
 // terminal-bell ding Cmd.
 func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
-	cleanText, corrupted := sanitizeMessageText(ev.Body.Text)
+	cleanText, corrupted, alert := sanitizeMessageText(ev.Body.Text)
 
 	// Snapshot the autoscroll anchor BEFORE Apply — if the user was
 	// at the bottom of the log, advance the cursor to the new tail
@@ -170,7 +181,7 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 	// they are (irssi convention: scrollback is sticky).
 	wasAtTail := len(m.Messages) == 0 || m.selectedMsg == len(m.Messages)-1
 
-	res := m.session.ApplyText(ev, cleanText, corrupted)
+	res := m.session.ApplyText(ev, cleanText, corrupted, alert)
 
 	if !res.Skipped && wasAtTail && res.Index >= 0 {
 		m.selectedMsg = res.Index
@@ -205,7 +216,12 @@ func (m *model) applyTextMessage(ev mdl.Text) tea.Cmd {
 		m.Channels[ev.Channel].Unread++
 	}
 
-	if !res.FromMine && !m.DingMuted {
+	// Terminal bell follows Meshtastic firmware semantics — fire only
+	// when the sender embedded a BEL (msg.Alert), not on every inbound
+	// text. The official apps render a 🔔 on these rows for the same
+	// reason: BEL is the protocol's "ring the recipient" affordance.
+	// DingMuted (/mute) stays as the master kill switch.
+	if !res.FromMine && alert && !m.DingMuted {
 		return ringTerminalBellCmd()
 	}
 	return nil

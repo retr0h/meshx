@@ -18,23 +18,6 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-// Package emoji holds the generated emoji-presentation lookup table
-// the TUI's cell-width measurement consults to promote bare-emoji
-// clusters whose East Asian Width is "Neutral" (and which the stock
-// Go width libraries therefore measure as 1 cell) — see
-// internal/tui/components_box.go::ansiCells.
-//
-// emoji-data.txt is checked in alongside the generator so refreshes
-// are deterministic and offline-buildable. Mirrors the
-// internal/sdk/gen/ layout (vendored source data + generator + .gen.go
-// output) but renamed to reflect what the generated code IS, not how
-// it was made — call sites read as emoji.IsEmojiPresentation(r).
-//
-// To refresh after a Unicode release:
-//
-//	curl -fsSL https://www.unicode.org/Public/<ver>/ucd/emoji/emoji-data.txt \
-//	    -o internal/tui/emoji/emoji-data.txt
-//	just go::generate
-//	go test ./...
-//	git commit -am "chore(tui): refresh emoji widths to Unicode <ver>"
 package emoji
+
+//go:generate go tool github.com/retr0h/meshx/internal/tui/emoji/emojigen -in emoji-data.txt -out widths.gen.go

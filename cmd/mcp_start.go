@@ -21,11 +21,12 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -47,7 +48,7 @@ anything else there would corrupt the protocol.
   meshx mcp start                                       # localhost daemon, no auth
   meshx mcp start --server http://host:4404             # remote daemon
   meshx mcp start --auth-token-file ~/.meshx/token      # bearer-auth gated`,
-	RunE: func(_ *cobra.Command, _ []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		serverURL := viper.GetString("mcp.server")
 		if serverURL == "" {
 			return fmt.Errorf("mcp start: --server URL required (or set MESHX_MCP_SERVER)")
@@ -70,9 +71,20 @@ anything else there would corrupt the protocol.
 		// logger (which targets stderr by default) and tag with the
 		// subsystem.
 		log := logger.With(slog.String("subsystem", "mcp.start"))
-		log.Debug("running", slog.String("server", serverURL))
+		log.Info(
+			"config",
+			slog.String("server", serverURL),
+			slog.Bool("auth", authToken != ""),
+		)
 
-		srv, err := mcppkg.New(mcppkg.Config{
+		ctx, cancel := signal.NotifyContext(
+			cmd.Context(),
+			syscall.SIGINT,
+			syscall.SIGTERM,
+		)
+		defer cancel()
+
+		s, err := mcppkg.New(mcppkg.Config{
 			ServerURL: serverURL,
 			AuthToken: authToken,
 			Logger:    logger,
@@ -80,6 +92,7 @@ anything else there would corrupt the protocol.
 		if err != nil {
 			return fmt.Errorf("mcp start: %w", err)
 		}
-		return srv.Run(context.Background())
+		var srv mcpRunner = s
+		return srv.Run(ctx)
 	},
 }

@@ -234,23 +234,55 @@ running** — they're direct OS interrogations.
 
 ## Deployment modes
 
-Three modes share one binary:
+Five modes share one binary, all converging on the same `*radio.Session` state
+layer:
 
-1. **Local** — `meshx ble connect <name>` / `meshx usb connect` runs radio + TUI
-   in one process.
-2. **Headless** — `meshx server start` owns the radio behind HTTP+SSE; no TUI.
-3. **Remote** (planned) — `meshx ble connect --server http://host:4404 <id>`
-   runs the TUI against a remote daemon.
+1. **Local TUI** — `meshx ble connect <name>` / `meshx usb connect` runs radio +
+   TUI in one process. The TUI holds `*radio.Session` directly.
+2. **Headless daemon** — `meshx server start` owns the radio behind HTTP+SSE; no
+   TUI. Clients reach it over HTTP.
+3. **Remote TUI** — `meshx client connect [<radio>]` runs the TUI against a
+   remote daemon. `*sdk.Remote` satisfies `radioSession` over HTTP+SSE —
+   outbound calls go through `gen.Client`, inbound events arrive via the SSE
+   stream and get forwarded as `tea.Msg` into the same Update path the local TUI
+   uses. The TUI doesn't branch on mode.
+4. **CLI client** —
+   `meshx client {status,scan,pair,list,forget,fav,unfav,send, tail}` — one-shot
+   HTTP calls against the daemon for scripting / admin.
+5. **MCP agent** — `meshx mcp start` opens a Model Context Protocol server over
+   stdio. An agent (Claude Code, Cursor, …) spawns it per session; every daemon
+   operation becomes an MCP tool the agent can call. When the agent disconnects,
+   the MCP process exits; the daemon keeps running.
 
-The dual-mode seam is `internal/tui/session.go::radioSession`. `*radio.Session`
-satisfies it for local mode; `*sdk.RemoteDriver` (planned) satisfies it over
-HTTP+SSE — it holds a `*gen.Client` for outbound calls and consumes
-`/radios/{id}/events` to project events onto a local `*radio.State`. The TUI's
-Update path doesn't branch on mode.
+The daemon owns the BLE/USB adapter exclusively while it's running. CLI client
+commands and the MCP server both route through the daemon's HTTP API — neither
+touches hardware directly. This avoids two-process contention over the Bluetooth
+stack.
 
-Remote mode has two independent reconnect loops: radio↔daemon (pump backoff on
-the daemon side) and TUI↔daemon (SSE re-subscribe + snapshot re-fetch on
+Remote TUI mode has two independent reconnect loops: radio↔daemon (pump backoff
+on the daemon side) and TUI↔daemon (SSE re-subscribe + snapshot re-fetch on
 network blips). The daemon keeps the radio session alive across TUI restarts.
+
+### Client lifecycle (modes 3–5)
+
+```bash
+# 1. Start the daemon (owns the radio long-term)
+meshx server start --radio /dev/cu.usbmodem2101
+
+# 2. From another terminal (or agent), use client commands:
+meshx client status                   # is the daemon up? which radios?
+meshx client scan ble                 # discover BLE radios via the daemon
+meshx client pair <uuid>              # pair one
+meshx client connect                  # open the TUI in remote mode
+meshx client send 0xabcdef01 -t "hi"  # one-shot message
+meshx client tail 0xabcdef01          # live SSE stream (jq-able)
+
+# 3. Or wire an MCP agent (example: Claude Code config)
+meshx mcp start --server http://127.0.0.1:4404
+```
+
+All flags / env vars for `meshx client` and `meshx mcp` are documented in
+[`docs/configuration.md`](./configuration.md).
 
 ## Daemon, logging, config
 
@@ -291,47 +323,82 @@ The SSE stream (`/radios/{id}/events`) sits on `Driver.Subscribe(ctx)` and
 dispatches per-event-kind via `eventsTypeMap` so each variant gets the right
 `event:` line on the wire.
 
-## OpenAPI client SDK
+## Code generation pipeline
 
-The daemon emits its OpenAPI spec at `/openapi.{json,yaml}` (3.1) and a
-downgraded version at `/openapi-3.0.{json,yaml}`. oapi-codegen still can't
-consume 3.1 (oapi-codegen #373) so the codegen pipeline pulls the 3.0 spec.
+The daemon's Huma router is the single source of truth for the API. Three
+downstream consumers are generated from it, each invoked by `just generate` in
+strict order — no running daemon required:
 
-Two-stage regen, both invoked by `just generate` — no daemon required:
-
-1. `internal/sdk/gen/main.go` (build-tagged `ignore`, same pattern as
-   `internal/tui/emoji/main.go`) imports `internal/server`, calls
-   `Server.OpenAPISpec()` to pull the spec straight from Huma in-process, writes
-   `api.yaml`.
-2. `oapi-codegen` runs against `api.yaml` + `cfg.yaml` to produce
-   `client.gen.go`.
-
-```bash
-just generate                # runs both stages via `go generate ./...`
+```
+Huma router (internal/server/)
+      │
+      ▼  (1) dumpspec
+api.yaml  (OpenAPI 3.0)
+      │
+      ├──▶ (2) oapi-codegen ──▶ client.gen.go  (typed HTTP client)
+      │
+      └──▶ (3) mcpgen ────────▶ tools_gen.go   (MCP tool registrations)
 ```
 
-Drift is enforced by `TestAPISpecMatchesVendoredCopy` (in
-`internal/server/spec_test.go`), which fails `just test` if the on-disk
-`api.yaml` doesn't match what the in-process daemon would emit. Breaking changes
-are caught in CI by `oasdiff` between the PR branch's `api.yaml` and main's —
-see `.github/workflows/go.yml`.
+### Stage 1 — extract the OpenAPI spec
 
-`internal/sdk/gen/cfg.yaml` configures oapi-codegen
-(`generate.models: true, client: true`); `client.gen.go` is checked in so
-consumers can build without invoking codegen.
+`internal/sdk/gen/dumpspec/main.go` imports `internal/server`, calls
+`Server.OpenAPISpec()` to pull the 3.0 YAML straight from Huma in-process,
+writes `api.yaml`. Registered as a `tool` in `go.mod` and invoked via
+`go tool .../dumpspec` from the `//go:generate` directive in
+`internal/sdk/gen/generate.go`.
 
-**Schema-name caveat**: oapi-codegen auto-generates a `<OpId>Response` struct
-per operation as the HTTP response wrapper. Avoid `*Response` schema names in
-`internal/server/handlers.go` — that's why the send-message body is
-`SendMessageResult`, not `SendMessageResponse`.
+### Stage 2 — generate the typed HTTP client
 
-`internal/sdk/` is the consumer-facing surface. `gen/` is the generated typed
-HTTP client for every route Huma registers. `remote.go` (planned) is the
-hand-written companion that wraps `gen.Client` plus an SSE consumer behind the
-`tui.radioSession` interface — so `meshx ble connect --server <url>` runs the
-TUI against a remote daemon with no branching in the model code. SSE isn't
-generated by oapi-codegen, so the event reader is hand-rolled against the
-`/radios/{id}/events` stream.
+`oapi-codegen` (also a go.mod `tool`) runs against `api.yaml` + `cfg.yaml` to
+produce `client.gen.go`. This is the typed Go HTTP client the TUI's remote mode
+(`internal/sdk/remote.go`), the CLI (`cmd/client_*.go`), and the MCP server
+(`internal/mcp/`) all consume.
+
+### Stage 3 — generate MCP tool registrations
+
+`internal/mcp/mcpgen/main.go` reads `api.yaml` with `kin-openapi`, and for each
+operation (except SSE streaming endpoints) emits an args struct, a handler
+method, and a tool registration call into `internal/mcp/tools_gen.go` using
+`dave/jennifer`. When you add a new HTTP endpoint to the daemon and run
+`just generate`, the matching MCP tool appears automatically — no hand-wiring.
+
+### Running
+
+```bash
+just generate    # runs all three stages in order
+```
+
+The justfile sequences `go generate` per-package so stage 1 writes `api.yaml`
+before stages 2 and 3 read it:
+
+```
+go generate ./internal/sdk/gen/...     # (1) dumpspec + (2) oapi-codegen
+go generate ./internal/tui/emoji/...   # emoji widths (independent)
+go generate ./internal/mcp/...         # (3) mcpgen
+```
+
+### Drift detection
+
+`TestAPISpecMatchesVendoredCopy` (in `internal/server/server_test.go`) fails
+`just test` if the on-disk `api.yaml` doesn't match what the in-process daemon
+would emit — catches "someone changed a handler but forgot `just generate`."
+Breaking changes are caught in CI by `oasdiff` between the PR branch's
+`api.yaml` and main's — see `.github/workflows/go.yml`.
+
+### Notes
+
+- oapi-codegen still can't consume OpenAPI 3.1 (oapi-codegen #373) so the
+  pipeline uses the 3.0 downgrade path.
+- `client.gen.go` and `tools_gen.go` are both checked in so consumers can build
+  without invoking codegen.
+- **Schema-name caveat**: oapi-codegen auto-generates a `<OpId>Response` struct
+  per operation. Avoid `*Response` schema names in handler types — that's why
+  the send-message body is `SendMessageResult`, not `SendMessageResponse`.
+- `internal/sdk/remote.go` is the hand-written companion that wraps
+  `gen.Client` + an SSE consumer behind the `tui.radioSession` interface for
+  remote-mode TUI. SSE isn't generated by oapi-codegen, so the event reader is
+  hand-rolled against `/radios/{id}/events`.
 
 ## Dependencies
 

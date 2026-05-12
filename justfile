@@ -28,10 +28,14 @@ test:
     just just::fmt-check
     just go::test
 
-# Generate code
+# Generate code — sequenced so each stage reads the previous stage's
+# output: (1) dumpspec + oapi-codegen write api.yaml + client.gen.go,
+
+# (2) emoji widths (independent), (3) mcpgen reads api.yaml → tools_gen.go.
 generate:
-    just go::generate
-    # cp internal/controller/api/gen/api.yaml ui/src/sdk/gen/api.yaml
+    go generate ./internal/sdk/gen/...
+    go generate ./internal/tui/emoji/...
+    go generate ./internal/mcp/...
 
 # Format, lint before committing
 ready:

@@ -1,0 +1,11 @@
+{
+  "name": "meshx-mcp",
+  "description": "MCP server for Meshtastic LoRa mesh radio — 24 tools for channels, nodes, messages, radio ops, and BLE management",
+  "version": "0.1.0",
+  "mcpServers": {
+    "meshx": {
+      "command": "go",
+      "args": ["run", "github.com/retr0h/meshx", "mcp", "start"]
+    }
+  }
+}

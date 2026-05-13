@@ -81,6 +81,12 @@ type Config struct {
 	// layer ensures). /healthz is exempt regardless so orchestration
 	// liveness probes don't need credentials.
 	AuthToken string
+
+	// Attacher enables runtime hot-attach / hot-detach of radios via
+	// POST /radios/attach and DELETE /radios/{radio_id}. Nil disables
+	// both endpoints (they return 503). The concrete implementation
+	// lives in cmd/ where pump + sink + store are wired.
+	Attacher RadioAttacher
 }
 
 // OpenAPISpec returns the daemon's OpenAPI 3.0 spec as YAML bytes —
@@ -107,6 +113,7 @@ type Server struct {
 	logger      *slog.Logger
 	idempotency *idempotencyCache
 	authToken   string
+	attacher    RadioAttacher
 }
 
 // New wires a Server around the given Config. The Registry is
@@ -141,6 +148,7 @@ func New(cfg Config) *Server {
 		logger:      cfg.Logger.With(slog.String("subsystem", "http")),
 		idempotency: newIdempotencyCache(),
 		authToken:   cfg.AuthToken,
+		attacher:    cfg.Attacher,
 		http: &http.Server{
 			Handler: mux,
 			// ReadHeaderTimeout protects against slowloris-style attacks;

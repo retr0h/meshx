@@ -143,6 +143,8 @@ func TestServer_ListTools(t *testing.T) {
 		"set_ble_favorite", "clear_ble_favorite",
 		// events
 		"subscribe_events", "unsubscribe_events",
+		// lifecycle
+		"attach_radio", "detach_radio",
 	}
 	for _, name := range want {
 		if !got[name] {

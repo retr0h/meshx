@@ -14,6 +14,10 @@ import (
 // Called from registerTools() in tools.go.
 func (s *Server) registerGeneratedTools() {
 	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
+		Description: "Dial a radio transport (ble:<uuid>, /dev/cu.usb…, host:port) and register it in the daemon's registry without restarting. The pump connects, runs the Meshtastic handshake, and the radio appears in GET /radios once MyInfo arrives. Returns the pending radio_id immediately.",
+		Name:        "attach_radio",
+	}, s.toolAttachRadio)
+	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
 		Description: "Convenience over /transports/usb/scan — returns the device path of the single Meshtastic radio found. 404 when zero, 409 when multiple.",
 		Name:        "auto_detect_usb",
 	}, s.toolAutoDetectUsb)
@@ -25,6 +29,10 @@ func (s *Server) registerGeneratedTools() {
 		Description: "Dispatches DeleteChannel to free the named slot — radio sets the slot's role to DISABLED and wipes the PSK. Refuses slot 0 (PRIMARY) since the firmware requires one to operate. Returns 202 Accepted; the radio's confirmation arrives later as the matching channel event on the SSE stream.",
 		Name:        "delete_channel",
 	}, s.toolDeleteChannel)
+	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
+		Description: "Tear down the pump + transport and remove the radio from the registry. The radio stops responding to mesh traffic; the daemon stays up. Idempotent — detaching an unknown radio_id returns 404.",
+		Name:        "detach_radio",
+	}, s.toolDetachRadio)
 	mcpsdk.AddTool(s.mcp, &mcpsdk.Tool{
 		Description: "Removes the device from the saved-pairings table. Does not unbind at the OS level.",
 		Name:        "forget_ble_device",
@@ -111,6 +119,23 @@ func (s *Server) registerGeneratedTools() {
 	}, s.toolUpdateConfig)
 }
 
+type attachRadioArgs struct {
+	Dest string `json:"dest" jsonschema:"transport target: /dev/cu.usb…, ble:<uuid>, host:port"`
+}
+
+func (s *Server) toolAttachRadio(ctx context.Context, _ *mcpsdk.CallToolRequest, args attachRadioArgs) (*mcpsdk.CallToolResult, any, error) {
+	body := gen.AttachRadioJSONRequestBody{}
+	body.Dest = args.Dest
+	resp, err := s.client.AttachRadioWithResponse(ctx, body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attach_radio: %w", err)
+	}
+	if resp.JSON200 == nil {
+		return nil, nil, fmt.Errorf("attach_radio: daemon returned %s", resp.Status())
+	}
+	return textResult(jsonOrErr(resp.JSON200)), nil, nil
+}
+
 type autoDetectUsbArgs struct {
 	TimeoutMs int64 `json:"timeout_ms,omitempty" jsonschema:"per-port identify timeout in milliseconds; default 1500"`
 }
@@ -156,6 +181,21 @@ func (s *Server) toolDeleteChannel(ctx context.Context, _ *mcpsdk.CallToolReques
 		return nil, nil, fmt.Errorf("delete_channel: daemon returned %s", resp.Status())
 	}
 	return textResult(fmt.Sprintf("delete_channel: ok (%s)", resp.Status())), nil, nil
+}
+
+type detachRadioArgs struct {
+	RadioId string `json:"radio_id" jsonschema:"canonical radio identifier — see GET /radios"`
+}
+
+func (s *Server) toolDetachRadio(ctx context.Context, _ *mcpsdk.CallToolRequest, args detachRadioArgs) (*mcpsdk.CallToolResult, any, error) {
+	resp, err := s.client.DetachRadioWithResponse(ctx, args.RadioId)
+	if err != nil {
+		return nil, nil, fmt.Errorf("detach_radio: %w", err)
+	}
+	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
+		return nil, nil, fmt.Errorf("detach_radio: daemon returned %s", resp.Status())
+	}
+	return textResult(fmt.Sprintf("detach_radio: ok (%s)", resp.Status())), nil, nil
 }
 
 type forgetBleDeviceArgs struct {

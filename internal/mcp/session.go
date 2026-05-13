@@ -138,6 +138,18 @@ type Driver interface {
 		reqEditors ...gen.RequestEditorFn,
 	) (*gen.TraceroutePeerResponse, error)
 
+	// Radio lifecycle.
+	AttachRadioWithResponse(
+		ctx context.Context,
+		body gen.AttachRadioJSONRequestBody,
+		reqEditors ...gen.RequestEditorFn,
+	) (*gen.AttachRadioResponse, error)
+	DetachRadioWithResponse(
+		ctx context.Context,
+		radioID string,
+		reqEditors ...gen.RequestEditorFn,
+	) (*gen.DetachRadioResponse, error)
+
 	// Meta.
 	HealthWithResponse(
 		ctx context.Context,

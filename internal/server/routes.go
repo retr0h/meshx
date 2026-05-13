@@ -285,4 +285,25 @@ func (s *Server) registerRoutes() {
 		Description: "Convenience over /transports/usb/scan — returns the device path of the single Meshtastic radio found. 404 when zero, 409 when multiple.",
 		Tags:        []string{"transports"},
 	}, s.handleAutoDetectUSB)
+
+	// --- Radio lifecycle (attach / detach) ---
+
+	huma.Register(s.api, huma.Operation{
+		OperationID: "attach-radio",
+		Method:      http.MethodPost,
+		Path:        "/radios/attach",
+		Summary:     "Attach a radio at runtime",
+		Description: "Dial a radio transport (ble:<uuid>, /dev/cu.usb…, host:port) and register it in the daemon's registry without restarting. The pump connects, runs the Meshtastic handshake, and the radio appears in GET /radios once MyInfo arrives. Returns the pending radio_id immediately.",
+		Tags:        []string{"radios"},
+	}, s.handleAttachRadio)
+
+	huma.Register(s.api, huma.Operation{
+		OperationID:   "detach-radio",
+		Method:        http.MethodDelete,
+		Path:          "/radios/{radio_id}",
+		Summary:       "Detach a radio",
+		Description:   "Tear down the pump + transport and remove the radio from the registry. The radio stops responding to mesh traffic; the daemon stays up. Idempotent — detaching an unknown radio_id returns 404.",
+		Tags:          []string{"radios"},
+		DefaultStatus: 200,
+	}, s.handleDetachRadio)
 }

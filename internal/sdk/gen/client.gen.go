@@ -131,6 +131,24 @@ type Acker struct {
 	NodeNum int64 `json:"node_num"`
 }
 
+// AttachRadioRequest defines model for AttachRadioRequest.
+type AttachRadioRequest struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// Dest transport target: /dev/cu.usb…, ble:<uuid>, host:port
+	Dest string `json:"dest"`
+}
+
+// AttachRadioResult defines model for AttachRadioResult.
+type AttachRadioResult struct {
+	// Schema A URL to the JSON Schema for this object.
+	Schema *string `json:"$schema,omitempty"`
+
+	// RadioId registered radio identifier — pending:<dest> until the handshake completes, then 0x<hex node_num>
+	RadioId string `json:"radio_id"`
+}
+
 // AutoUSBInputBody defines model for AutoUSBInputBody.
 type AutoUSBInputBody struct {
 	// Schema A URL to the JSON Schema for this object.
@@ -906,6 +924,9 @@ type SendMessageParams struct {
 	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
 }
 
+// AttachRadioJSONRequestBody defines body for AttachRadio for application/json ContentType.
+type AttachRadioJSONRequestBody = AttachRadioRequest
+
 // MintChannelJSONRequestBody defines body for MintChannel for application/json ContentType.
 type MintChannelJSONRequestBody = MintChannelRequest
 
@@ -1020,6 +1041,14 @@ type ClientInterface interface {
 
 	// ListRadios request
 	ListRadios(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AttachRadioWithBody request with any body
+	AttachRadioWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	AttachRadio(ctx context.Context, body AttachRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DetachRadio request
+	DetachRadio(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetRadio request
 	GetRadio(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1139,6 +1168,42 @@ func (c *Client) Health(ctx context.Context, reqEditors ...RequestEditorFn) (*ht
 
 func (c *Client) ListRadios(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListRadiosRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AttachRadioWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAttachRadioRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AttachRadio(ctx context.Context, body AttachRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAttachRadioRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DetachRadio(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDetachRadioRequest(c.Server, radioId)
 	if err != nil {
 		return nil, err
 	}
@@ -1631,6 +1696,80 @@ func NewListRadiosRequest(server string) (*http.Request, error) {
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewAttachRadioRequest calls the generic AttachRadio builder with application/json body
+func NewAttachRadioRequest(server string, body AttachRadioJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAttachRadioRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewAttachRadioRequestWithBody generates requests for AttachRadio with any type of body
+func NewAttachRadioRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/attach")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDetachRadioRequest generates requests for DetachRadio
+func NewDetachRadioRequest(server string, radioId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "radio_id", radioId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/radios/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2683,6 +2822,14 @@ type ClientWithResponsesInterface interface {
 	// ListRadiosWithResponse request
 	ListRadiosWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListRadiosResponse, error)
 
+	// AttachRadioWithBodyWithResponse request with any body
+	AttachRadioWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AttachRadioResponse, error)
+
+	AttachRadioWithResponse(ctx context.Context, body AttachRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*AttachRadioResponse, error)
+
+	// DetachRadioWithResponse request
+	DetachRadioWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*DetachRadioResponse, error)
+
 	// GetRadioWithResponse request
 	GetRadioWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*GetRadioResponse, error)
 
@@ -2861,6 +3008,67 @@ func (r ListRadiosResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ListRadiosResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AttachRadioResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	JSON200                       *AttachRadioResult
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r AttachRadioResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AttachRadioResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AttachRadioResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DetachRadioResponse struct {
+	Body                          []byte
+	HTTPResponse                  *http.Response
+	ApplicationproblemJSONDefault *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r DetachRadioResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DetachRadioResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DetachRadioResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3603,6 +3811,32 @@ func (c *ClientWithResponses) ListRadiosWithResponse(ctx context.Context, reqEdi
 	return ParseListRadiosResponse(rsp)
 }
 
+// AttachRadioWithBodyWithResponse request with arbitrary body returning *AttachRadioResponse
+func (c *ClientWithResponses) AttachRadioWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AttachRadioResponse, error) {
+	rsp, err := c.AttachRadioWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAttachRadioResponse(rsp)
+}
+
+func (c *ClientWithResponses) AttachRadioWithResponse(ctx context.Context, body AttachRadioJSONRequestBody, reqEditors ...RequestEditorFn) (*AttachRadioResponse, error) {
+	rsp, err := c.AttachRadio(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAttachRadioResponse(rsp)
+}
+
+// DetachRadioWithResponse request returning *DetachRadioResponse
+func (c *ClientWithResponses) DetachRadioWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*DetachRadioResponse, error) {
+	rsp, err := c.DetachRadio(ctx, radioId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDetachRadioResponse(rsp)
+}
+
 // GetRadioWithResponse request returning *GetRadioResponse
 func (c *ClientWithResponses) GetRadioWithResponse(ctx context.Context, radioId string, reqEditors ...RequestEditorFn) (*GetRadioResponse, error) {
 	rsp, err := c.GetRadio(ctx, radioId, reqEditors...)
@@ -3978,6 +4212,65 @@ func ParseListRadiosResponse(rsp *http.Response) (*ListRadiosResponse, error) {
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAttachRadioResponse parses an HTTP response from a AttachRadioWithResponse call
+func ParseAttachRadioResponse(rsp *http.Response) (*AttachRadioResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AttachRadioResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AttachRadioResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDetachRadioResponse parses an HTTP response from a DetachRadioWithResponse call
+func ParseDetachRadioResponse(rsp *http.Response) (*DetachRadioResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DetachRadioResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
 		var dest ErrorModel
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {

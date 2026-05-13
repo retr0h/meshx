@@ -196,11 +196,14 @@ func runServerStart(cmd *cobra.Command, _ []string) error {
 		defer drv.Stop()
 	}
 
+	attacher := newDaemonAttacher(concreteStore, radios, log)
+
 	var srv daemonRunner = server.New(server.Config{
 		Radios:     radios,
 		Transports: tportMgr,
 		Logger:     logger,
 		AuthToken:  authToken,
+		Attacher:   attacher,
 	})
 
 	log.Info(

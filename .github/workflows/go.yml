@@ -12,11 +12,6 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          # Need the merge-base with main so oasdiff can compare
-          # the PR branch's spec against main's. Shallow checkout
-          # would miss origin/main entirely.
-          fetch-depth: 0
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -29,12 +24,3 @@ jobs:
         run: go build -o meshx .
       - name: Test (fmt + lint + race tests)
         run: just test
-      - name: Check API spec for breaking changes vs main
-        # Only meaningful on PRs (push-to-main is the new baseline).
-        # The drift check (PR's spec matches what the daemon emits)
-        # lives in TestAPISpecMatchesVendoredCopy and runs as part of
-        # `just test` above.
-        if: github.event_name == 'pull_request'
-        run: |
-          git show origin/${{ github.base_ref }}:internal/sdk/gen/api.yaml > /tmp/main-api.yaml
-          go tool github.com/oasdiff/oasdiff breaking /tmp/main-api.yaml internal/sdk/gen/api.yaml

@@ -25,6 +25,37 @@ components:
         - hops
         - at
       type: object
+    AttachRadioRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/AttachRadioRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        dest:
+          description: "transport target: /dev/cu.usb…, ble:<uuid>, host:port"
+          minLength: 1
+          type: string
+      required:
+        - dest
+      type: object
+    AttachRadioResult:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          example: https://example.com/schemas/AttachRadioResult.json
+          format: uri
+          readOnly: true
+          type: string
+        radio_id:
+          description: registered radio identifier — pending:<dest> until the handshake completes, then 0x<hex node_num>
+          type: string
+      required:
+        - radio_id
+      type: object
     AutoUSBInputBody:
       additionalProperties: false
       properties:
@@ -1518,7 +1549,56 @@ paths:
       summary: List attached radios
       tags:
         - radios
+  /radios/attach:
+    post:
+      description: Dial a radio transport (ble:<uuid>, /dev/cu.usb…, host:port) and register it in the daemon's registry without restarting. The pump connects, runs the Meshtastic handshake, and the radio appears in GET /radios once MyInfo arrives. Returns the pending radio_id immediately.
+      operationId: attach-radio
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachRadioRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachRadioResult"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Attach a radio at runtime
+      tags:
+        - radios
   /radios/{radio_id}:
+    delete:
+      description: Tear down the pump + transport and remove the radio from the registry. The radio stops responding to mesh traffic; the daemon stays up. Idempotent — detaching an unknown radio_id returns 404.
+      operationId: detach-radio
+      parameters:
+        - description: canonical radio identifier — see GET /radios
+          in: path
+          name: radio_id
+          required: true
+          schema:
+            description: canonical radio identifier — see GET /radios
+            type: string
+      responses:
+        "200":
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Detach a radio
+      tags:
+        - radios
     get:
       description: Identity, telemetry, current channel, connection status for one radio. Useful for clients rendering a status bar.
       operationId: get-radio

@@ -35,17 +35,26 @@ import (
 // macOS — a second call from the same process returns "already calling
 // Enable function" and aborts. The pump's reconnect loop redials on
 // every transport drop, so without this guard every retry would fail
-// for the wrong reason. Enable once per process, cache the result.
+// for the wrong reason. Enable once per process, cache the result —
+// but only on success. A failed Enable (timeout, TCC permission not
+// yet granted) must be retryable so the daemon doesn't stay bricked
+// until restart.
 var (
-	bleEnableOnce sync.Once
-	errBLEEnable  error
+	bleEnableMu      sync.Mutex
+	bleEnableSuccess bool
 )
 
 func enableBLEAdapterOnce(adapter *bluetooth.Adapter) error {
-	bleEnableOnce.Do(func() {
-		errBLEEnable = adapter.Enable()
-	})
-	return errBLEEnable
+	bleEnableMu.Lock()
+	defer bleEnableMu.Unlock()
+	if bleEnableSuccess {
+		return nil
+	}
+	if err := adapter.Enable(); err != nil {
+		return err
+	}
+	bleEnableSuccess = true
+	return nil
 }
 
 // scannedAddrs caches the bluetooth.Address (which carries the

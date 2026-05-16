@@ -31,32 +31,6 @@ import (
 	"tinygo.org/x/bluetooth"
 )
 
-// adapter.Enable() on tinygo-bluetooth v0.15.0 is non-idempotent on
-// macOS — a second call from the same process returns "already calling
-// Enable function" and aborts. The pump's reconnect loop redials on
-// every transport drop, so without this guard every retry would fail
-// for the wrong reason. Enable once per process, cache the result —
-// but only on success. A failed Enable (timeout, TCC permission not
-// yet granted) must be retryable so the daemon doesn't stay bricked
-// until restart.
-var (
-	bleEnableMu      sync.Mutex
-	bleEnableSuccess bool
-)
-
-func enableBLEAdapterOnce(adapter *bluetooth.Adapter) error {
-	bleEnableMu.Lock()
-	defer bleEnableMu.Unlock()
-	if bleEnableSuccess {
-		return nil
-	}
-	if err := adapter.Enable(); err != nil {
-		return err
-	}
-	bleEnableSuccess = true
-	return nil
-}
-
 // scannedAddrs caches the bluetooth.Address (which carries the
 // CBPeripheral pointer on macOS) of every UUID we've successfully
 // scanned in this process. The cache lets in-process redials skip
@@ -155,7 +129,7 @@ const bleReadBuf = 512
 //     real error before it can panic downstream.
 func DialBLE(addr string) (Client, error) {
 	adapter := bluetooth.DefaultAdapter
-	if err := enableBLEAdapterOnce(adapter); err != nil {
+	if err := adapter.Enable(); err != nil {
 		return nil, fmt.Errorf("enable bluetooth adapter: %w — is Bluetooth on?", err)
 	}
 

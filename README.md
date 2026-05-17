@@ -2,6 +2,7 @@
 [![go report card](https://goreportcard.com/badge/github.com/retr0h/meshx?style=for-the-badge)](https://goreportcard.com/report/github.com/retr0h/meshx)
 [![license](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=for-the-badge)](LICENSE)
 [![build](https://img.shields.io/github/actions/workflow/status/retr0h/meshx/go.yml?style=for-the-badge)](https://github.com/retr0h/meshx/actions/workflows/go.yml)
+[![codecov](https://img.shields.io/codecov/c/github/retr0h/meshx?style=for-the-badge)](https://codecov.io/gh/retr0h/meshx)
 [![release](https://img.shields.io/github/actions/workflow/status/retr0h/meshx/release.yml?style=for-the-badge&label=release)](https://github.com/retr0h/meshx/actions/workflows/release.yml)
 [![powered by](https://img.shields.io/badge/powered%20by-goreleaser-green.svg?style=for-the-badge)](https://github.com/goreleaser)
 [![just](https://img.shields.io/badge/just-command%20runner-blue?style=for-the-badge)](https://github.com/casey/just)

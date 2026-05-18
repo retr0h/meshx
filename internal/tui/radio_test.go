@@ -11,14 +11,14 @@
 // signals (silent strip + spurious (?) marker), so the sanitizer
 // reports BEL through a separate `alert` return that the caller
 // stores on the message and the renderer surfaces explicitly.
-//
+
 package tui
-//
+
 import (
 	"strings"
 	"testing"
 )
-//
+
 func TestSanitizeMessageText(t *testing.T) {
 	cases := []struct {
 		name      string

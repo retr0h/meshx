@@ -6,16 +6,16 @@
 // Box.Height cells per ansiCells. This is the same Box contract
 // every other Component obeys, so the radar pane composes into the
 // View tree like any other surface — no special casing.
-//
+
 package tui
-//
+
 import (
 	"fmt"
 	"strings"
-//
+
 	"github.com/charmbracelet/lipgloss"
 )
-//
+
 // radarLegendCell renders the polar-scope legend row underneath
 // the canvas: ring scale + glyph key (● direct-RF, · multi-hop,
 // @ me). Italic dim "scale:" label, mesh-green ● for direct
@@ -41,7 +41,7 @@ func radarLegendCell(maxKm float64) string {
 		keyDim.Render("scale:"), maxKm, direct, multi, me,
 	)
 }
-//
+
 // radarPeerLine renders one row of the "closest peers" list under
 // the radar legend: callsign + compass abbreviation + bearing in
 // degrees + distance in km. Dim throughout — these are passive
@@ -53,7 +53,7 @@ func radarPeerLine(callsign, compass string, bearing, distKm float64) string {
 		padOrTruncate(callsign, 22), compass, bearing, distKm,
 	))
 }
-//
+
 // radarCanvas is a 2D character grid Component. The renderer fills
 // canvas[y][x] with a rune and colors[y][x] with a hex color (or
 // "" for the default fg); Render emits each row as a styled string
@@ -72,7 +72,7 @@ type radarCanvas struct {
 	Colors  [][]string
 	LeadPad int
 }
-//
+
 // Render emits Box.Height lines of Box.Width cells. The 2D buffer
 // is rendered row by row with per-cell SGR styling; rows beyond the
 // canvas height are blank (Box.Width spaces). Each row is padded to

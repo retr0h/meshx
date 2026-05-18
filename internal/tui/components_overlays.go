@@ -13,16 +13,16 @@
 // what's inside it. Overlay rows previously composed strings with
 // inline lipgloss.Render + manual padding; here the cell layer
 // owns the geometry and the styling stays in-line per-cell.
-//
+
 package tui
-//
+
 import (
 	"fmt"
 	"strings"
-//
+
 	"github.com/charmbracelet/lipgloss"
 )
-//
+
 // paneHeaderCell renders the bold uppercase title that every
 // overlay pane (CHANNELS, NODES, NEARBY, RADAR, #channel, HELP)
 // emits as its first body row. Focused panes render in bright fg;
@@ -37,7 +37,7 @@ func paneHeaderCell(text string, focused bool) string {
 	}
 	return s.Render(strings.ToUpper(text))
 }
-//
+
 // paneCountSuffix renders a dim "(...)" suffix that sits next to
 // a paneHeaderCell — used for "(304 msgs)" on the messages pane,
 // "(#mesh: 4/12 · sort: heard)" on /nodes, etc. Always dim drained
@@ -50,7 +50,7 @@ func paneCountSuffix(text string) string {
 		Foreground(lipgloss.Color(mhDrained)).
 		Render(text)
 }
-//
+
 // paneLegendLine renders a dim italic legend strip used by the
 // /nodes overlay to explain the sigil glyphs ("legend:  @online
 // +pinned ⊘muted ✗failed ·stale"). Italic so it reads as a passive
@@ -61,7 +61,7 @@ func paneLegendLine(text string) string {
 		Italic(true).
 		Render(text)
 }
-//
+
 // paneEmptyMessage renders an empty-pane placeholder block — the
 // 3-6 line dim/italic explainers /nearby and /radar emit when the
 // user's radio has no GPS fix or no peers have broadcast positions
@@ -81,7 +81,7 @@ func paneEmptyMessage(lines ...string) string {
 	}
 	return strings.Join(out, "\n")
 }
-//
+
 // tabCompletionFlashCell renders the tab-cycle feedback shown in
 // the status flash row when the user pages through completion
 // matches. Format: "N/M  match1 · match2 · match3" — the active
@@ -107,7 +107,7 @@ func tabCompletionFlashCell(matches []matchItem, active int) string {
 	}
 	return counter + "  " + strings.Join(parts, sep)
 }
-//
+
 // splashTaglineCell renders the BitchX-style tagline that hangs
 // under the splash banner:
 // `░▒▓█▓▒░ Meshtastic messenger  ·  by retr0h ░▒▓█▓▒░`.
@@ -127,13 +127,13 @@ func splashTaglineCell(_ string) string {
 		cyan.Render("Meshtastic") + dim.Render(" messenger  ·  by ") +
 		magenta.Render("retr0h") + " " + spark
 }
-//
+
 // gutterWidth is the left margin reserved for the selection
 // indicator — 2-cell block + 1-cell gap. Matches tlock's double-cell
 // "pixel" sizing so the selected row reads as chunky 8-bit, not a
 // thin vertical line.
 const gutterWidth = 3
-//
+
 // dimRow strips ANSI styling from a pre-rendered row and re-applies
 // a single dim color, so non-matching rows fade into the background
 // when a node filter is active. The matching rows stay fully colored
@@ -163,7 +163,7 @@ func dimRow(s string) string {
 		Faint(true).
 		Render(b.String())
 }
-//
+
 // wrapSelection applies the 8-bit block-highlight style to the whole
 // row. Three mutually-exclusive states:
 //
@@ -182,12 +182,12 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 		width = gutterWidth + 1
 	}
 	innerW := width - gutterWidth
-//
+	//
 	neutralBg := ""
 	if len(rowBg) > 0 {
 		neutralBg = rowBg[0]
 	}
-//
+	//
 	// No marker — just keep the 3-col left pad for alignment. If a
 	// rowBg was provided, force every line to the full inner width
 	// with that bg so the tint covers the whole row (no drop-off
@@ -213,7 +213,7 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 		}
 		return strings.Join(parts, "\n")
 	}
-//
+	//
 	// Selection (cursor) style wins over search-hit when both apply.
 	var gutter string
 	var bg string
@@ -230,7 +230,7 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 			Render("│ ") + " "
 		bg = searchHitRowBg // dim neon-green background for a subtle row pop
 	}
-//
+	//
 	// Bg tint covers the whole row — no more, no less. We pad to
 	// exactly innerW cells via padCells (keycap-aware) BEFORE handing
 	// to lipgloss, so the lipgloss style only paints; it does not
@@ -241,14 +241,14 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 	lineStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(bg)).
 		Foreground(lipgloss.Color(mhFG))
-//
+		//
 	parts := strings.Split(content, "\n")
 	for i, p := range parts {
 		parts[i] = gutter + lineStyle.Render(padCells(p, innerW))
 	}
 	return strings.Join(parts, "\n")
 }
-//
+
 // channelRowLine renders one /channels overlay row at exactly
 // contentW cells. The row is a flex-body Component with the channel
 // name + optional unread badge stitched as cells; pre-styled so the
@@ -281,7 +281,7 @@ func channelRowLine(name string, private bool, unread int, contentW int) string 
 	}
 	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
 }
-//
+
 // nodePresentation is the per-node styling tuple every BitchX-style
 // peer surface (/nodes, /nearby, /radar) renders from. Centralizing
 // the switch in one place means a node tagged "online" gets the
@@ -298,7 +298,7 @@ type nodePresentation struct {
 	BracketColor string
 	Bold         bool
 }
-//
+
 // nodePresentationFor computes the styling for one node tile from
 // the node + flags. Lives here (not in ui.go) so every pane that
 // renders a peer cell stays in lockstep — same sigil for "online"
@@ -344,7 +344,7 @@ func nodePresentationFor(n nodeItem, isSelf, isSelected bool) nodePresentation {
 	}
 	return p
 }
-//
+
 // peerRowLine renders one /nearby row from the node + flags. The
 // Component owns the styling switch (via nodePresentationFor) so
 // callers pass raw flags instead of pre-styled strings — React
@@ -394,7 +394,7 @@ func peerRowLine(
 	}
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
-//
+
 // searchHitRowBg is the deep-green tint applied to rows whose
 // content matches the active /search filter — same hex used by
 // /nodes (renderUserCell), /nearby, and the messages pane so a hit
@@ -402,7 +402,7 @@ func peerRowLine(
 // to be distinct from selectionRowBg (#2a4a5a) so a row that is BOTH
 // selected AND a hit still picks one obvious state — selection wins.
 const searchHitRowBg = "#0e2618"
-//
+
 // distanceBarCell renders the per-row distance bar used by /nearby:
 // `filled` filled cells of `▓` in mesh-green plus `barMax-filled`
 // empty cells of `░` in dim drained, all on rowBg so the bar stays
@@ -431,7 +431,7 @@ func distanceBarCell(filled, barMax int, rowBg string) string {
 	return filledStyle.Render(strings.Repeat("▓", filled)) +
 		emptyStyle.Render(strings.Repeat("░", barMax-filled))
 }
-//
+
 // distanceBarUnknownCell renders the bar for the "(you)" / no-distance
 // case — a flat row of `·` in dim drained so the row reads as "no
 // distance to plot" rather than "zero distance" (which would imply
@@ -442,7 +442,7 @@ func distanceBarUnknownCell(barMax int, rowBg string) string {
 		Background(lipgloss.Color(rowBg))
 	return style.Render(strings.Repeat("·", barMax))
 }
-//
+
 // earlierCountLine renders the "… N earlier" scrollback indicator
 // shown above the messages pane when the user has scrolled back past
 // the natural tail. Dim drained italic so it reads as advisory
@@ -454,7 +454,7 @@ func earlierCountLine(n int) string {
 		Italic(true).
 		Render(fmt.Sprintf("   … %d earlier", n))
 }
-//
+
 // helpSectionLine renders a section heading inside the /help
 // overlay (e.g. "MODES", "GLOBAL", "WINDOW NAV") in cyan bold +
 // underline, matching the irssi help-section convention.
@@ -465,7 +465,7 @@ func helpSectionLine(text string) string {
 		Underline(true).
 		Render(text)
 }
-//
+
 // helpScrollIndicator renders the bottom-of-help scroll position
 // hint: "line N/M   j/k scroll · d/u page · g/G top/bottom · q/Esc/?
 // close" — or, when content fits without scrolling, a simpler
@@ -481,7 +481,7 @@ func helpScrollIndicator(scroll, total, visible int) string {
 		scroll+1, total,
 	))
 }
-//
+
 // helpKVLine renders one row of the /help overlay: a left-margin
 // pad, the key (e.g. "Ctrl+W") in yellow, a column gutter, and the
 // description text in default fg. The key column is fixed-width
@@ -504,7 +504,7 @@ func helpKVLine(key, desc string, keyW, contentW int) string {
 	}
 	return Row{Cells: cells}.Render(Box{Width: contentW, Height: 1})
 }
-//
+
 // userCellLine renders one [ @callsign ] tile for the /nodes grid
 // from the node + flags. Sigil/colors/bold all derive from
 // nodePresentationFor so /nodes and /nearby always read the same

@@ -9,24 +9,25 @@
 //
 // /nearby and /radar Components live in panes_map.go alongside the
 // peerPlot geo data prep that powers them.
-//
+
 package tui
-//
+
 import (
 	"fmt"
 	"sort"
 	"strings"
-//
+
 	"github.com/charmbracelet/lipgloss"
+
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
-//
+
 // channelsPane is the /channels overlay — a flex VStack of channel
 // rows under a CHANNELS header. Render builds the [header, blank,
 // row, row, …] line slice and routes through renderBorderedPane to
 // drop the result into the focused/unfocused frame.
 type channelsPane struct{ m model }
-//
+
 // Render returns the bordered pane sized exactly to box. Each row
 // (including header + blank separator) is built by the per-segment
 // cell helpers in components_overlays.go; this method just stitches
@@ -35,7 +36,7 @@ type channelsPane struct{ m model }
 func (p channelsPane) Render(box Box) string {
 	m := p.m
 	header := paneHeaderCell("CHANNELS", m.focused == paneChannels)
-//
+	//
 	lines := make([]string, 0, 2+len(m.Channels))
 	lines = append(lines, header, "")
 	for i, c := range m.Channels {
@@ -60,11 +61,11 @@ func (p channelsPane) Render(box Box) string {
 		box.Width, box.Height, paneChannels, m.focused == paneChannels,
 	)
 }
-//
+
 // nodesPane is the BitchX-style users grid — bracketed cells laid
 // out in a fixed-width grid under a NODES header + count + legend.
 type nodesPane struct{ m model }
-//
+
 // Render returns the bordered pane sized exactly to box. Computes
 // the cell-width + columns from box.Width, walks the sorted node
 // list filling rows of fixed-width [@callsign] cells via
@@ -79,7 +80,7 @@ func (p nodesPane) Render(box Box) string {
 			online++
 		}
 	}
-//
+	//
 	header := paneHeaderCell("NODES", m.focused == paneNodes)
 	count := paneCountSuffix(fmt.Sprintf(
 		"  (#mesh: %d/%d · sort: %s)", online, total, m.nodeSort.label(),
@@ -87,9 +88,9 @@ func (p nodesPane) Render(box Box) string {
 	legend := paneLegendLine(
 		"legend:  @online  +pinned  ⊘muted  ✗failed  ·stale",
 	)
-//
+	//
 	sorted := m.sortedNodes()
-//
+	//
 	// Grid layout — fixed-width cells, as many columns as fit.
 	// Each cell: "[ @callsign    ] " → up to ~20 visible cells.
 	inner := box.Width - 4 // minus pane border + pane padding
@@ -108,7 +109,7 @@ func (p nodesPane) Render(box Box) string {
 	if cols < 1 {
 		cols = 1
 	}
-//
+	//
 	var gridLines []string
 	for row := 0; row*cols < len(sorted); row++ {
 		var cells []string
@@ -134,37 +135,37 @@ func (p nodesPane) Render(box Box) string {
 		}
 		gridLines = append(gridLines, strings.Join(cells, strings.Repeat(" ", cellPad)))
 	}
-//
+	//
 	lines := make([]string, 0, 4+len(gridLines))
 	lines = append(lines, header+count, "", legend, "")
 	lines = append(lines, gridLines...)
-//
+	//
 	return renderBorderedPane(
 		strings.Join(lines, "\n"),
 		box.Width, box.Height, paneNodes, m.focused == paneNodes,
 	)
 }
-//
+
 // messagesPane is the chat log — zebra-striped rows scrolling under
 // the active channel name + msg count. The implementation lives in
 // messagesPaneRender (in ui.go) — split out only so the diff stayed
 // manageable; logically this Render is the source of truth.
 type messagesPane struct{ m model }
-//
+
 // Render forwards to messagesPaneRender. The function-form body in
 // ui.go can be inlined here; the indirection survives only to keep
 // the file split practical.
 func (p messagesPane) Render(box Box) string {
 	return messagesPaneRender(p.m, box.Width, box.Height)
 }
-//
+
 // helpPane is the full-screen /help overlay — section dividers + kv
 // rows under a SQUELCH · HELP banner, with a Viewport that scrolls the
 // content + a footer indicator showing the position. j/k/d/u/g/G nav
 // is wired in input.go's nav handler; the Component just consumes
 // m.helpScroll as the current offset.
 type helpPane struct{ m model }
-//
+
 // Render lays out the help content as one big slice of pre-styled
 // lines, then hands the slice to a Viewport. The viewport owns scroll
 // clamping, padding, and footer placement; all the per-line styling
@@ -176,7 +177,7 @@ func (p helpPane) Render(box Box) string {
 		Bold(true)
 	dim := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained))
-//
+		//
 	// Width budget for kv lines = pane width - frame (2) - padding (6).
 	// Routes through helpKVLine so the cell math (key column 14 cells,
 	// description as the flex slot) lives in components_overlays.go.
@@ -188,7 +189,7 @@ func (p helpPane) Render(box Box) string {
 		return helpKVLine(k, d, 14, kvW)
 	}
 	sec := func(s string) string { return helpSectionLine(s) }
-//
+	//
 	lines := []string{
 		head.Render("S Q U E L C H   ·   H E L P"),
 		dim.Render("j/k scroll · q/Esc/? close · irssi-style modal UI"),
@@ -301,7 +302,7 @@ func (p helpPane) Render(box Box) string {
 		kv("", "Future: /channel add <meshtastic://url> to import by URL,"),
 		kv("", "/channel share <name> to emit a QR for another client."),
 	}
-//
+	//
 	// Footer = blank separator + the position-aware scroll indicator.
 	// Reserve = len(Footer) so the viewport leaves room beneath it.
 	// The viewport's visible window slides over `lines` keyed off
@@ -324,7 +325,7 @@ func (p helpPane) Render(box Box) string {
 		Padding:     [4]int{1, 3, 1, 3},
 	}.Render(box)
 }
-//
+
 // configEntryKind classifies a /config row. Interactive rows respond
 // to Enter; read-only rows are display-only — they exist so the panel
 // doubles as the radio-state reference /config used to systemBlock-
@@ -339,13 +340,13 @@ func (p helpPane) Render(box Box) string {
 // All edits stage in cfgDraft. Nothing reaches the radio until the
 // user presses Ctrl+S (commitConfigDraft).
 type configEntryKind int
-//
+
 const (
 	cfgEntryReadOnly configEntryKind = iota
 	cfgEntryToggle
 	cfgEntryString
 )
-//
+
 // configEntry describes one row in the /config overlay. label is the
 // left-column key (cell-padded by configPane.Render); value is the
 // CURRENT DRAFT value (rendered, not the saved one). saved is the
@@ -369,7 +370,7 @@ type configEntry struct {
 	// rows.
 	field string
 }
-//
+
 // boolToOnOff renders true/false as the "on"/"off" tokens the panel
 // uses for toggle row values. Centralized so the dirty-marker check
 // (saved == value) compares against the same string the renderer
@@ -381,7 +382,7 @@ func boolToOnOff(b bool) string {
 	}
 	return "off"
 }
-//
+
 // configEntries returns the rows the /config overlay should render in
 // display order. Interactive rows come first (j-only-from-the-top
 // lands on something useful); read-only rows below the divider mirror
@@ -434,14 +435,14 @@ func (m model) configEntries() []configEntry {
 		// Separator row — rendered as a dim divider; non-selectable.
 		{label: "", value: "", kind: cfgEntryReadOnly},
 	}
-//
+	//
 	add := func(k, v string) {
 		if v == "" {
 			return
 		}
 		out = append(out, configEntry{label: k, value: v, kind: cfgEntryReadOnly})
 	}
-//
+	//
 	if n := m.myNode(); n != nil {
 		add("hw", n.HwModel)
 	}
@@ -463,7 +464,7 @@ func (m model) configEntries() []configEntry {
 	add("peers", fmt.Sprintf("%d known", len(m.Nodes)))
 	return out
 }
-//
+
 // selectableConfigEntryIndices returns the slice indices of rows that
 // j/k should land on — interactive rows only. The cursor jumps over
 // the separator + read-only block so j from "radio buzzer" wraps
@@ -479,14 +480,14 @@ func (m model) selectableConfigEntryIndices() []int {
 	}
 	return out
 }
-//
+
 // configPane is the /config overlay — interactive radio configuration
 // with vim nav (j/k walks selectable rows, Enter toggles bools or
 // opens an inline string-edit). Edits stage in cfgDraft; Ctrl+S
 // commits them to the radio in one shot, Esc on a dirty draft
 // prompts y/n via cfgConfirmDiscard.
 type configPane struct{ m model }
-//
+
 // Render lays the entries from configEntries() onto bordered-pane
 // rows. Selectable rows pass through wrapSelection so the cursor
 // renders the same selection chrome /channels uses; read-only rows
@@ -496,7 +497,7 @@ type configPane struct{ m model }
 func (p configPane) Render(box Box) string {
 	m := p.m
 	entries := m.configEntries()
-//
+	//
 	header := paneHeaderCell("CONFIG", m.focused == paneConfig)
 	editable := 0
 	unsaved := 0
@@ -519,13 +520,13 @@ func (p configPane) Render(box Box) string {
 	legend := paneLegendLine(
 		"j/k walk · Enter edit · Ctrl+S save · Esc close",
 	)
-//
+	//
 	inner := paneInnerWidth(box.Width)
 	contentW := inner - gutterWidth
 	if contentW < 1 {
 		contentW = 1
 	}
-//
+	//
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
 	onStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
@@ -533,10 +534,10 @@ func (p configPane) Render(box Box) string {
 	dirtyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
 	editPromptStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhPink)).Bold(true)
-//
+	//
 	lines := make([]string, 0, 6+len(entries))
 	lines = append(lines, header+count, "", legend, "")
-//
+	//
 	for i, e := range entries {
 		// Empty separator row — rendered as a dim divider line.
 		if e.label == "" && e.value == "" && e.kind == cfgEntryReadOnly {
@@ -600,7 +601,7 @@ func (p configPane) Render(box Box) string {
 		selected := i == m.selectedCfg && m.focused == paneConfig && e.kind != cfgEntryReadOnly
 		lines = append(lines, wrapSelection(row, selected, false, inner))
 	}
-//
+	//
 	// Trailing footer — Esc-on-dirty confirmation prompt or status
 	// hint. Renders below the row list, dim italic so it doesn't
 	// fight the entries for attention.
@@ -620,13 +621,13 @@ func (p configPane) Render(box Box) string {
 			" no pending changes",
 		))
 	}
-//
+	//
 	return renderBorderedPane(
 		strings.Join(lines, "\n"),
 		box.Width, box.Height, paneConfig, m.focused == paneConfig,
 	)
 }
-//
+
 // sortedNodes returns a view of m.Nodes with pinned (fav) nodes first,
 // then sorted by the current sort mode. The returned slice is a copy
 // so we don't mutate storage order.
@@ -648,7 +649,7 @@ func (m model) sortedNodes() []nodeItem {
 	})
 	return out
 }
-//
+
 // stateWeight orders node states: online < offline < muted < failed.
 func stateWeight(s nodeState) int {
 	switch s {
@@ -664,7 +665,7 @@ func stateWeight(s nodeState) int {
 		return 4
 	}
 }
-//
+
 // frameView builds the top-level VStack for a frame. Body delegates
 // to the active overlay's pane Component (or renderIrssiBody for the
 // default messages-pane case). Both branches already contract to
@@ -697,7 +698,7 @@ func frameView(m model) Component {
 		{Comp: Spacer{}, Size: 1},
 	}}
 }
-//
+
 // renderIrssiBody dispatches to the active overlay's pane Component.
 // Width comes from the parent VStack's Box, NOT m.w — that's the
 // indirection that lets the global frame box (m.w - 1, the safeW
@@ -721,7 +722,7 @@ func (m model) renderIrssiBody(width, height int) string {
 	}
 	return pane.Render(box)
 }
-//
+
 // paneAccentColor returns the signature color for each pane — used
 // both for the focused border and the giant Ctrl+W pane-number.
 //
@@ -738,14 +739,14 @@ func paneAccentColor(paneIdx int) string {
 		return meshGreen
 	}
 }
-//
+
 // paneInnerWidth returns the content-area width inner renderers
 // should target given a `width` argument from View(). One place to
 // change the math instead of hunting down `width-4` literals.
 func paneInnerWidth(width int) int {
 	return width - 4
 }
-//
+
 // renderBorderedPane wraps pre-rendered inner content (each line
 // already padded to width-4 cells per ansiCells) in the same ║/═
 // frame paneStyle draws — using the Bordered Component so the math
@@ -770,7 +771,7 @@ func renderBorderedPane(
 		Padding:     [4]int{1, 1, 1, 1},
 	}.Render(Box{Width: width, Height: height})
 }
-//
+
 // tailStartList is the row-budget calculator for messagesPane — each
 // message is 1 row, +1 if it has an acks sub-line; system multi-line
 // blocks count their embedded newlines.
@@ -788,7 +789,7 @@ func tailStartList(msgs []messageItem, rowsBudget int) int {
 	}
 	return 0
 }
-//
+
 // messagesPaneRender is the body of messagesPane.Render — split into
 // a function only so the diff stays local; the matching one-line
 // Render method up top is the canonical Component entry point.
@@ -828,7 +829,7 @@ func messagesPaneRender(m model, width, height int) string {
 	hint := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
 		Render(fmt.Sprintf("  (%d msgs)", len(visible)))
-//
+		//
 	// Total content budget inside the bordered pane: height − 2
 	// (border) − 2 (Padding(1,1)). The pane fills exactly that many
 	// lines; anything less and the lipgloss frame stretches with
@@ -845,10 +846,10 @@ func messagesPaneRender(m model, width, height int) string {
 	if rowsFree < 1 {
 		rowsFree = 1
 	}
-//
+	//
 	var lines []string
 	lines = append(lines, header+hint, "")
-//
+	//
 	// irssi-Style: always the dense one-row-per-message list.
 	// Default anchors on the tail (show latest rows). If the user
 	// has scrolled the selection above the natural tail via j/k or
@@ -901,7 +902,7 @@ func messagesPaneRender(m model, width, height int) string {
 			continue
 		}
 		faded := m.nodeFilter != "" && !m.msgMatchesFilter(msg)
-//
+		//
 		// Group rows share one zebra stripe — every line in a /whois
 		// or /config block gets the same bg so the block reads as one
 		// card instead of alternating stripes.
@@ -932,7 +933,7 @@ func messagesPaneRender(m model, width, height int) string {
 			lastGroup = 0
 			groupBg = ""
 		}
-//
+		//
 		// Search-hit highlight — when /search has an active query,
 		// override the zebra/group bg with searchHitRowBg on rows
 		// whose from + text matches the query. Selection still wins
@@ -943,7 +944,7 @@ func messagesPaneRender(m model, width, height int) string {
 		if msg.Status != mdl.StatusSystem && m.isMsgSearchHit(msg) {
 			bg = searchHitRowBg
 		}
-//
+		//
 		// Highlight the whole group when any row in it is selected —
 		// j/k lands the cursor on the header row, but visually the
 		// entire block shows as the current selection. Selection is
@@ -956,7 +957,7 @@ func messagesPaneRender(m model, width, height int) string {
 				isSelected = true
 			}
 		}
-//
+		//
 		// Pin-corner boundaries — `⌜` goes on the first row of a
 		// pinned group, `⌟` on the last. For singleton pinned rows
 		// (group == 0) both are true so the row reads as self-

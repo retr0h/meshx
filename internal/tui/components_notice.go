@@ -7,20 +7,21 @@
 //
 // Notice rows have a different visual structure than chat rows: no
 // flag column, no metrics tail. The columns are:
-//   accent (2)  time (10)  body (flex)  [pin-tail (1)]
+//
+//	accent (2)  time (10)  body (flex)  [pin-tail (1)]
 //
 // The pin-tail cell is ALWAYS allocated 1 cell wide so rows with and
 // without pin corners line up vertically; non-pinned rows just emit
 // a bg-styled space there.
-//
+
 package tui
-//
+
 import (
 	"strings"
-//
+
 	"github.com/charmbracelet/lipgloss"
 )
-//
+
 // noticeRowParts pre-computes the styled per-cell strings for a
 // notice row. Caller picks fast-path (default lavender italic body)
 // or styled-path (custom fg / bold / center) and feeds the body cell
@@ -31,7 +32,7 @@ type noticeRowParts struct {
 	pinEnd string // 1 cell: ⌟ corner if pinLast, else bg-styled space
 	rowBg  string
 }
-//
+
 // noticeAccentTimeWidth is the cells consumed by the accent + time
 // columns; centered notices pad leading spaces to (inner - bw) / 2 -
 // prefixCells where prefixCells = gutter(3) + accent(2) + time(10)
@@ -41,21 +42,21 @@ const (
 	noticeTimeW   = 10
 	noticePinW    = 1
 )
-//
+
 // noticeRowFor styles the chrome cells (accent, time, pin-tail) for
 // a notice row. Body content is left to the caller because it varies
 // by style.fg / bold / center / corrupted-prefix per call site.
 func noticeRowFor(rowBg string, time string, pinFirst, pinLast bool, fade float64) noticeRowParts {
 	lav := lerpHex(mhLavender, rowBg, fade)
 	drn := lerpHex(mhDrained, rowBg, fade)
-//
+	//
 	accent := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(lav)).
 		Background(lipgloss.Color(rowBg)).
 		Bold(true).
 		Render("▎") +
 		lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
-//
+		//
 	tstamp := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(drn)).
 		Background(lipgloss.Color(rowBg))
@@ -72,7 +73,7 @@ func noticeRowFor(rowBg string, time string, pinFirst, pinLast bool, fade float6
 			Render("⌜")
 		tsRendered = corner + tstamp.Render(timeCol[1:])
 	}
-//
+	//
 	pinEnd := lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
 	if pinLast {
 		pinEnd = lipgloss.NewStyle().
@@ -81,7 +82,7 @@ func noticeRowFor(rowBg string, time string, pinFirst, pinLast bool, fade float6
 			Bold(true).
 			Render("⌟")
 	}
-//
+	//
 	return noticeRowParts{
 		accent: accent,
 		time:   tsRendered,
@@ -89,7 +90,7 @@ func noticeRowFor(rowBg string, time string, pinFirst, pinLast bool, fade float6
 		rowBg:  rowBg,
 	}
 }
-//
+
 // noticeRowLineSplit renders a notice row with the `-!- ` prefix
 // anchored at the same fixed column across every notice row, while
 // the content after the prefix is pane-aware — `align` selects
@@ -161,7 +162,7 @@ func noticeRowLineSplit(
 	}
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
-//
+
 // noticeRowLine renders a notice row at exactly contentW cells via
 // Row{Cells:...}. body is the already-styled body content (everything
 // after time column); the body cell gets the flex slot.

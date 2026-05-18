@@ -12,16 +12,16 @@
 // at end-of-status) are the bug class this refactor exists to kill —
 // here, every region asks the layout for its budget and the Row
 // component truncates anything that would overflow.
-//
+
 package tui
-//
+
 import (
 	"fmt"
 	"strings"
-//
+
 	"github.com/charmbracelet/lipgloss"
 )
-//
+
 // statusBar renders the top status bar with brand + radio telemetry
 // segments. Width is whatever the parent gives via Box; segments are
 // dropped from the middle when over budget so brand (left) and state
@@ -29,7 +29,7 @@ import (
 type statusBar struct {
 	m model
 }
-//
+
 // Render fills box with one styled status row.
 func (s statusBar) Render(box Box) string {
 	m := s.m
@@ -40,9 +40,9 @@ func (s statusBar) Render(box Box) string {
 	ok := lipgloss.NewStyle().Foreground(lipgloss.Color(mhGreen)).Bold(true)
 	pink := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
 	chrome := mhDrained
-//
+	//
 	var segs []string
-//
+	//
 	// Segment 1: brand mark + callsign, both in mesh-green.
 	brand := call.Render(`//\`) + "  "
 	if sn := m.myShortName(); sn != "" {
@@ -51,7 +51,7 @@ func (s statusBar) Render(box Box) string {
 		brand += call.Render(m.myCallsign())
 	}
 	segs = append(segs, statusSegment(brand, chrome))
-//
+	//
 	// Hardware + firmware.
 	n := m.myNode()
 	hw := "—"
@@ -63,7 +63,7 @@ func (s statusBar) Render(box Box) string {
 		label.Render("⌂ ")+val.Render(hw)+"  "+label.Render("⚙ ")+val.Render(fw),
 		chrome,
 	))
-//
+	//
 	// Channel + modem preset.
 	chParts := []string{label.Render("⌬ ")}
 	if m.CurrentChannel != "" {
@@ -75,14 +75,14 @@ func (s statusBar) Render(box Box) string {
 		chParts = append(chParts, " "+label.Render(m.RadioModemPreset))
 	}
 	segs = append(segs, statusSegment(strings.Join(chParts, ""), chrome))
-//
+	//
 	// TX power.
 	tx := "—"
 	if m.RadioTxPower != 0 {
 		tx = fmt.Sprintf("%d dBm", m.RadioTxPower)
 	}
 	segs = append(segs, statusSegment(label.Render("⟐ ")+warn.Render(tx), chrome))
-//
+	//
 	// Battery.
 	batt := "—"
 	if m.HasTelemetry {
@@ -101,14 +101,14 @@ func (s statusBar) Render(box Box) string {
 		}
 	}
 	segs = append(segs, statusSegment(label.Render("⚡ ")+val.Render(batt), chrome))
-//
+	//
 	// Channel utilization.
 	util := "—"
 	if m.HasTelemetry {
 		util = fmt.Sprintf("%.1f%%", m.ChannelUtil)
 	}
 	segs = append(segs, statusSegment(label.Render("≈ ")+val.Render(util), chrome))
-//
+	//
 	if m.RadioRole != "" {
 		segs = append(segs, statusSegment(label.Render("⌖ ")+val.Render(m.RadioRole), chrome))
 	}
@@ -122,7 +122,7 @@ func (s statusBar) Render(box Box) string {
 		segs,
 		statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.Nodes))), chrome),
 	)
-//
+	//
 	// meshX terminal-ding badge — 🔔 when /mute is off (BEL fires on
 	// inbound text), 🔕 in pink when silenced. Always rendered so the
 	// user can see at a glance which way the toggle is set. The
@@ -139,7 +139,7 @@ func (s statusBar) Render(box Box) string {
 			label.Render("🔔 ")+val.Render("ding"), chrome,
 		))
 	}
-//
+	//
 	// Right-most segment: connection state.
 	var state string
 	switch {
@@ -149,7 +149,7 @@ func (s statusBar) Render(box Box) string {
 		state = pink.Render("● connecting")
 	}
 	segs = append(segs, statusSegment(state, chrome))
-//
+	//
 	// Drop middle segments until the joined content fits the budget,
 	// preserving brand (first) + state (last). Use the same library
 	// (ansi.StringWidth via padCells) the renderer downstream uses,
@@ -163,7 +163,7 @@ func (s statusBar) Render(box Box) string {
 		segs = append(segs[:mid], segs[mid+1:]...)
 		content = strings.Join(segs, "")
 	}
-//
+	//
 	// Single-row Row: leading space + content + flex pad. Row will
 	// truncate or pad as needed to fit box.Width exactly.
 	row := Row{Cells: []Cell{
@@ -171,7 +171,7 @@ func (s statusBar) Render(box Box) string {
 	}}
 	return row.Render(Box{Width: box.Width, Height: 1})
 }
-//
+
 // statusSegment wraps a styled value in the `░▒▓ value ▓▒░` tmux /
 // powerline gradient chrome. `content` is already styled (fg color +
 // bold etc.); `chromeColor` tints the ░▒▓ bars themselves. Consecutive
@@ -181,18 +181,18 @@ func statusSegment(content, chromeColor string) string {
 	chrome := lipgloss.NewStyle().Foreground(lipgloss.Color(chromeColor))
 	return chrome.Render("░▒▓ ") + content + chrome.Render(" ▓▒░")
 }
-//
+
 // topDivider is the full-width double-line ruler that separates the
 // status bar from the body.
 type topDivider struct{}
-//
+
 // Render fills box with one ═══...═══ row, padded/truncated to width.
 func (topDivider) Render(box Box) string {
 	style := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen))
 	bar := strings.Repeat("═", box.Width)
 	return style.Render(bar)
 }
-//
+
 // channelTabCell renders one channel tab in the bottom chanRow:
 // active tabs are bracketed in pink; inactive channels in dim
 // lavender; inactive DM tabs in cyan so the @peer threads visually
@@ -210,7 +210,7 @@ func channelTabCell(name string, idx int, active, private, isDM bool, unread int
 	otherIdx := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	unreadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
 	alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
-//
+	//
 	marker := ""
 	if unread > 0 {
 		if private {
@@ -227,7 +227,7 @@ func channelTabCell(name string, idx int, active, private, isDM bool, unread int
 	}
 	return " " + otherIdx.Render(idxStr) + other.Render(name) + marker + " "
 }
-//
+
 // modeTagCell renders the `[INPUT]` / `[NAV]` / `[SEARCH]` / `[HELP]`
 // mode badge at the right edge of the chanRow. Color tracks mode:
 // mesh-green when typing, yellow when navigating/searching, cyan
@@ -254,7 +254,7 @@ func modeTagCell(mode mode) string {
 			Render(tag) +
 		label.Render("]")
 }
-//
+
 // byteCounterCell renders the live N/228 wire-byte counter. Color
 // ramps from drained → fg → yellow → orange → pink as the message
 // approaches the Meshtastic 228-byte text-payload cap, so the user
@@ -274,7 +274,7 @@ func byteCounterCell(used, capBytes int) string {
 	}
 	return style.Render(fmt.Sprintf("%d/%d", used, capBytes))
 }
-//
+
 // syncCounterFlash renders the live running peer counter for the
 // NodeDB-handshake flash banner. The number itself goes bright
 // (mesh-green bold) so the user's eye lands on it as the
@@ -292,7 +292,7 @@ func syncCounterFlash(received int) string {
 		Bold(true).
 		Render(fmt.Sprintf("%d", received))
 }
-//
+
 // flashBannerCell renders the optional transient `m.flash` message
 // emitted by /command dispatch. Affirmative messages (acks, hints)
 // render in mesh-green; rejection-style messages ("unknown",
@@ -312,7 +312,7 @@ func flashBannerCell(flash string) string {
 	}
 	return style.Render(flash)
 }
-//
+
 // channelTabsRow is the bottom status row showing channel tabs +
 // optional flash banner + byte counter + mode tag. The Render
 // method just composes the per-cell builders into a Row — the
@@ -321,11 +321,11 @@ func flashBannerCell(flash string) string {
 type channelTabsRow struct {
 	m model
 }
-//
+
 // Render produces the chanRow at exactly box.Width × 1.
 func (c channelTabsRow) Render(box Box) string {
 	m := c.m
-//
+	//
 	// Left side: channel tabs (one per known channel; pre-sync
 	// placeholder when the radio's ChannelInfo packet hasn't landed).
 	// "Active" is a channel tab only when no DM is focused — once
@@ -369,7 +369,7 @@ func (c channelTabsRow) Render(box Box) string {
 		visible++
 	}
 	tabsStr := strings.Join(tabs, " ")
-//
+	//
 	// Right side: flash banner (optional) + byte counter (input mode
 	// only) + mode tag (always). Composed as one styled string so the
 	// flex-pad cell can split the leftover width evenly.
@@ -386,7 +386,7 @@ func (c channelTabsRow) Render(box Box) string {
 	if flash := flashBannerCell(m.flash); flash != "" {
 		right = flash + "  " + right
 	}
-//
+	//
 	tabsW := cells(tabsStr)
 	rightW := cells(right)
 	row := Row{Cells: []Cell{
@@ -396,7 +396,7 @@ func (c channelTabsRow) Render(box Box) string {
 	}}
 	return row.Render(Box{Width: box.Width, Height: 1})
 }
-//
+
 // inputPromptCell renders the `[chan] › ` chrome prefix that
 // prefixes the always-on textinput in modeInput. Channel name in
 // mesh-green, brackets dim, the irssi-style `›` prompt arrow in
@@ -411,7 +411,7 @@ func inputPromptCell(channel string) string {
 	return dim.Render("[") + green.Render(channel) +
 		dim.Render("] ") + amber.Render("› ")
 }
-//
+
 // searchPromptCell renders the modeSearch prompt: amber `/ ` lead,
 // the textinput, and a trailing dim hint string. The textinput is
 // passed in pre-rendered because it's a stateful bubbles view that
@@ -423,7 +423,7 @@ func searchPromptCell(searchInput string) string {
 	return " " + amber.Render("/ ") + searchInput +
 		"  " + dim.Render("ESC cancel · Enter match")
 }
-//
+
 // navHintCell renders the dim modeNav hint strip ("NAV · j/k · r
 // reply · …") that replaces the input prompt while the user is
 // walking the scrollback. Single-line, dim drained throughout so
@@ -435,7 +435,7 @@ func navHintCell() string {
 			"P pin · * star · ESC back to input · / search · ? help",
 	)
 }
-//
+
 // inputBar renders the bottom input row. Composed from the
 // per-mode cell builders above: searchPromptCell in modeSearch,
 // navHintCell in modeNav, inputPromptCell + textinput in modeInput.
@@ -445,11 +445,11 @@ func navHintCell() string {
 type inputBar struct {
 	m model
 }
-//
+
 // Render fills box with one input row.
 func (i inputBar) Render(box Box) string {
 	m := i.m
-//
+	//
 	if m.mode == modeSearch {
 		return Row{Cells: []Cell{
 			{Content: searchPromptCell(m.searchInput.View()), Width: -1},
@@ -460,7 +460,7 @@ func (i inputBar) Render(box Box) string {
 			{Content: navHintCell(), Width: -1},
 		}}.Render(Box{Width: box.Width, Height: 1})
 	}
-//
+	//
 	// Input mode: " " + `[chan] › ` prefix + textinput. The textinput
 	// Width is computed from box.Width minus chrome so it never
 	// overflows. cursorPad = 1 reserves 1 cell for bubbles/textinput's
@@ -485,7 +485,7 @@ func (i inputBar) Render(box Box) string {
 		{Content: leading + prefix + m.input.View(), Width: -1},
 	}}.Render(Box{Width: box.Width, Height: 1})
 }
-//
+
 // cells is a thin local shorthand that funnels every measurement
 // through ansi.StringWidth (via padCells's contract). Centralizing
 // the call site means one place to swap the measurement library

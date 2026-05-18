@@ -13,16 +13,16 @@
 //
 // Any new component must add a fixture row here so its overflow
 // behavior is covered before a render-time bug ever ships.
-
+//
 package tui
-
+//
 import (
 	"strings"
 	"testing"
-
+//
 	"github.com/charmbracelet/x/ansi"
 )
-
+//
 // nastyFixtures is the canonical list of Unicode + length pathologies
 // the layout primitives must handle without overflow.
 var nastyFixtures = []string{
@@ -41,11 +41,11 @@ var nastyFixtures = []string{
 	"\x1b[31m red \x1b[0m",         // ANSI escape — counted as 0 visible cells
 	"AAA\nBBB\nCCC\nDDD\nEEE\nFFF", // many lines
 }
-
+//
 // rangeOfWidths covers all the realistic terminal widths the UI will
 // see plus the pending-wrap-edge values where bugs cluster.
 var rangeOfWidths = []int{1, 2, 5, 10, 20, 40, 80, 120, 200, 206, 500}
-
+//
 func assertExactBox(t *testing.T, label, out string, box Box) {
 	t.Helper()
 	lines := strings.Split(out, "\n")
@@ -62,7 +62,7 @@ func assertExactBox(t *testing.T, label, out string, box Box) {
 		}
 	}
 }
-
+//
 // TestText_Render — Text's Render(box) contract: every (content × w ×
 // h) combination from the nasty-fixture matrix must return exactly
 // box.Height lines of exactly box.Width cells. Single mechanic
@@ -81,7 +81,7 @@ func TestText_Render(t *testing.T) {
 		}
 	}
 }
-
+//
 // TestRow_Render — Row's Render(box) contract across the three
 // distinct mechanics it must satisfy: mixed-cell layouts fill the box
 // exactly, oversize content truncates, and flex children share the
@@ -105,7 +105,7 @@ func TestRow_Render(t *testing.T) {
 			}
 		}
 	})
-
+//
 	t.Run("oversize-content-truncates-to-box", func(t *testing.T) {
 		row := Row{Cells: []Cell{
 			{Content: strings.Repeat("X", 1000), Width: -1},
@@ -119,7 +119,7 @@ func TestRow_Render(t *testing.T) {
 			}
 		}
 	})
-
+//
 	t.Run("flex-children-share-leftover-budget", func(t *testing.T) {
 		// 3 flex children + 1 fixed of width 6 in a box of 32.
 		// Leftover = 26, split as 9+9+8 (first 2 get the +1 remainder).
@@ -135,7 +135,7 @@ func TestRow_Render(t *testing.T) {
 		}
 	})
 }
-
+//
 // TestPadCells — padCells is a package-level function, so the test
 // name has no underscore. Scenarios are uniform (truncate-or-pad to
 // width) so they land as table rows.
@@ -162,7 +162,7 @@ func TestPadCells(t *testing.T) {
 		})
 	}
 }
-
+//
 // itoa is a test-helper to keep error messages noise-free without
 // pulling fmt.Sprintf at call sites.
 func itoa(n int) string {
@@ -187,7 +187,7 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
-
+//
 func truncForLabel(s string) string {
 	if len(s) > 20 {
 		return s[:20] + "..."

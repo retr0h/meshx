@@ -10,14 +10,14 @@
 // budget before delegating; a regression in that math surfaces here
 // as a width or line-count mismatch, not as visible drift in the live
 // UI two re-renders later.
-
+//
 package tui
-
+//
 import (
 	"strings"
 	"testing"
 )
-
+//
 // TestVStack_Render — VStack.Render(box) distributes Box.Height
 // across sized + flex children. Single mechanic (sweep box dims,
 // assert exact-fit) so the matrix is one tight loop.
@@ -36,7 +36,7 @@ func TestVStack_Render(t *testing.T) {
 		}
 	}
 }
-
+//
 // TestHStack_Render — HStack.Render(box) distributes Box.Width
 // across sized + flex children. Same mechanic as VStack on the
 // orthogonal axis.
@@ -54,7 +54,7 @@ func TestHStack_Render(t *testing.T) {
 		}
 	}
 }
-
+//
 // TestBordered_Render — Bordered.Render(box) draws a frame around an
 // inner Component, subtracting border + padding from the inner budget
 // before delegating. Both scenarios exercise the same Render method
@@ -74,7 +74,7 @@ func TestBordered_Render(t *testing.T) {
 			}
 		}
 	})
-
+//
 	t.Run("long-inner-line-absorbed-without-overflow", func(t *testing.T) {
 		// Inner that emits a 5000-char line: Bordered must absorb it
 		// via padCells truncation; outer rows still match Box.Width.

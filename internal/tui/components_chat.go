@@ -18,18 +18,18 @@
 // different (no flag column, no metrics tail) — converting those
 // into their own Row{Cells:...} decomposition is straightforward
 // follow-up work; this file lays the pattern.
-
+//
 package tui
-
+//
 import (
 	"fmt"
 	"strings"
-
+//
 	"github.com/charmbracelet/lipgloss"
-
+//
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
-
+//
 // Zebra stripe bgs for message rows — dense mutt-style list where
 // every message has a solid bg and adjacent messages alternate
 // shade. No blank separators between — the color alternation IS the
@@ -47,7 +47,7 @@ const (
 	rowBgOdd       = "#24283b" // one step lighter + barely-purple
 	selectionRowBg = "#2a4a5a"
 )
-
+//
 // zebraBg returns the bg tint for the Nth message row in display
 // order. Even rows take rowBgEven, odd rowBgOdd; the alternation IS
 // the visual separator between rows.
@@ -57,7 +57,7 @@ func zebraBg(i int) string {
 	}
 	return rowBgOdd
 }
-
+//
 // nickColorPalette is the accent-color ring used to hash peer
 // callsigns into distinct hues — irssi/weechat convention. Avoids
 // mesh-green (brand), magenta (reserved for "me"), and any
@@ -74,7 +74,7 @@ var nickColorPalette = []string{
 	"#facc15", // acid yellow
 	"#f472b6", // bubblegum
 }
-
+//
 // nickColor deterministically maps a callsign to one of the peer
 // accent colors via FNV-1a plus a murmur3-style avalanche mix so
 // the low bits carry enough entropy for a good modulo distribution.
@@ -97,7 +97,7 @@ func nickColor(callsign string) string {
 	sum ^= sum >> 13
 	return nickColorPalette[int(sum)%len(nickColorPalette)]
 }
-
+//
 // chatRowParts holds the per-cell content for a regular chat row,
 // pre-composed by `chatRowFor` so the Component itself just stitches
 // `Row{Cells:...}` and renders. Splitting compute from render makes
@@ -115,7 +115,7 @@ type chatRowParts struct {
 	status    string // 1 cell: ✓ ✗ … or space
 	rowBg     string // background for the whole row
 }
-
+//
 // chatRowFor pre-computes all per-cell strings (already styled) for
 // a regular chat row. Mirrors the layout the legacy renderMessageRow
 // embeds inline; centralizing here means each field has one
@@ -152,7 +152,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		Foreground(lipgloss.Color(mhYellow)).
 		Background(lipgloss.Color(rowBg)).
 		Bold(true)
-
+//
 	// Sender-accent tick (▎). Color follows nickColor by default but
 	// flips to magenta for own messages, yellow for /bang commands,
 	// pink for failed sends — same priority order the legacy
@@ -176,7 +176,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		Bold(true).
 		Render("▎") +
 		lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
-
+//
 	// Flag column.
 	flagGlyph := " "
 	flagStyle := tstamp
@@ -192,10 +192,10 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		flagStyle = me
 	}
 	flag := flagStyle.Render(flagGlyph + " ")
-
+//
 	// Time.
 	timeCell := tstamp.Render(msg.Time + "  ")
-
+//
 	// Sender.
 	fromRaw := m.displayFrom(msg)
 	shortName := ""
@@ -219,7 +219,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		senderStyle = me
 	}
 	sender := senderStyle.Render(padOrTruncate(fromRaw, fromW))
-
+//
 	// Hop column.
 	hopText := strings.Repeat(" ", hopColW)
 	switch {
@@ -231,14 +231,14 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		hopText = "↝  dx  "
 	}
 	hopCell := hopFg.Render(hopText)
-
+//
 	// SNR column.
 	snrText := strings.Repeat(" ", snrColW)
 	if msg.SNR != "" {
 		snrText = fmt.Sprintf("%6sdB", msg.SNR)
 	}
 	snrCell := hopFg.Render(snrText)
-
+//
 	// Status gap + glyph.
 	statusGap := lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
 	statusGlyph := " "
@@ -254,7 +254,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		statusRender = fail
 	}
 	statusCell := statusRender.Render(statusGlyph)
-
+//
 	return chatRowParts{
 		accent:    accent,
 		flag:      flag,
@@ -269,7 +269,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		// (the flex slot's allocated width).
 	}
 }
-
+//
 // chatRowMainLine renders the FIRST visible line of a chat row at
 // exactly contentW cells per ansiCells via Row{Cells:[]Cell{...}}.
 // `body` is msg.Text's first line (with optional "(?) " prefix for
@@ -301,21 +301,21 @@ func chatRowMainLine(parts chatRowParts, body string, bodyStyler styler, content
 	}
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
-
+//
 // fromW is the cell budget for the sender column. Meshtastic
 // longnames cap at 36 bytes per the firmware; 30 display cells
 // covers the large majority of real callsigns ("AmputiLayag_…")
 // without ellipsis while leaving the body the dominant share of the
 // row on typical terminal widths.
 const fromW = 30
-
+//
 // chatRowLeftFixed is the cell width consumed by accent + flag +
 // time + sender + sender-to-body gap on a chat row's first line.
 // Continuation lines hang under the body column starting at this
 // offset so multi-line messages indent correctly without re-emitting
 // the time / sender chrome.
 const chatRowLeftFixed = 2 /*accent*/ + 2 /*flag*/ + 7 /*time*/ + fromW + 2 /*gap*/
-
+//
 // chatContinuationLine renders a hanging continuation line for a
 // multi-line message body. accent column carries the same sender
 // tick as the first line so the color bar spans the whole message
@@ -331,7 +331,7 @@ func chatContinuationLine(parts chatRowParts, body string, bodyStyler styler, co
 	}
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
-
+//
 // chatAckLine renders the optional acks subline that hangs under a
 // chat row, indented to the body column so it reads as commentary
 // on the row above. The body cell is rendered with the lavender
@@ -351,7 +351,7 @@ func chatAckLine(
 	}
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
-
+//
 // formatAckers turns the structured Ackers slice into the legacy
 // "↳ N acks — call1 (1h), call2 (2h)" subline. Apply.go keeps the
 // slice sorted by hops then NodeNum, so this just walks it.
@@ -374,7 +374,7 @@ func formatAckers(ackers []mdl.Acker) string {
 	}
 	return fmt.Sprintf("↳ %d ack%s — %s", len(ackers), suffix, strings.Join(parts, ", "))
 }
-
+//
 // chatThreadingQuote renders the dim one-line "┌ from time \"text\""
 // quote header above a reply, indented under the row's time column
 // so the hook reads as context for the row below.
@@ -410,7 +410,7 @@ func chatThreadingQuote(
 	}
 	return Row{Cells: cells, FillStyle: bg}.Render(Box{Width: contentW, Height: 1})
 }
-
+//
 // hopColW / snrColW are the cell widths for the right-hand metrics
 // columns. "↝%3dh" leaves 5 cells of value + 2 cells of trailing
 // gap = 7 total; "%6sdB" right-aligns the SNR value in 6 cells +

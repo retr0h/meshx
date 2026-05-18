@@ -24,7 +24,7 @@ require (
 	go.bug.st/serial v1.6.4
 	golang.org/x/term v0.43.0
 	google.golang.org/protobuf v1.36.11
-	tinygo.org/x/bluetooth v0.15.1-0.20260516164426-9314216eb8e6
+	tinygo.org/x/bluetooth v0.15.1-0.20260517055521-fc635e3ddf8c
 )
 
 require (

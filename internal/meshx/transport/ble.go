@@ -145,10 +145,11 @@ func DialBLE(addr string) (Client, error) {
 		if c, err := connectAndWire(adapter, cachedAddr, addr); err == nil {
 			return c, nil
 		}
-		// Cached peripheral didn't connect — peripheral genuinely
-		// gone (radio rebooted, OS cache evicted), or cached handle
-		// is stale. Drop the cache and fall through to a fresh scan.
 		forgetScannedAddr(addr)
+		// Re-enable after connectAndWire's Reset tore down the central.
+		if err := adapter.Enable(); err != nil {
+			return nil, fmt.Errorf("re-enable bluetooth adapter after reset: %w", err)
+		}
 	}
 
 	// Slow path: scan for the target advertisement.
@@ -240,11 +241,13 @@ func connectAndWire(
 		device, err = res.device, res.err
 	case <-time.After(bleConnectTimeout):
 		_ = adapter.StopScan()
+		// Stale CBPeripheral handle — tear down the central manager
+		// so the next Enable() rebuilds from scratch.
+		_ = adapter.Reset()
 		return nil, fmt.Errorf(
 			"connect %s: CoreBluetooth did not respond within %s "+
 				"(usual cause: cached peripheral handle invalidated by "+
-				"OS sleep/wake; the next attempt will drop the cache and "+
-				"re-scan)",
+				"OS sleep/wake; adapter reset, next attempt will re-scan)",
 			addr, bleConnectTimeout,
 		)
 	}

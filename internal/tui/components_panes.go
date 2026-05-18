@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
@@ -35,7 +36,7 @@ type channelsPane struct{ m model }
 func (p channelsPane) Render(box Box) string {
 	m := p.m
 	header := paneHeaderCell("CHANNELS", m.focused == paneChannels)
-
+	//
 	lines := make([]string, 0, 2+len(m.Channels))
 	lines = append(lines, header, "")
 	for i, c := range m.Channels {
@@ -79,7 +80,7 @@ func (p nodesPane) Render(box Box) string {
 			online++
 		}
 	}
-
+	//
 	header := paneHeaderCell("NODES", m.focused == paneNodes)
 	count := paneCountSuffix(fmt.Sprintf(
 		"  (#mesh: %d/%d · sort: %s)", online, total, m.nodeSort.label(),
@@ -87,9 +88,9 @@ func (p nodesPane) Render(box Box) string {
 	legend := paneLegendLine(
 		"legend:  @online  +pinned  ⊘muted  ✗failed  ·stale",
 	)
-
+	//
 	sorted := m.sortedNodes()
-
+	//
 	// Grid layout — fixed-width cells, as many columns as fit.
 	// Each cell: "[ @callsign    ] " → up to ~20 visible cells.
 	inner := box.Width - 4 // minus pane border + pane padding
@@ -108,7 +109,7 @@ func (p nodesPane) Render(box Box) string {
 	if cols < 1 {
 		cols = 1
 	}
-
+	//
 	var gridLines []string
 	for row := 0; row*cols < len(sorted); row++ {
 		var cells []string
@@ -134,11 +135,11 @@ func (p nodesPane) Render(box Box) string {
 		}
 		gridLines = append(gridLines, strings.Join(cells, strings.Repeat(" ", cellPad)))
 	}
-
+	//
 	lines := make([]string, 0, 4+len(gridLines))
 	lines = append(lines, header+count, "", legend, "")
 	lines = append(lines, gridLines...)
-
+	//
 	return renderBorderedPane(
 		strings.Join(lines, "\n"),
 		box.Width, box.Height, paneNodes, m.focused == paneNodes,
@@ -176,7 +177,7 @@ func (p helpPane) Render(box Box) string {
 		Bold(true)
 	dim := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained))
-
+		//
 	// Width budget for kv lines = pane width - frame (2) - padding (6).
 	// Routes through helpKVLine so the cell math (key column 14 cells,
 	// description as the flex slot) lives in components_overlays.go.
@@ -188,7 +189,7 @@ func (p helpPane) Render(box Box) string {
 		return helpKVLine(k, d, 14, kvW)
 	}
 	sec := func(s string) string { return helpSectionLine(s) }
-
+	//
 	lines := []string{
 		head.Render("S Q U E L C H   ·   H E L P"),
 		dim.Render("j/k scroll · q/Esc/? close · irssi-style modal UI"),
@@ -301,7 +302,7 @@ func (p helpPane) Render(box Box) string {
 		kv("", "Future: /channel add <meshtastic://url> to import by URL,"),
 		kv("", "/channel share <name> to emit a QR for another client."),
 	}
-
+	//
 	// Footer = blank separator + the position-aware scroll indicator.
 	// Reserve = len(Footer) so the viewport leaves room beneath it.
 	// The viewport's visible window slides over `lines` keyed off
@@ -434,14 +435,14 @@ func (m model) configEntries() []configEntry {
 		// Separator row — rendered as a dim divider; non-selectable.
 		{label: "", value: "", kind: cfgEntryReadOnly},
 	}
-
+	//
 	add := func(k, v string) {
 		if v == "" {
 			return
 		}
 		out = append(out, configEntry{label: k, value: v, kind: cfgEntryReadOnly})
 	}
-
+	//
 	if n := m.myNode(); n != nil {
 		add("hw", n.HwModel)
 	}
@@ -496,7 +497,7 @@ type configPane struct{ m model }
 func (p configPane) Render(box Box) string {
 	m := p.m
 	entries := m.configEntries()
-
+	//
 	header := paneHeaderCell("CONFIG", m.focused == paneConfig)
 	editable := 0
 	unsaved := 0
@@ -519,13 +520,13 @@ func (p configPane) Render(box Box) string {
 	legend := paneLegendLine(
 		"j/k walk · Enter edit · Ctrl+S save · Esc close",
 	)
-
+	//
 	inner := paneInnerWidth(box.Width)
 	contentW := inner - gutterWidth
 	if contentW < 1 {
 		contentW = 1
 	}
-
+	//
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhCyan))
 	onStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(meshGreen)).Bold(true)
@@ -533,10 +534,10 @@ func (p configPane) Render(box Box) string {
 	dirtyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
 	editPromptStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhPink)).Bold(true)
-
+	//
 	lines := make([]string, 0, 6+len(entries))
 	lines = append(lines, header+count, "", legend, "")
-
+	//
 	for i, e := range entries {
 		// Empty separator row — rendered as a dim divider line.
 		if e.label == "" && e.value == "" && e.kind == cfgEntryReadOnly {
@@ -600,7 +601,7 @@ func (p configPane) Render(box Box) string {
 		selected := i == m.selectedCfg && m.focused == paneConfig && e.kind != cfgEntryReadOnly
 		lines = append(lines, wrapSelection(row, selected, false, inner))
 	}
-
+	//
 	// Trailing footer — Esc-on-dirty confirmation prompt or status
 	// hint. Renders below the row list, dim italic so it doesn't
 	// fight the entries for attention.
@@ -620,7 +621,7 @@ func (p configPane) Render(box Box) string {
 			" no pending changes",
 		))
 	}
-
+	//
 	return renderBorderedPane(
 		strings.Join(lines, "\n"),
 		box.Width, box.Height, paneConfig, m.focused == paneConfig,
@@ -828,7 +829,7 @@ func messagesPaneRender(m model, width, height int) string {
 	hint := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained)).
 		Render(fmt.Sprintf("  (%d msgs)", len(visible)))
-
+		//
 	// Total content budget inside the bordered pane: height − 2
 	// (border) − 2 (Padding(1,1)). The pane fills exactly that many
 	// lines; anything less and the lipgloss frame stretches with
@@ -845,10 +846,10 @@ func messagesPaneRender(m model, width, height int) string {
 	if rowsFree < 1 {
 		rowsFree = 1
 	}
-
+	//
 	var lines []string
 	lines = append(lines, header+hint, "")
-
+	//
 	// irssi-Style: always the dense one-row-per-message list.
 	// Default anchors on the tail (show latest rows). If the user
 	// has scrolled the selection above the natural tail via j/k or
@@ -901,7 +902,7 @@ func messagesPaneRender(m model, width, height int) string {
 			continue
 		}
 		faded := m.nodeFilter != "" && !m.msgMatchesFilter(msg)
-
+		//
 		// Group rows share one zebra stripe — every line in a /whois
 		// or /config block gets the same bg so the block reads as one
 		// card instead of alternating stripes.
@@ -932,7 +933,7 @@ func messagesPaneRender(m model, width, height int) string {
 			lastGroup = 0
 			groupBg = ""
 		}
-
+		//
 		// Search-hit highlight — when /search has an active query,
 		// override the zebra/group bg with searchHitRowBg on rows
 		// whose from + text matches the query. Selection still wins
@@ -943,7 +944,7 @@ func messagesPaneRender(m model, width, height int) string {
 		if msg.Status != mdl.StatusSystem && m.isMsgSearchHit(msg) {
 			bg = searchHitRowBg
 		}
-
+		//
 		// Highlight the whole group when any row in it is selected —
 		// j/k lands the cursor on the header row, but visually the
 		// entire block shows as the current selection. Selection is
@@ -956,7 +957,7 @@ func messagesPaneRender(m model, width, height int) string {
 				isSelected = true
 			}
 		}
-
+		//
 		// Pin-corner boundaries — `⌜` goes on the first row of a
 		// pinned group, `⌟` on the last. For singleton pinned rows
 		// (group == 0) both are true so the row reads as self-

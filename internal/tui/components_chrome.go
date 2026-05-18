@@ -40,9 +40,9 @@ func (s statusBar) Render(box Box) string {
 	ok := lipgloss.NewStyle().Foreground(lipgloss.Color(mhGreen)).Bold(true)
 	pink := lipgloss.NewStyle().Foreground(lipgloss.Color(mhPink)).Bold(true)
 	chrome := mhDrained
-
+	//
 	var segs []string
-
+	//
 	// Segment 1: brand mark + callsign, both in mesh-green.
 	brand := call.Render(`//\`) + "  "
 	if sn := m.myShortName(); sn != "" {
@@ -51,7 +51,7 @@ func (s statusBar) Render(box Box) string {
 		brand += call.Render(m.myCallsign())
 	}
 	segs = append(segs, statusSegment(brand, chrome))
-
+	//
 	// Hardware + firmware.
 	n := m.myNode()
 	hw := "—"
@@ -63,7 +63,7 @@ func (s statusBar) Render(box Box) string {
 		label.Render("⌂ ")+val.Render(hw)+"  "+label.Render("⚙ ")+val.Render(fw),
 		chrome,
 	))
-
+	//
 	// Channel + modem preset.
 	chParts := []string{label.Render("⌬ ")}
 	if m.CurrentChannel != "" {
@@ -75,14 +75,14 @@ func (s statusBar) Render(box Box) string {
 		chParts = append(chParts, " "+label.Render(m.RadioModemPreset))
 	}
 	segs = append(segs, statusSegment(strings.Join(chParts, ""), chrome))
-
+	//
 	// TX power.
 	tx := "—"
 	if m.RadioTxPower != 0 {
 		tx = fmt.Sprintf("%d dBm", m.RadioTxPower)
 	}
 	segs = append(segs, statusSegment(label.Render("⟐ ")+warn.Render(tx), chrome))
-
+	//
 	// Battery.
 	batt := "—"
 	if m.HasTelemetry {
@@ -101,14 +101,14 @@ func (s statusBar) Render(box Box) string {
 		}
 	}
 	segs = append(segs, statusSegment(label.Render("⚡ ")+val.Render(batt), chrome))
-
+	//
 	// Channel utilization.
 	util := "—"
 	if m.HasTelemetry {
 		util = fmt.Sprintf("%.1f%%", m.ChannelUtil)
 	}
 	segs = append(segs, statusSegment(label.Render("≈ ")+val.Render(util), chrome))
-
+	//
 	if m.RadioRole != "" {
 		segs = append(segs, statusSegment(label.Render("⌖ ")+val.Render(m.RadioRole), chrome))
 	}
@@ -122,7 +122,7 @@ func (s statusBar) Render(box Box) string {
 		segs,
 		statusSegment(label.Render("⚭ ")+val.Render(fmt.Sprintf("%d", len(m.Nodes))), chrome),
 	)
-
+	//
 	// meshX terminal-ding badge — 🔔 when /mute is off (BEL fires on
 	// inbound text), 🔕 in pink when silenced. Always rendered so the
 	// user can see at a glance which way the toggle is set. The
@@ -139,7 +139,7 @@ func (s statusBar) Render(box Box) string {
 			label.Render("🔔 ")+val.Render("ding"), chrome,
 		))
 	}
-
+	//
 	// Right-most segment: connection state.
 	var state string
 	switch {
@@ -149,7 +149,7 @@ func (s statusBar) Render(box Box) string {
 		state = pink.Render("● connecting")
 	}
 	segs = append(segs, statusSegment(state, chrome))
-
+	//
 	// Drop middle segments until the joined content fits the budget,
 	// preserving brand (first) + state (last). Use the same library
 	// (ansi.StringWidth via padCells) the renderer downstream uses,
@@ -163,7 +163,7 @@ func (s statusBar) Render(box Box) string {
 		segs = append(segs[:mid], segs[mid+1:]...)
 		content = strings.Join(segs, "")
 	}
-
+	//
 	// Single-row Row: leading space + content + flex pad. Row will
 	// truncate or pad as needed to fit box.Width exactly.
 	row := Row{Cells: []Cell{
@@ -210,7 +210,7 @@ func channelTabCell(name string, idx int, active, private, isDM bool, unread int
 	otherIdx := lipgloss.NewStyle().Foreground(lipgloss.Color(mhDrained))
 	unreadStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhYellow)).Bold(true)
 	alertStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(mhOrange)).Bold(true)
-
+	//
 	marker := ""
 	if unread > 0 {
 		if private {
@@ -325,7 +325,7 @@ type channelTabsRow struct {
 // Render produces the chanRow at exactly box.Width × 1.
 func (c channelTabsRow) Render(box Box) string {
 	m := c.m
-
+	//
 	// Left side: channel tabs (one per known channel; pre-sync
 	// placeholder when the radio's ChannelInfo packet hasn't landed).
 	// "Active" is a channel tab only when no DM is focused — once
@@ -369,7 +369,7 @@ func (c channelTabsRow) Render(box Box) string {
 		visible++
 	}
 	tabsStr := strings.Join(tabs, " ")
-
+	//
 	// Right side: flash banner (optional) + byte counter (input mode
 	// only) + mode tag (always). Composed as one styled string so the
 	// flex-pad cell can split the leftover width evenly.
@@ -386,7 +386,7 @@ func (c channelTabsRow) Render(box Box) string {
 	if flash := flashBannerCell(m.flash); flash != "" {
 		right = flash + "  " + right
 	}
-
+	//
 	tabsW := cells(tabsStr)
 	rightW := cells(right)
 	row := Row{Cells: []Cell{
@@ -449,7 +449,7 @@ type inputBar struct {
 // Render fills box with one input row.
 func (i inputBar) Render(box Box) string {
 	m := i.m
-
+	//
 	if m.mode == modeSearch {
 		return Row{Cells: []Cell{
 			{Content: searchPromptCell(m.searchInput.View()), Width: -1},
@@ -460,7 +460,7 @@ func (i inputBar) Render(box Box) string {
 			{Content: navHintCell(), Width: -1},
 		}}.Render(Box{Width: box.Width, Height: 1})
 	}
-
+	//
 	// Input mode: " " + `[chan] › ` prefix + textinput. The textinput
 	// Width is computed from box.Width minus chrome so it never
 	// overflows. cursorPad = 1 reserves 1 cell for bubbles/textinput's

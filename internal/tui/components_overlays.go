@@ -182,12 +182,12 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 		width = gutterWidth + 1
 	}
 	innerW := width - gutterWidth
-
+	//
 	neutralBg := ""
 	if len(rowBg) > 0 {
 		neutralBg = rowBg[0]
 	}
-
+	//
 	// No marker — just keep the 3-col left pad for alignment. If a
 	// rowBg was provided, force every line to the full inner width
 	// with that bg so the tint covers the whole row (no drop-off
@@ -213,7 +213,7 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 		}
 		return strings.Join(parts, "\n")
 	}
-
+	//
 	// Selection (cursor) style wins over search-hit when both apply.
 	var gutter string
 	var bg string
@@ -230,7 +230,7 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 			Render("│ ") + " "
 		bg = searchHitRowBg // dim neon-green background for a subtle row pop
 	}
-
+	//
 	// Bg tint covers the whole row — no more, no less. We pad to
 	// exactly innerW cells via padCells (keycap-aware) BEFORE handing
 	// to lipgloss, so the lipgloss style only paints; it does not
@@ -241,7 +241,7 @@ func wrapSelection(content string, selected, searchHit bool, width int, rowBg ..
 	lineStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(bg)).
 		Foreground(lipgloss.Color(mhFG))
-
+		//
 	parts := strings.Split(content, "\n")
 	for i, p := range parts {
 		parts[i] = gutter + lineStyle.Render(padCells(p, innerW))

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
@@ -111,18 +112,18 @@ func noticeRowRender(
 	}
 	bodyFg = lerpHex(bodyFg, rowBg, fade)
 	lav := lerpHex(mhLavender, rowBg, fade)
-
+	//
 	parts := noticeRowFor(rowBg, msg.Time, pinFirst, pinLast, fade)
 	contentW := inner - gutterWidth
 	if contentW < 20 {
 		contentW = 20
 	}
-
+	//
 	sys := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(lav)).
 		Background(lipgloss.Color(rowBg)).
 		Italic(true)
-
+		//
 	// Fast path — default styling: one sys.Render over the whole
 	// msg.Text gives the terminal a single uninterrupted ANSI span,
 	// painted as one clean lavender-italic band. Every storage /
@@ -132,7 +133,7 @@ func noticeRowRender(
 		line := noticeRowLine(parts, body, contentW)
 		return wrapSelection(line, selected, false, inner, rowBg)
 	}
-
+	//
 	// Styled path — body takes a custom fg / bold / center. Split
 	// the "-!- " prefix off so it stays flush-left in the standard
 	// sys style; only the content after it receives override styling.
@@ -140,7 +141,7 @@ func noticeRowRender(
 	// makes the splash banner visually stack with regular `-!-`.
 	const prefix = "-!- "
 	bodyContent := strings.TrimPrefix(msg.Text, prefix)
-
+	//
 	bodyStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(rowBg)).
 		Foreground(lipgloss.Color(bodyFg))
@@ -151,7 +152,7 @@ func noticeRowRender(
 		bodyStyle = bodyStyle.Bold(true)
 	}
 	styled := bodyStyle.Render(bodyContent)
-
+	//
 	// `-!-` is ALWAYS anchored at the leftmost body chrome column —
 	// never floats. style.center only changes the alignment of the
 	// content AFTER the prefix: the prefix gets its own fixed-width
@@ -195,9 +196,9 @@ func chatRowRender(
 	if contentW < 40 {
 		contentW = 40
 	}
-
+	//
 	parts := chatRowFor(m, msg, rowBg)
-
+	//
 	// /me action detection — IRC convention: a chat row whose body
 	// starts with "* " (and isn't a /bang command) renders without
 	// the bracketed sender column and with "* <nick> <action>" as
@@ -208,7 +209,7 @@ func chatRowRender(
 	// pattern.
 	isAction := msg.Bang == "" && msg.Status != mdl.StatusSystem &&
 		strings.HasPrefix(msg.Text, "* ") && len(msg.Text) > 2
-
+	//
 	bodyLines := strings.Split(msg.Text, "\n")
 	if len(bodyLines) == 0 {
 		bodyLines = []string{""}
@@ -271,7 +272,7 @@ func chatRowRender(
 		Background(lipgloss.Color(rowBg)).
 		Italic(true)
 	row := chatRowMainLine(parts, bodyForFirst, bodyText, contentW)
-
+	//
 	if len(bodyLines) > 1 {
 		for _, bl := range bodyLines[1:] {
 			row += "\n" + chatContinuationLine(parts, bl, bodyText, contentW)
@@ -288,7 +289,7 @@ func chatRowRender(
 			) + "\n" + row
 		}
 	}
-
+	//
 	return wrapSelection(row, selected, m.isMsgSearchHit(msg), inner, rowBg)
 }
 

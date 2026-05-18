@@ -105,7 +105,7 @@ func TestRow_Render(t *testing.T) {
 			}
 		}
 	})
-
+	//
 	t.Run("oversize-content-truncates-to-box", func(t *testing.T) {
 		row := Row{Cells: []Cell{
 			{Content: strings.Repeat("X", 1000), Width: -1},
@@ -119,7 +119,7 @@ func TestRow_Render(t *testing.T) {
 			}
 		}
 	})
-
+	//
 	t.Run("flex-children-share-leftover-budget", func(t *testing.T) {
 		// 3 flex children + 1 fixed of width 6 in a box of 32.
 		// Leftover = 26, split as 9+9+8 (first 2 get the +1 remainder).

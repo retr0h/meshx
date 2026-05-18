@@ -152,7 +152,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		Foreground(lipgloss.Color(mhYellow)).
 		Background(lipgloss.Color(rowBg)).
 		Bold(true)
-
+		//
 	// Sender-accent tick (▎). Color follows nickColor by default but
 	// flips to magenta for own messages, yellow for /bang commands,
 	// pink for failed sends — same priority order the legacy
@@ -176,7 +176,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		Bold(true).
 		Render("▎") +
 		lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
-
+		//
 	// Flag column.
 	flagGlyph := " "
 	flagStyle := tstamp
@@ -192,10 +192,10 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		flagStyle = me
 	}
 	flag := flagStyle.Render(flagGlyph + " ")
-
+	//
 	// Time.
 	timeCell := tstamp.Render(msg.Time + "  ")
-
+	//
 	// Sender.
 	fromRaw := m.displayFrom(msg)
 	shortName := ""
@@ -219,7 +219,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		senderStyle = me
 	}
 	sender := senderStyle.Render(padOrTruncate(fromRaw, fromW))
-
+	//
 	// Hop column.
 	hopText := strings.Repeat(" ", hopColW)
 	switch {
@@ -231,14 +231,14 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		hopText = "↝  dx  "
 	}
 	hopCell := hopFg.Render(hopText)
-
+	//
 	// SNR column.
 	snrText := strings.Repeat(" ", snrColW)
 	if msg.SNR != "" {
 		snrText = fmt.Sprintf("%6sdB", msg.SNR)
 	}
 	snrCell := hopFg.Render(snrText)
-
+	//
 	// Status gap + glyph.
 	statusGap := lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
 	statusGlyph := " "
@@ -254,7 +254,7 @@ func chatRowFor(m model, msg messageItem, rowBg string) chatRowParts {
 		statusRender = fail
 	}
 	statusCell := statusRender.Render(statusGlyph)
-
+	//
 	return chatRowParts{
 		accent:    accent,
 		flag:      flag,
@@ -307,14 +307,15 @@ func chatRowMainLine(parts chatRowParts, body string, bodyStyler styler, content
 // covers the large majority of real callsigns ("AmputiLayag_…")
 // without ellipsis while leaving the body the dominant share of the
 // row on typical terminal widths.
-const fromW = 30
-
-// chatRowLeftFixed is the cell width consumed by accent + flag +
-// time + sender + sender-to-body gap on a chat row's first line.
-// Continuation lines hang under the body column starting at this
-// offset so multi-line messages indent correctly without re-emitting
-// the time / sender chrome.
-const chatRowLeftFixed = 2 /*accent*/ + 2 /*flag*/ + 7 /*time*/ + fromW + 2 /*gap*/
+const (
+	fromW = 30
+	//
+	// chatRowLeftFixed is the cell width consumed by accent + flag +
+	// time + sender + sender-to-body gap on a chat row's first line.
+	// Continuation lines hang under the body column starting at this
+	// offset so multi-line messages indent correctly without re-emitting
+	// the time / sender chrome.
+	chatRowLeftFixed = 2 /*accent*/ + 2 /*flag*/ + 7 /*time*/ + fromW + 2 /*gap*/)
 
 // chatContinuationLine renders a hanging continuation line for a
 // multi-line message body. accent column carries the same sender

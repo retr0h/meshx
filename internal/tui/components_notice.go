@@ -7,7 +7,8 @@
 //
 // Notice rows have a different visual structure than chat rows: no
 // flag column, no metrics tail. The columns are:
-//   accent (2)  time (10)  body (flex)  [pin-tail (1)]
+//
+//	accent (2)  time (10)  body (flex)  [pin-tail (1)]
 //
 // The pin-tail cell is ALWAYS allocated 1 cell wide so rows with and
 // without pin corners line up vertically; non-pinned rows just emit
@@ -48,14 +49,14 @@ const (
 func noticeRowFor(rowBg string, time string, pinFirst, pinLast bool, fade float64) noticeRowParts {
 	lav := lerpHex(mhLavender, rowBg, fade)
 	drn := lerpHex(mhDrained, rowBg, fade)
-
+	//
 	accent := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(lav)).
 		Background(lipgloss.Color(rowBg)).
 		Bold(true).
 		Render("▎") +
 		lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
-
+		//
 	tstamp := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(drn)).
 		Background(lipgloss.Color(rowBg))
@@ -72,7 +73,7 @@ func noticeRowFor(rowBg string, time string, pinFirst, pinLast bool, fade float6
 			Render("⌜")
 		tsRendered = corner + tstamp.Render(timeCol[1:])
 	}
-
+	//
 	pinEnd := lipgloss.NewStyle().Background(lipgloss.Color(rowBg)).Render(" ")
 	if pinLast {
 		pinEnd = lipgloss.NewStyle().
@@ -81,7 +82,7 @@ func noticeRowFor(rowBg string, time string, pinFirst, pinLast bool, fade float6
 			Bold(true).
 			Render("⌟")
 	}
-
+	//
 	return noticeRowParts{
 		accent: accent,
 		time:   tsRendered,

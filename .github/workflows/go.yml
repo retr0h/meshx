@@ -18,14 +18,12 @@ jobs:
           go-version: stable
       - name: Install just
         uses: extractions/setup-just@v4
-      - name: Fetch shared justfiles
+      - name: Fetch justfiles
         run: just fetch
       - name: Build
         run: go build -o meshx .
-      - name: Test (fmt + lint + race tests)
+      - name: Test
         run: just test
-      - name: Coverage
-        run: go test -race -coverprofile=coverage.out ./...
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v6
         env:

@@ -74,7 +74,7 @@ func TestBordered_Render(t *testing.T) {
 			}
 		}
 	})
-
+	//
 	t.Run("long-inner-line-absorbed-without-overflow", func(t *testing.T) {
 		// Inner that emits a 5000-char line: Bordered must absorb it
 		// via padCells truncation; outer rows still match Box.Width.

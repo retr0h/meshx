@@ -1,6 +1,6 @@
 module github.com/retr0h/meshx
 
-go 1.25.7
+go 1.26.0
 
 require (
 	github.com/caarlos0/go-version v0.2.2
@@ -21,7 +21,7 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
-	go.bug.st/serial v1.6.4
+	go.bug.st/serial v1.7.0
 	golang.org/x/term v0.43.0
 	google.golang.org/protobuf v1.36.11
 	tinygo.org/x/bluetooth v0.15.1-0.20260517055521-fc635e3ddf8c
@@ -85,7 +85,6 @@ require (
 	github.com/ckaznocha/intrange v0.3.1 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
-	github.com/creack/goselect v0.1.2 // indirect
 	github.com/curioswitch/go-reassign v0.3.0 // indirect
 	github.com/daixiang0/gci v0.13.7 // indirect
 	github.com/dave/dst v0.27.3 // indirect

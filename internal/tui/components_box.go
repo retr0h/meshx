@@ -43,9 +43,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/rivo/uniseg"
-
-	"github.com/retr0h/meshx/internal/tui/emoji"
 )
 
 // Box is the cell budget a Component is allowed to fill.
@@ -137,144 +134,30 @@ func renderAndCheck(c Component, box Box) string {
 	return out
 }
 
-// ansiCells is the canonical cell-width measurement for the layout
-// pipeline — the SAME function the renderer must use everywhere so
-// the right ║ pane border lands in the same column on every row.
-//
-// We start from ansi.StringWidth (handles ANSI CSI escapes + grapheme
-// clusters) and apply one correction: any grapheme cluster that
-// Unicode's Emoji_Presentation property says is wide-2 by default
-// (with or without a VS16 selector) is promoted to ≥ 2 cells when
-// ansi.StringWidth undercounts it.
-//
-// Why the correction exists: every Go width library in the dep tree
-// (ansi.StringWidth, uniseg, runewidth) decides cell width from East
-// Asian Width — wrong for emoji whose EAW is 'Neutral' but whose
-// TR51 Emoji_Presentation says wide-2. The bare hand emoji 🖐
-// (U+1F590) is the canonical example: EAW=N → 1 cell by every
-// library, but iTerm / Ghostty / Terminal.app all render it as 2
-// cells. Without this correction the row is 1 cell wider than
-// declared and the right ║ frame walks right.
-//
-// The Emoji_Presentation table comes from Unicode emoji-data.txt;
-// regenerate via `go generate ./internal/tui/...` after a Unicode
-// release. See internal/tui/cmd/genemoji.
+// ansiCells returns the display-cell width of s using ansi.StringWidth
+// — the same measurement Bubble Tea and lipgloss use internally.
 func ansiCells(s string) int {
-	if s == "" {
-		return 0
-	}
-	if !needsClusterPass(s) {
-		return ansi.StringWidth(s)
-	}
-	g := uniseg.NewGraphemes(ansi.Strip(s))
-	n := 0
-	for g.Next() {
-		cluster := g.Str()
-		w := ansi.StringWidth(cluster)
-		if w < 2 && clusterIsWideEmoji(cluster) {
-			w = 2
-		}
-		n += w
-	}
-	return n
+	return ansi.StringWidth(s)
 }
 
-// needsClusterPass is the cheap pre-check: ansiCells only walks the
-// grapheme iterator when the string contains a rune that might
-// trigger the wide-emoji promotion path. Plain ASCII / CJK strings
-// short-circuit to ansi.StringWidth.
-func needsClusterPass(s string) bool {
-	if strings.ContainsRune(s, '️') || strings.ContainsRune(s, '⃣') {
-		return true
-	}
-	for _, r := range s {
-		if emoji.IsEmojiPresentation(r) {
-			return true
-		}
-	}
-	return false
-}
-
-// clusterIsWideEmoji reports whether a grapheme cluster should render
-// as ≥ 2 cells under TR51 emoji-presentation rules even though the
-// stock width libraries say 1. Two triggers: a VS16 / keycap mark in
-// the cluster, or a leading rune in the Emoji_Presentation set.
-func clusterIsWideEmoji(cluster string) bool {
-	if strings.ContainsRune(cluster, '️') ||
-		strings.ContainsRune(cluster, '⃣') {
-		return true
-	}
-	for _, r := range cluster {
-		return emoji.IsEmojiPresentation(r)
-	}
-	return false
-}
-
-// padCells right-pads s to exactly w cells using ansi.StringWidth as
-// the measurement. Truncates with an ellipsis if s is too long; pads
-// with spaces if too short.
-//
-// Built on charmbracelet/x/ansi.Truncate which:
-//   - skips ANSI CSI escapes from the cell count (so styled content
-//     like lipgloss.Render output is measured correctly);
-//   - iterates by grapheme cluster, so compound emoji (👋🏼 skin
-//     tone, 🙋🏼‍♂️ ZWJ, 2️⃣ keycap, regional-indicator flags) are
-//     never split mid-cluster.
-//
-// ansi.StringWidth is the same measurement bubbletea, lipgloss, and
-// the terminal use, so a string padded by padCells fits the budget
-// in every layer of the rendering pipeline. This is the critical
-// invariant that prevents pending-wrap drift.
+// padCells pads or truncates s to exactly w display cells.
 func padCells(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	cur := ansiCells(s)
+	cur := ansi.StringWidth(s)
 	if cur == w {
 		return s
 	}
 	if cur < w {
 		return s + strings.Repeat(" ", w-cur)
 	}
-	// Overlong — ansi.Truncate handles ANSI-aware grapheme-aware
-	// cutting, preserving CSI sequences across the cut so styled
-	// prefixes (the input-bar's `[#default] ›`) keep their colors
-	// instead of dropping to plain white when typing pushes past the
-	// row width. The "…" tail is itself 1 cell, so we ask for w cells
-	// total INCLUDING the ellipsis.
 	out := ansi.Truncate(s, w, "…")
-	// ansi.Truncate measures with ansi.StringWidth, which under-counts
-	// keycap emoji (Unicode TR51 emoji-presentation sequences). When
-	// the input contains keycaps, ansi.Truncate may return a string
-	// that ansi.StringWidth says fits in w but ansiCells says is
-	// wider. Iteratively drop one grapheme at a time until ansiCells
-	// fits, then re-pad to exactly w. Strip ANSI for the walk to
-	// avoid splitting an SGR mid-byte; in the pathological keycap-
-	// overflow branch losing inline styling is acceptable.
-	if ansiCells(out) <= w {
-		return out
+	cur = ansi.StringWidth(out)
+	if cur < w {
+		out += strings.Repeat(" ", w-cur)
 	}
-	stripped := ansi.Strip(out)
-	g := uniseg.NewGraphemes(stripped)
-	var b strings.Builder
-	used := 0
-	for g.Next() {
-		cluster := g.Str()
-		cw := ansiCells(cluster)
-		if used+cw > w-1 {
-			break
-		}
-		b.WriteString(cluster)
-		used += cw
-	}
-	b.WriteRune('…')
-	used++
-	res := b.String()
-	if used < w {
-		res = res[:len(res)-len("…")] +
-			strings.Repeat(" ", w-used) + "…"
-	}
-	return res
+	return out
 }
 
 // renderCell fits a Cell into exactly w cells: content + alignment

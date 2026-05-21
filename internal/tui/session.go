@@ -34,9 +34,10 @@ import (
 // Concrete *radio.Session satisfies this structurally — the compiler
 // verifies at the assignment site in newModel and RunRadio.
 type radioSession interface {
-	// Session returns the canonical per-radio state shared between
-	// the driver and the TUI. Nil when the driver is uninitialized.
-	Snapshot() *radio.State
+	// GetState returns the canonical per-radio state. The TUI embeds
+	// the pointer at construction time via newModel. Nil when the
+	// driver is uninitialized.
+	GetState() *radio.State
 
 	// Send dispatches an outbound mdl.Command via the underlying pump.
 	// Returns the allocated MeshPacket.id (zero for fire-and-forget)
@@ -53,22 +54,21 @@ type radioSession interface {
 	// transition period before those calls move onto Driver methods.
 	StoreHandle() radio.Store
 
+	// BusHandle returns the event bus. Nil until AttachBus is called
+	// (demo mode / pre-construction). The TUI hands it to
+	// StoreBusSink so pump events fan out to bus subscribers as well
+	// as to the tea.Program.
+	BusHandle() radio.Bus
+
 	// Stop tears down the pump goroutines and transport. Idempotent.
 	Stop()
 
 	// Apply* mutates the canonical State in response to an inbound
-	// model event. Each method publishes to subscribers on its way
-	// out (defer Publish*), so consumers see the same events the
-	// state mutation produced. Local mode uses *radio.Session which
-	// also persists via Store; remote mode uses *sdk.Remote (which
-	// embeds *radio.Session with nil Pump + nil Store) so Apply*
-	// only mutates the local State projection — persistence and
-	// SSE fan-out happened daemon-side before the event arrived.
-	//
-	// The TUI's Update dispatches every inbound mdl.X tea.Msg to
-	// the matching ApplyX, then layers TUI-only side effects (flash
-	// banner, ding, scrollback nudge). State mutation is single-
-	// source: there is exactly one implementation in driver/apply.go.
+	// model event. The TUI's Update dispatches every inbound mdl.X
+	// tea.Msg to the matching ApplyX, then layers TUI-only side
+	// effects (flash banner, ding, scrollback nudge). State mutation
+	// is single-source: there is exactly one implementation in
+	// radio/apply.go.
 	ApplyMyInfo(msg mdl.MyInfo) radio.ApplyMyInfoResult
 	ApplyMetadata(msg mdl.Metadata)
 	ApplyLoraConfig(msg mdl.LoraConfig)
@@ -86,9 +86,7 @@ type radioSession interface {
 
 	// RecordOutbound mirrors the inbound ApplyText path for messages
 	// the user just typed locally — appends a "mine" row, persists,
-	// indexes by PacketID, and publishes a synthesized mdl.Text so
-	// SSE clients see the outbound row in lockstep with the daemon's
-	// State.Messages append.
+	// and indexes by PacketID.
 	RecordOutbound(opts radio.RecordOutboundOptions) radio.ApplyTextResult
 
 	// PutSetting persists a key/value pref through the Store. Failures

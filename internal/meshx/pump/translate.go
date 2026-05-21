@@ -76,7 +76,6 @@ import (
 	"fmt"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 	"google.golang.org/protobuf/proto"
 
@@ -100,17 +99,17 @@ import (
 // This file is the ONE place in the codebase where pb.* types meet
 // model.* types — every projection lives here so model can stay
 // proto-free.
-func (p *Pump) translate(msg *pb.FromRadio) []tea.Msg {
+func (p *Pump) translate(msg *pb.FromRadio) []any {
 	switch v := msg.GetPayloadVariant().(type) {
 	case *pb.FromRadio_MyInfo:
 		p.myNum = v.MyInfo.GetMyNodeNum()
-		return []tea.Msg{model.MyInfo{NodeNum: p.myNum}}
+		return []any{model.MyInfo{NodeNum: p.myNum}}
 
 	case *pb.FromRadio_NodeInfo:
 		n := v.NodeInfo
 		u := n.GetUser()
 
-		out := []tea.Msg{model.NodeInfo{
+		out := []any{model.NodeInfo{
 			NodeNum:   n.GetNum(),
 			LongName:  u.GetLongName(),
 			ShortName: u.GetShortName(),
@@ -144,7 +143,7 @@ func (p *Pump) translate(msg *pb.FromRadio) []tea.Msg {
 		s := v.Channel.GetSettings()
 		// Defensive copy: GetPsk() returns the proto's underlying
 		// byte slice without a copy. Aliasing that across the
-		// goroutine boundary into a tea.Msg means a future caller of
+		// goroutine boundary into an event means a future caller of
 		// Reset() on the proto (or any pooling gomesh adds later)
 		// could mutate our channelItem.psk in place. Cheap to copy
 		// 16-32 bytes.
@@ -152,7 +151,7 @@ func (p *Pump) translate(msg *pb.FromRadio) []tea.Msg {
 		if psk := s.GetPsk(); len(psk) > 0 {
 			pskCopy = append([]byte(nil), psk...)
 		}
-		return []tea.Msg{model.ChannelInfo{
+		return []any{model.ChannelInfo{
 			Index:  int(v.Channel.GetIndex()),
 			Name:   s.GetName(),
 			Role:   model.ChannelRole(v.Channel.GetRole().String()),
@@ -166,7 +165,7 @@ func (p *Pump) translate(msg *pb.FromRadio) []tea.Msg {
 
 	case *pb.FromRadio_Metadata:
 		md := v.Metadata
-		return []tea.Msg{model.Metadata{
+		return []any{model.Metadata{
 			FirmwareVersion: md.GetFirmwareVersion(),
 			DeviceStateVer:  md.GetDeviceStateVersion(),
 			HasWifi:         md.GetHasWifi(),
@@ -179,7 +178,7 @@ func (p *Pump) translate(msg *pb.FromRadio) []tea.Msg {
 			if c == nil || c.Lora == nil {
 				return nil
 			}
-			return []tea.Msg{model.LoraConfig{
+			return []any{model.LoraConfig{
 				TxPowerDBm:  c.Lora.GetTxPower(),
 				Region:      model.Region(c.Lora.GetRegion().String()),
 				ModemPreset: model.ModemPreset(c.Lora.GetModemPreset().String()),
@@ -188,14 +187,14 @@ func (p *Pump) translate(msg *pb.FromRadio) []tea.Msg {
 			if c == nil || c.Device == nil {
 				return nil
 			}
-			return []tea.Msg{model.DeviceConfig{
+			return []any{model.DeviceConfig{
 				Role: model.DeviceRole(c.Device.GetRole().String()),
 			}}
 		}
 		return nil
 
 	case *pb.FromRadio_ConfigCompleteId:
-		return []tea.Msg{model.ConfigComplete{}}
+		return []any{model.ConfigComplete{}}
 
 	case *pb.FromRadio_ModuleConfig:
 		// Module configs ship during the same WantConfigId NodeDB
@@ -214,7 +213,7 @@ func (p *Pump) translate(msg *pb.FromRadio) []tea.Msg {
 			if ext == nil {
 				return nil
 			}
-			return []tea.Msg{model.ModuleBuzzer{
+			return []any{model.ModuleBuzzer{
 				Enabled:            ext.GetEnabled(),
 				AlertMessageBuzzer: ext.GetAlertMessageBuzzer(),
 				Snapshot:           ExternalNotificationFromProto(ext),
@@ -229,7 +228,7 @@ func (p *Pump) translate(msg *pb.FromRadio) []tea.Msg {
 // translatePacket handles the FromRadio_Packet variant — split out
 // because the inner switch is long and translate() reads more
 // cleanly when each top-level FromRadio arm gets a single line.
-func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
+func (p *Pump) translatePacket(pkt *pb.MeshPacket) []any {
 	dec := pkt.GetDecoded()
 	if dec == nil {
 		return nil
@@ -242,7 +241,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
 		// Time ("15:04") is pre-formatted off SentAt so the
 		// renderer doesn't need to re-format on every paint.
 		at := time.Unix(int64(pkt.GetRxTime()), 0)
-		return []tea.Msg{model.Text{
+		return []any{model.Text{
 			Channel: int(pkt.GetChannel()),
 			ToNum:   pkt.GetTo(),
 			RSSI:    fmt.Sprintf("%d", pkt.GetRxRssi()),
@@ -271,7 +270,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
 			if v == nil || v.DeviceMetrics == nil {
 				return nil
 			}
-			return []tea.Msg{model.DeviceMetrics{
+			return []any{model.DeviceMetrics{
 				FromNodeNum:  pkt.GetFrom(),
 				BatteryLevel: v.DeviceMetrics.GetBatteryLevel(),
 				Voltage:      v.DeviceMetrics.GetVoltage(),
@@ -282,7 +281,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
 			if v == nil || v.EnvironmentMetrics == nil {
 				return nil
 			}
-			return []tea.Msg{model.EnvMetrics{
+			return []any{model.EnvMetrics{
 				FromNodeNum: pkt.GetFrom(),
 				Temperature: v.EnvironmentMetrics.GetTemperature(),
 				Humidity:    v.EnvironmentMetrics.GetRelativeHumidity(),
@@ -301,7 +300,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
 		if pos.GetLatitudeI() == 0 && pos.GetLongitudeI() == 0 {
 			return nil
 		}
-		return []tea.Msg{model.Position{
+		return []any{model.Position{
 			FromNodeNum: pkt.GetFrom(),
 			Latitude:    float64(pos.GetLatitudeI()) / 1e7,
 			Longitude:   float64(pos.GetLongitudeI()) / 1e7,
@@ -320,7 +319,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
 		if err := proto.Unmarshal(dec.GetPayload(), u); err != nil {
 			return nil
 		}
-		return []tea.Msg{model.NodeInfo{
+		return []any{model.NodeInfo{
 			NodeNum:     pkt.GetFrom(),
 			LongName:    u.GetLongName(),
 			ShortName:   u.GetShortName(),
@@ -351,7 +350,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
 		if ext == nil {
 			return nil
 		}
-		return []tea.Msg{model.ModuleBuzzer{
+		return []any{model.ModuleBuzzer{
 			Enabled:            ext.GetEnabled(),
 			AlertMessageBuzzer: ext.GetAlertMessageBuzzer(),
 			Snapshot:           ExternalNotificationFromProto(ext),
@@ -364,7 +363,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
 		// consumer's pendingPing when firmware echoes it; the
 		// FromNum fallback in the consumer covers the (older) case
 		// where it doesn't.
-		return []tea.Msg{model.Ping{
+		return []any{model.Ping{
 			RequestID: dec.GetRequestId(),
 			FromNum:   pkt.GetFrom(),
 			Hops:      int(pkt.GetHopStart()) - int(pkt.GetHopLimit()),
@@ -385,7 +384,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
 		if err := proto.Unmarshal(dec.GetPayload(), rd); err != nil {
 			return nil
 		}
-		return []tea.Msg{model.Traceroute{
+		return []any{model.Traceroute{
 			RequestID: dec.GetRequestId(),
 			FromNum:   pkt.GetFrom(),
 			ToNum:     pkt.GetTo(),
@@ -405,7 +404,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []tea.Msg {
 			return nil
 		}
 		reason := r.GetErrorReason().String()
-		return []tea.Msg{model.Routing{
+		return []any{model.Routing{
 			RequestID: dec.GetRequestId(),
 			Reason:    model.RoutingError(reason),
 			ErrorName: reason,

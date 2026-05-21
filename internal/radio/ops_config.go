@@ -85,8 +85,6 @@ type RebootResult struct {
 // instead of dispatching a doomed AdminMessage and watching the
 // radio silently drop it.
 func (s *Session) UpdateConfig(req UpdateConfigRequest) (UpdateConfigResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if req.LongName != nil {
 		if n := len(*req.LongName); n == 0 || n > ownerByteLongMax {
 			return UpdateConfigResult{}, ErrBadRequestf(
@@ -184,8 +182,6 @@ func (s *Session) currentOwner() (string, string, bool) {
 // reconnect loop reattaches when it comes back, so callers don't
 // have to do anything special after dispatch.
 func (s *Session) Reboot(req RebootRequest) (RebootResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	secs := req.Seconds
 	if secs <= 0 {
 		secs = defaultRebootSeconds

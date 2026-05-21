@@ -178,7 +178,7 @@ func New(dest string, sink Sink) *Pump {
 // doesn't race the Close call.
 func (p *Pump) Stop() {
 	p.cancel()
-	if c := p.getClient(); c != nil {
+	if c := p.setClient(nil); c != nil {
 		_ = c.Close()
 	}
 }

@@ -149,7 +149,7 @@ func TestPadCells(t *testing.T) {
 		{name: "shorter-than-budget-pads-out", in: "hello", w: 10, wantW: 10},
 		{name: "longer-than-budget-truncates", in: "hello world", w: 5, wantW: 5},
 		{name: "truncates-on-grapheme-boundary", in: "👋🏼 hello", w: 4, wantW: 4},
-		{name: "keycap-cluster-stays-intact", in: "2️⃣ 6️⃣ 7️⃣", w: 7, wantW: 7},
+		{name: "keycap-cluster-stays-intact", in: "2️⃣ 6️⃣ 7️⃣", w: 8, wantW: 8},
 		{name: "long-ascii-truncates-cleanly", in: strings.Repeat("X", 100), w: 20, wantW: 20},
 	}
 	for _, c := range cases {

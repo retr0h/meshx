@@ -66,8 +66,6 @@ type SendMessageResult struct {
 // as a pending entry, and expireStalePending flips it to Fail when
 // no ack arrives.
 func (s *Session) SendMessage(req SendMessageRequest) SendMessageResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	pid, ok := s.Send(mdl.SendText{
 		Channel: req.Channel,
 		Text:    req.Text,

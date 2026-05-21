@@ -16,7 +16,7 @@ trees, each with their own verbs. Bare `meshx` picks a transport for you.
 | `meshx usb connect [dev]`        | Open the TUI over serial. Auto-detects when `[dev]` is omitted.                                         |
 | `meshx tcp connect host[:port]`  | Open the TUI over TCP. Port defaults to 4403.                                                           |
 | `meshx ble scan`                 | 10s Bluetooth scan — table of nearby Meshtastic radios with UUID + name + RSSI.                         |
-| `meshx ble pair <uuid>`          | Save a radio to `~/.meshx/meshx.db`. OS pairing dialog fires on first `meshx ble connect`.              |
+| `meshx ble pair <uuid>`          | Save a radio to `~/.meshx/meshx.bolt`. OS pairing dialog fires on first `meshx ble connect`.            |
 | `meshx ble list`                 | Show saved Bluetooth devices (`★` marks the auto-connect favorite).                                     |
 | `meshx ble connect <uuid\|name>` | Open the TUI over Bluetooth against a saved device.                                                     |
 | `meshx ble fav <uuid\|name>`     | Mark a saved device as the bare-`meshx` fallback target.                                                |
@@ -188,7 +188,7 @@ mode with no argument.
 DM threads are virtual `@callsign` tabs in the bottom tab strip, addressable by
 `Ctrl+N` / `Ctrl+P` (cycles channels + DMs in one strip). Inbound messages
 addressed to your node auto-open a thread for the sender. Tabs persist across
-restarts via SQLite history hydration.
+restarts via bbolt history hydration.
 
 ## Overlay and util /commands
 
@@ -302,16 +302,16 @@ restored verbatim when you unpin (running `/pin` again, or pressing `P` again).
 
 ## Notes on persistence
 
-Live-radio mode persists to `~/.meshx/meshx.db` (SQLite, WAL journal):
+Live-radio mode persists to `~/.meshx/meshx.bolt` (bbolt):
 
 - **Message log** — last 500 rows replayed on boot. System/transient `-!-`
   notices are skipped (derived state, would be stale on replay).
 - **Node cache** — every peer's longname / shortname / hw model, so the
   `@retr0h` tiles still render immediately on launch before the radio's NodeInfo
   dump arrives. Favorites (`*`) and mute (`m`) state persist here too.
-- **Paired Bluetooth devices** — `ble_devices` table. `meshx ble pair` writes
-  here, `meshx ble list` reads, `meshx ble fav` flips the favorite flag in a
-  single transaction so there's never two.
+- **Paired Bluetooth devices** — `radios` bucket. `meshx ble pair` writes here,
+  `meshx ble list` reads, `meshx ble fav` flips the favorite flag in a single
+  transaction so there's never two.
 
 Demo mode never writes to disk.
 
@@ -324,7 +324,7 @@ behavior where it'd zombie as `…` forever with no way to act on it. A
 `-!- messages: N stale pending row(s) marked as failed — press R to resend`
 systemLine fires when the sweep actually touched anything.
 
-To wipe history: `rm ~/.meshx/meshx.db` (or `/clear` clears only the in-memory
+To wipe history: `rm ~/.meshx/meshx.bolt` (or `/clear` clears only the in-memory
 view for this session).
 
 ## Meshtastic API mapping

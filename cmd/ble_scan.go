@@ -41,8 +41,8 @@ var bleScanCmd = &cobra.Command{
 		logger.With(slog.String("subsystem", "ble.scan")).
 			Debug("running", slog.Int("timeout_ms", 10000))
 		// Scan doesn't touch the pairing store — construct a Manager
-		// without sqlite so a missing meshx.db (fresh install, no
-		// home dir) doesn't block discovery.
+		// without a bolt store so a missing meshx.bolt (fresh install,
+		// no home dir) doesn't block discovery.
 		mgr := newTransportsManager(nil)
 		hits, err := mgr.ScanBLE(context.Background(), 10000)
 		if err != nil {

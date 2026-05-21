@@ -38,9 +38,7 @@ import (
 
 // logger is the package-level slog logger, populated from initLogger
 // after cobra parses persistent flags. CLI subcommands log through it
-// directly; the daemon hands a child logger (with subsystem tag) to
-// the server so HTTP and CLI lines stay distinguishable in a unified
-// stream.
+// directly.
 var (
 	logger     = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	jsonOutput bool
@@ -56,8 +54,7 @@ vintage BBS aesthetic.
 Pick a transport explicitly:
 
   meshx usb connect [dev]        # open the TUI over USB serial
-  meshx ble connect <uuid|name>  # open the TUI over Bluetooth (paired)
-  meshx server start             # run the headless HTTP+SSE daemon`,
+  meshx ble connect <uuid|name>  # open the TUI over Bluetooth (paired)`,
 	RunE: func(c *cobra.Command, _ []string) error {
 		return c.Help()
 	},
@@ -108,13 +105,6 @@ func initConfig() {
 	viper.SetEnvPrefix("meshx")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
-
-	// Server defaults — override via --bind flag, MESHX_SERVER_BIND
-	// env, or a future config file. 4404 sits adjacent to 4403 (the
-	// meshtasticd TCP transport) — "4403 talks to the radio, 4404
-	// talks to clients of meshx".
-	viper.SetDefault("server.bind", "127.0.0.1:4404")
-	viper.SetDefault("server.radio", "")
 }
 
 // initLogger swaps the package-level logger to a tint handler with

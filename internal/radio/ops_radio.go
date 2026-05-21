@@ -70,8 +70,6 @@ type SyncResult struct {
 // 400 — meaningless request, surface a clean signal instead of
 // silently timing out.
 func (s *Session) Ping(req PingRequest) (PingResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if req.TargetNum == 0 {
 		return PingResult{}, ErrBadRequest("ping target NodeNum required")
 	}
@@ -92,8 +90,6 @@ func (s *Session) Ping(req PingRequest) (PingResult, error) {
 // firmware walks the mesh and echoes a TRACEROUTE_APP reply back
 // which surfaces as a traceroute SSE event.
 func (s *Session) Traceroute(req TracerouteRequest) (TracerouteResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if req.TargetNum == 0 {
 		return TracerouteResult{}, ErrBadRequest("traceroute target NodeNum required")
 	}
@@ -115,8 +111,6 @@ func (s *Session) Traceroute(req TracerouteRequest) (TracerouteResult, error) {
 // inbound event over the next few seconds; no correlator on the
 // wire.
 func (s *Session) Sync() (SyncResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.Send(mdl.RequestSync{}); !ok {
 		return SyncResult{}, ErrUnavailable("radio outbound buffer full or no radio attached")
 	}

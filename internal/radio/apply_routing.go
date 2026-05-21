@@ -21,8 +21,7 @@
 package radio
 
 // Routing-reply handling — flips outbound message rows to ack/fail
-// on a request_id match, aggregates per-peer Ackers for ack roll-up,
-// publishes a message_status SSE event so consumers stop polling.
+// on a request_id match, aggregates per-peer Ackers for ack roll-up.
 
 import (
 	"sort"
@@ -56,50 +55,33 @@ type ApplyRoutingResult struct {
 // silently. Ping-correlation lives in the TUI's reactRouting; this
 // path only handles the message-status flip + ack roll-up.
 func (s *Session) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.PublishRouting(msg)
 	if msg.RequestID == 0 {
 		return ApplyRoutingResult{}
 	}
-	for i := range s.State.Messages {
-		if s.State.Messages[i].PacketID != msg.RequestID || !s.State.Messages[i].Mine {
-			continue
-		}
-		row := &s.State.Messages[i]
-		if msg.OK {
-			row.Status = mdl.StatusAck
-			s.recordAck(row, msg)
-		} else {
-			row.Status = mdl.StatusFail
-		}
-		if s.store != nil {
-			s.storeError(s.store.SaveMessage(
-				s.State.RadioID,
-				s.State.CurrentChannel,
-				row.Message,
-			))
-		}
-		// Surface the status flip as its own SSE event so consumers
-		// don't have to diff /messages to detect ack/fail. Later
-		// Routing replies for the same packet re-enter this loop,
-		// re-match, and re-publish — each echo updates Ackers and
-		// re-issues a message_status event.
-		ackersCopy := append([]mdl.Acker(nil), row.Ackers...)
-		s.PublishMessageStatus(mdl.MessageStatusUpdate{
-			PacketID: row.PacketID,
-			Status:   row.Status,
-			Ackers:   ackersCopy,
-			At:       msg.At,
-		})
-		return ApplyRoutingResult{
-			Matched:   true,
-			Index:     i,
-			OK:        msg.OK,
-			ErrorName: msg.ErrorName,
-		}
+	i, ok := s.State.MessagesByPacketID[msg.RequestID]
+	if !ok || i < 0 || i >= len(s.State.Messages) || !s.State.Messages[i].Mine {
+		return ApplyRoutingResult{}
 	}
-	return ApplyRoutingResult{}
+	row := &s.State.Messages[i]
+	if msg.OK {
+		row.Status = mdl.StatusAck
+		s.recordAck(row, msg)
+	} else {
+		row.Status = mdl.StatusFail
+	}
+	if s.store != nil {
+		s.storeError(s.store.SaveMessage(
+			s.State.RadioID,
+			s.State.CurrentChannel,
+			row.Message,
+		))
+	}
+	return ApplyRoutingResult{
+		Matched:   true,
+		Index:     i,
+		OK:        msg.OK,
+		ErrorName: msg.ErrorName,
+	}
 }
 
 // recordAck folds a successful Routing reply into the row's per-

@@ -21,37 +21,72 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"time"
 
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/storage"
 	"github.com/retr0h/meshx/internal/meshx/transport"
-	"github.com/retr0h/meshx/internal/transports"
 )
 
-// transports_deps.go wires the cmd-side adapters that satisfy the
-// narrow consumer interfaces declared in internal/transports. Both
-// the daemon (`meshx server start`) and the CLI one-shots (`meshx
-// ble *`, `meshx usb *`) construct a *transports.Manager from these
-// adapters — that's the single source of truth for hardware ops; no
-// other path reaches transport.* or storage.* directly.
-//
-// The adapters are stateless (no fields) so a zero-value satisfies
-// the interface; we declare each as a struct type just to attach
-// the methods.
+// transports_deps.go wires the cmd-side adapters that directly call
+// internal/meshx/transport and internal/meshx/storage for BLE and USB
+// operations. The server/transports package has been removed; all CLI
+// one-shots use cliManager directly.
 
-// bleScannerAdapter satisfies transports.BLEScanner by delegating
-// to transport.ScanBLE and lifting the result into the transports
-// wire shape.
-type bleScannerAdapter struct{}
+// BLESighting is one peripheral observed during a BLE scan.
+type BLESighting struct {
+	UUID      string
+	LocalName string
+	RSSI      int16
+}
 
-func (bleScannerAdapter) ScanMeshtastic(timeoutMS int) ([]transports.BLESighting, error) {
+// BLEDeviceView is the slim view for a saved paired device.
+type BLEDeviceView struct {
+	UUID      string
+	LongName  string
+	ShortName string
+	HWModel   string
+	Favorite  bool
+}
+
+// USBSighting is one candidate USB-serial port observed during a scan.
+type USBSighting struct {
+	Port         string
+	IsMeshtastic bool
+	NodeNum      uint32
+	ShortName    string
+	LongName     string
+	HWModel      string
+	Reason       string
+}
+
+// cliManager is a thin adapter that calls transport.* and storage.*
+// directly. It replaces the deleted internal/transports.Manager for
+// CLI one-shot use. nil store means scan-only; store-requiring ops
+// return an error when store is nil.
+type cliManager struct {
+	store *storage.Bolt
+}
+
+func (m *cliManager) requireStore() (*storage.Bolt, error) {
+	if m == nil || m.store == nil {
+		return nil, fmt.Errorf("persistence not wired")
+	}
+	return m.store, nil
+}
+
+// ScanBLE runs a discovery scan and returns Meshtastic BLE peripherals.
+func (m *cliManager) ScanBLE(_ context.Context, timeoutMS int) ([]BLESighting, error) {
 	hits, err := transport.ScanBLE(time.Duration(timeoutMS) * time.Millisecond)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scan: %w", err)
 	}
-	out := make([]transports.BLESighting, 0, len(hits))
+	out := make([]BLESighting, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, transports.BLESighting{
+		out = append(out, BLESighting{
 			UUID:      h.UUID,
 			LocalName: h.LocalName,
 			RSSI:      h.RSSI,
@@ -60,29 +95,132 @@ func (bleScannerAdapter) ScanMeshtastic(timeoutMS int) ([]transports.BLESighting
 	return out, nil
 }
 
-// blePairerAdapter satisfies transports.BLEPairer by delegating to
-// transport.PairBLE. The brief encrypted GATT connection it dials
-// triggers OS-level Bluetooth bonding (PIN prompt on macOS, agent
-// prompt on Linux).
-type blePairerAdapter struct{}
-
-func (blePairerAdapter) PairMeshtastic(uuid string) error {
-	return transport.PairBLE(uuid)
+// PairBLE triggers OS-level Bluetooth bonding and persists the device.
+func (m *cliManager) PairBLE(_ context.Context, uuid string) (BLEDeviceView, error) {
+	store, err := m.requireStore()
+	if err != nil {
+		return BLEDeviceView{}, err
+	}
+	uuid = strings.TrimSpace(uuid)
+	if uuid == "" {
+		return BLEDeviceView{}, fmt.Errorf("uuid required")
+	}
+	if err := transport.PairBLE(uuid); err != nil {
+		return BLEDeviceView{}, fmt.Errorf("pair: %w", err)
+	}
+	if err := store.SaveBLEDevice(mdl.BLEDevice{UUID: uuid}); err != nil {
+		return BLEDeviceView{}, fmt.Errorf("save ble device: %w", err)
+	}
+	return BLEDeviceView{UUID: uuid}, nil
 }
 
-// usbScannerAdapter satisfies transports.USBScanner by delegating
-// to transport.IdentifyAllSerial and lifting each
-// transport.DeviceInfo into the wire shape.
-type usbScannerAdapter struct{}
-
-func (usbScannerAdapter) IdentifyAllSerial(timeoutMS int) ([]transports.USBSighting, error) {
-	infos, err := transport.IdentifyAllSerial(time.Duration(timeoutMS) * time.Millisecond)
+// ListBLEDevices returns every saved BLE pairing as a slim view.
+func (m *cliManager) ListBLEDevices(_ context.Context) ([]BLEDeviceView, error) {
+	store, err := m.requireStore()
 	if err != nil {
 		return nil, err
 	}
-	out := make([]transports.USBSighting, 0, len(infos))
+	raw, err := store.LoadBLEDevices()
+	if err != nil {
+		return nil, fmt.Errorf("load ble devices: %w", err)
+	}
+	out := make([]BLEDeviceView, 0, len(raw))
+	for _, d := range raw {
+		out = append(out, BLEDeviceView{
+			UUID:      d.UUID,
+			LongName:  d.LongName,
+			ShortName: d.ShortName,
+			HWModel:   d.HWModel,
+			Favorite:  d.Favorite,
+		})
+	}
+	return out, nil
+}
+
+// ForgetBLE removes a saved device by UUID, longname, or shortname.
+func (m *cliManager) ForgetBLE(_ context.Context, target string) error {
+	store, err := m.requireStore()
+	if err != nil {
+		return err
+	}
+	d, err := store.LookupBLEDevice(target)
+	if err != nil {
+		return fmt.Errorf("lookup ble device: %w", err)
+	}
+	if d == nil {
+		return fmt.Errorf("no saved device matches %s", target)
+	}
+	if err := store.ForgetBLEDevice(d.UUID); err != nil {
+		return fmt.Errorf("forget ble device: %w", err)
+	}
+	return nil
+}
+
+// SetBLEFavorite marks the named device as the auto-connect favorite.
+func (m *cliManager) SetBLEFavorite(_ context.Context, target string) (BLEDeviceView, error) {
+	store, err := m.requireStore()
+	if err != nil {
+		return BLEDeviceView{}, err
+	}
+	d, err := store.LookupBLEDevice(target)
+	if err != nil {
+		return BLEDeviceView{}, fmt.Errorf("lookup ble device: %w", err)
+	}
+	if d == nil {
+		return BLEDeviceView{}, fmt.Errorf("no saved device matches %s", target)
+	}
+	if err := store.SetBLEFavorite(d.UUID); err != nil {
+		return BLEDeviceView{}, fmt.Errorf("set favorite: %w", err)
+	}
+	return BLEDeviceView{
+		UUID:      d.UUID,
+		LongName:  d.LongName,
+		ShortName: d.ShortName,
+		HWModel:   d.HWModel,
+		Favorite:  true,
+	}, nil
+}
+
+// ClearBLEFavorite removes the favorite flag from whichever device holds it.
+func (m *cliManager) ClearBLEFavorite(_ context.Context) error {
+	store, err := m.requireStore()
+	if err != nil {
+		return err
+	}
+	if err := store.SetBLEFavorite(""); err != nil {
+		return fmt.Errorf("clear favorite: %w", err)
+	}
+	return nil
+}
+
+// ResolveBLE looks up a saved BLE device and returns its canonical UUID.
+func (m *cliManager) ResolveBLE(_ context.Context, target string) (string, error) {
+	store, err := m.requireStore()
+	if err != nil {
+		return "", err
+	}
+	d, err := store.LookupBLEDevice(target)
+	if err != nil {
+		return "", fmt.Errorf("lookup ble device: %w", err)
+	}
+	if d == nil {
+		return "", fmt.Errorf(
+			"no saved device matches %q — run `meshx ble list` to see what's paired",
+			target,
+		)
+	}
+	return d.UUID, nil
+}
+
+// ScanUSB walks every candidate USB-serial port and returns each port's outcome.
+func (m *cliManager) ScanUSB(_ context.Context, timeoutMS int) ([]USBSighting, error) {
+	infos, err := transport.IdentifyAllSerial(time.Duration(timeoutMS) * time.Millisecond)
+	if err != nil {
+		return nil, fmt.Errorf("scan: %w", err)
+	}
+	out := make([]USBSighting, 0, len(infos))
 	for _, d := range infos {
-		hit := transports.USBSighting{
+		hit := USBSighting{
 			Port:         d.Port,
 			IsMeshtastic: d.IsMeshtastic,
 			NodeNum:      d.NodeNum,
@@ -98,33 +236,53 @@ func (usbScannerAdapter) IdentifyAllSerial(timeoutMS int) ([]transports.USBSight
 	return out, nil
 }
 
-// newTransportsManager wires a *transports.Manager with whatever
-// store handle the caller has on hand. nil store is acceptable —
-// scan-only callers (CLI `meshx ble scan` / `meshx usb scan`) skip
-// the sqlite open; store-needing methods (List, Pair, Fav, Forget)
-// surface 503 at call time.
-func newTransportsManager(s *storage.Sqlite) *transports.Manager {
-	var store transports.Store
-	if s != nil {
-		store = s
+// AutoDetectUSB walks USB-serial ports and returns the port of the single
+// Meshtastic radio found. Errors when zero or multiple Meshtastic radios respond.
+func (m *cliManager) AutoDetectUSB(ctx context.Context, timeoutMS int) (string, error) {
+	hits, err := m.ScanUSB(ctx, timeoutMS)
+	if err != nil {
+		return "", err
 	}
-	return transports.New(transports.Config{
-		Store:      store,
-		Scanner:    bleScannerAdapter{},
-		Pairer:     blePairerAdapter{},
-		USBScanner: usbScannerAdapter{},
-	})
+	var meshtastic []USBSighting
+	for _, h := range hits {
+		if h.IsMeshtastic {
+			meshtastic = append(meshtastic, h)
+		}
+	}
+	switch len(meshtastic) {
+	case 0:
+		if len(hits) == 0 {
+			return "", fmt.Errorf(
+				"no USB-serial device found — plug in a DATA cable, verify the radio is powered",
+			)
+		}
+		return "", fmt.Errorf(
+			"no Meshtastic radio responded on any serial port — try `meshx usb scan` to see candidates",
+		)
+	case 1:
+		return meshtastic[0].Port, nil
+	default:
+		ports := make([]string, 0, len(meshtastic))
+		for _, h := range meshtastic {
+			ports = append(ports, h.Port)
+		}
+		return "", fmt.Errorf(
+			"multiple Meshtastic radios found (%s) — pass the device path explicitly",
+			strings.Join(ports, ", "),
+		)
+	}
 }
 
-// cliTransports opens a fresh sqlite handle and returns a
-// *transports.Manager wired to it. Returns a close func the caller
-// must defer — this is the one-shot pattern the CLI uses (open per
-// invocation; the daemon constructs its Manager once at boot
-// instead).
-//
-// Errors are surfaced verbatim — the caller wraps with a contextual
-// "open store" message.
-func cliTransports() (*transports.Manager, func(), error) {
+// newTransportsManager wires a *cliManager with whatever store handle
+// the caller has on hand. nil store is acceptable — scan-only callers
+// skip bolt; store-needing methods surface an error at call time.
+func newTransportsManager(s *storage.Bolt) *cliManager {
+	return &cliManager{store: s}
+}
+
+// cliTransports opens a fresh bolt store and returns a *cliManager
+// wired to it. Returns a close func the caller must defer.
+func cliTransports() (*cliManager, func(), error) {
 	path, err := storage.DefaultPath()
 	if err != nil {
 		return nil, func() {}, err

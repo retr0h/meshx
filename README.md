@@ -15,7 +15,7 @@
 <p align="center">Glitched-out terminal Meshtastic messenger.</p>
 
 <p align="center">
-  <a href="asset/ui.png"><img src="asset/ui.png" width="85%" alt="meshX — BitchX-style log, glitched status bar, per-sender nick colors, threaded replies"></a>
+  <a href="asset/ui.gif"><img src="asset/ui.gif" width="85%" alt="meshX — BitchX-style log, glitched status bar, per-sender nick colors, threaded replies"></a>
 </p>
 
 An irssi-style chat client for your LoRa radio with a vintage BBS

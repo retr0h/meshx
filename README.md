@@ -15,7 +15,7 @@
 <p align="center">Glitched-out terminal Meshtastic messenger.</p>
 
 <p align="center">
-  <a href="asset/ui.png"><img src="asset/ui.png" width="85%" alt="meshX — BitchX-style log, glitched status bar, per-sender nick colors, threaded replies"></a>
+  <a href="asset/ui.gif"><img src="asset/ui.gif" width="85%" alt="meshX — BitchX-style log, glitched status bar, per-sender nick colors, threaded replies"></a>
 </p>
 
 An irssi-style chat client for your LoRa radio with a vintage BBS
@@ -38,8 +38,6 @@ baked in.
 - 📌 **Stable tmux-pane channel tabs** + `Alt+1..4` quick-hop
 - ❓ **Scrollable `?` help overlay** — every keybinding and command, vim-scrollable
 - 💾 **bbolt-backed history** — message log, node cache, and paired BLE devices survive restarts (`~/.meshx/meshx.bolt`)
-- ⏳ **Ephemeral notices** — `/whois` / `/ping` / `/config` cards auto-expire after 60s with a fade; `/pin` or `P` holds them with `⌜ ⌟` corners
-- 🔁 **Stale-send recovery** — `R` resends pending or failed messages; boot sweep flips zombie rows to `✗` so they're actionable
 
 ## 🔧 Install
 
@@ -107,7 +105,7 @@ meshX sits at the intersection of three lineages:
 ## 📚 Docs
 
 - [docs/commands.md](docs/commands.md) — every keybinding and slash-command, with the Meshtastic API call each command makes
-- [docs/development.md](docs/development.md) — setup, testing, conventions
+- [docs/development.md](docs/development.md) — architecture, setup, testing
 - [docs/contributing.md](docs/contributing.md) — PR workflow
 
 ## License

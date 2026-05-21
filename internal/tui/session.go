@@ -44,7 +44,7 @@ type radioSession interface {
 	// and ok=false when the pump is nil or its outbound buffer is full.
 	Send(cmd mdl.Command) (uint32, bool)
 
-	// PumpHandle returns the current Pump. Nil in demo mode or before
+	// PumpHandle returns the current Pump. Nil when no radio is connected or before
 	// the first dial. Callers that need to nil-check before sending
 	// use this; high-level send paths go through Send.
 	PumpHandle() radio.Pump
@@ -55,7 +55,7 @@ type radioSession interface {
 	StoreHandle() radio.Store
 
 	// BusHandle returns the event bus. Nil until AttachBus is called
-	// (demo mode / pre-construction). The TUI hands it to
+	// (no-radio mode / pre-construction). The TUI hands it to
 	// StoreBusSink so pump events fan out to bus subscribers as well
 	// as to the tea.Program.
 	BusHandle() radio.Bus

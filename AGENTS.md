@@ -9,7 +9,6 @@ history to a bbolt store at `~/.meshx/meshx.bolt`.
 ```bash
 just deps && go build -o meshx .   # build
 just test                           # lint + unit + coverage
-go run . demo                       # smoke-test the TUI with no radio
 ```
 
 ## Architecture
@@ -36,7 +35,6 @@ else — TUI, storage, bus — speaks `mdl.X` exclusively.
 
 | Package                     | What it does                                                          |
 | --------------------------- | --------------------------------------------------------------------- |
-| `cmd/`                      | Cobra command tree — `usb`, `ble`, `tcp`, `demo` subcommands          |
 | `internal/radio/`           | Per-radio session: `*State`, `Apply*` handlers, `ops_*` operations    |
 | `internal/bus/`             | In-process pub/sub event bus; slow consumers drop rather than block   |
 | `internal/meshx/model/`     | Canonical wire + persisted shapes — the lingua franca                 |

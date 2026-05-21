@@ -86,10 +86,6 @@ func (m *model) handleTab(dir int) {
 	}
 }
 
-// RunDemo launches the Bubble Tea model with the canonical Demo
-// fixture and no radio transport. Used for UI iteration, screenshots,
-// and smoke testing the interface without a LoRa device handy.
-
 func (m *model) openOverlay(kind overlayKind) {
 	m.overlay = kind
 	m.mode = modeNav
@@ -814,7 +810,7 @@ func (m *model) prefillInput(text string) tea.Cmd {
 
 // sendPlainMessage appends text as an outgoing message from "me" on
 // the current channel. In live-radio mode it also enqueues a ToRadio
-// text packet and persists the row so it survives a restart; in demo
+// text packet and persists the row so it survives a restart; in offline
 // mode it just updates local state.
 
 func (m *model) switchChannelByIndex(i int) {

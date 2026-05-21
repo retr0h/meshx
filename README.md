@@ -15,7 +15,7 @@
 <p align="center">Glitched-out terminal Meshtastic messenger.</p>
 
 <p align="center">
-  <a href="asset/ui.png"><img src="asset/ui.png" width="85%" alt="meshX in demo mode — BitchX-style log, glitched status bar, per-sender nick colors, threaded replies"></a>
+  <a href="asset/ui.png"><img src="asset/ui.png" width="85%" alt="meshX — BitchX-style log, glitched status bar, per-sender nick colors, threaded replies"></a>
 </p>
 
 An irssi-style chat client for your LoRa radio with a vintage BBS
@@ -23,25 +23,25 @@ aesthetic — maxheadroom palette, `░▒▓█` glitch borders, BitchX-style
 rotating splash, mutt-grade keyboard, and ham-radio slash-commands
 baked in.
 
-## Features
+## ✨ Features
 
-- **Connects to your Meshtastic radio** over USB serial, TCP, or Bluetooth LE (no radio needed for `meshx demo`)
-- **Bluetooth LE workflow** — `meshx ble scan` / `pair` / `list` / `connect` / `fav` to save multiple radios by uuid or friendly name and switch between them without re-pairing
-- **irssi-style modal UI** — input always live, `Esc` drops to scrollback nav
-- **mutt-grade message log** — dense one-row-per-message, zebra-striped, `j/k` walks
-- **Ham-radio slash-commands** — `/cq`, `/73`, `/qth`, `/rs`, `/qrz`, `/sk`, `/mesh`, + 9 more
-- **BitchX-style bracketed users grid** — `[ @KC7XYZ  ]` tiles with IRC sigils
-- **Maxheadroom 80s-neon palette** — cyan / mesh-green / magenta / pink, matches grind + tlock
-- **BitchX-style rotating ASCII splash** — different graffiti logo every launch
-- **Live `/` search** across log / channels / users with `n` / `N` cycling
-- **Tab completion** — commands, `#channels`, nicks; irssi nick-addressing quirk included
-- **Stable tmux-pane channel tabs** + `Alt+1..4` quick-hop
-- **Scrollable `?` help overlay** — every keybinding and command, vim-scrollable
-- **bbolt-backed history** — message log, node cache, and paired BLE devices survive restarts (`~/.meshx/meshx.bolt`)
-- **Ephemeral notices** — `/whois` / `/ping` / `/config` cards auto-expire after 60s with a fade; `/pin` or `P` holds them with `⌜ ⌟` corners
-- **Stale-send recovery** — `R` resends pending or failed messages; boot sweep flips zombie rows to `✗` so they're actionable
+- 📡 **Connects to your Meshtastic radio** over USB serial, TCP, or Bluetooth LE
+- 🔵 **Bluetooth LE workflow** — `meshx ble scan` / `pair` / `list` / `connect` / `fav` to save multiple radios by uuid or friendly name and switch between them without re-pairing
+- ⌨️ **irssi-style modal UI** — input always live, `Esc` drops to scrollback nav
+- 📜 **mutt-grade message log** — dense one-row-per-message, zebra-striped, `j/k` walks
+- 📻 **Ham-radio slash-commands** — `/cq`, `/73`, `/qth`, `/rs`, `/qrz`, `/sk`, `/mesh`, + 9 more
+- 👥 **BitchX-style bracketed users grid** — `[ @KC7XYZ  ]` tiles with IRC sigils
+- 🌈 **Maxheadroom 80s-neon palette** — cyan / mesh-green / magenta / pink, matches grind + tlock
+- 🎨 **BitchX-style rotating ASCII splash** — different graffiti logo every launch
+- 🔍 **Live `/` search** across log / channels / users with `n` / `N` cycling
+- ⇥ **Tab completion** — commands, `#channels`, nicks; irssi nick-addressing quirk included
+- 📌 **Stable tmux-pane channel tabs** + `Alt+1..4` quick-hop
+- ❓ **Scrollable `?` help overlay** — every keybinding and command, vim-scrollable
+- 💾 **bbolt-backed history** — message log, node cache, and paired BLE devices survive restarts (`~/.meshx/meshx.bolt`)
+- ⏳ **Ephemeral notices** — `/whois` / `/ping` / `/config` cards auto-expire after 60s with a fade; `/pin` or `P` holds them with `⌜ ⌟` corners
+- 🔁 **Stale-send recovery** — `R` resends pending or failed messages; boot sweep flips zombie rows to `✗` so they're actionable
 
-## Install
+## 🔧 Install
 
 ```bash
 curl -fsSL https://github.com/retr0h/meshx/raw/main/install.sh | sh
@@ -58,17 +58,16 @@ go build -o meshx .
 install -m 755 meshx ~/.local/bin/meshx
 ```
 
-## Quick start
+## 🚀 Quick start
 
 ```sh
-meshx demo      # try the UI with no radio
 meshx           # auto-connect to a plugged-in radio (USB → saved BLE)
 meshx --help    # usb, tcp, ble subcommand trees
 ```
 
 Full command + keybinding reference in [`docs/commands.md`](docs/commands.md).
 
-## How it works
+## 🔌 How it works
 
 meshX is a **Meshtastic client**. It connects to a radio you already
 own (T-Beam, Heltec, RAK, Station G2, etc.) over one of three
@@ -84,12 +83,10 @@ which transport's carrying the packets. meshX subscribes to
 `FromRadio`, emits `ToRadio` for sends, and surfaces everything in a
 scrollable terminal chat UI with vim/irssi ergonomics.
 
-`meshx demo` ships canned messages + fake telemetry so you can try
-the UI without a radio. Every report (`/rs`, `/ping`, `/tr`,
-`/whois`) pulls from node state that maps 1:1 to real Meshtastic
-protobuf fields.
+Every report (`/rs`, `/ping`, `/tr`, `/whois`) pulls from node state
+that maps 1:1 to real Meshtastic protobuf fields.
 
-## Inspiration
+## 💡 Inspiration
 
 meshX sits at the intersection of three lineages:
 
@@ -100,14 +97,14 @@ meshX sits at the intersection of three lineages:
 - **[tmux](https://github.com/tmux/tmux)** — `Ctrl+N / Ctrl+P` channel cycle and the giant flash-digit pane picker.
 - **[grind](https://github.com/retr0h/grind), [tlock](https://github.com/retr0h/tlock)** — sibling retr0h projects; meshX reuses their maxheadroom palette, `░▒▓█` block-border language, and block-art primitives.
 
-## Roadmap
+## 🗺️ Roadmap
 
-- [x] **PSK import** — `/channel add <meshtastic://url>` paste a shared-channel link and join without manually typing the PSK
-- [x] **QR code share** — `/channel share <name>` emits the meshtastic:// URL as ASCII QR for phone-side scanning (uses `▀` half-block for ~1:1 module aspect)
-- [x] **Channel mint + delete** — `/channel new <name>` generates a random AES256 PSK locally and pushes via `AdminMessage_SetChannel`; `/channel del <name>` disables a slot. PSK never lands on disk
-- [ ] **Low-color / no-truecolor fallback palette** — detect `$COLORTERM` / `$TERM` and swap the neon maxheadroom hex values for a 16-color ANSI ladder when the terminal doesn't support 24-bit color; ASCII fallback (`===` / `---`) for the `░▒▓█` chrome on terminals without unicode block support
+- [x] 🔑 **PSK import** — `/channel add <meshtastic://url>` paste a shared-channel link and join without manually typing the PSK
+- [x] 📱 **QR code share** — `/channel share <name>` emits the meshtastic:// URL as ASCII QR for phone-side scanning
+- [x] 🔒 **Channel mint + delete** — `/channel new <name>` generates a random AES256 PSK locally and pushes via `AdminMessage_SetChannel`; `/channel del <name>` disables a slot
+- [ ] 🎨 **Low-color fallback palette** — detect `$COLORTERM` / `$TERM` and swap hex values for 16-color ANSI when the terminal doesn't support 24-bit color
 
-## Docs
+## 📚 Docs
 
 - [docs/commands.md](docs/commands.md) — every keybinding and slash-command, with the Meshtastic API call each command makes
 - [docs/development.md](docs/development.md) — setup, testing, conventions

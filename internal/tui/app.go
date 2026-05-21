@@ -29,11 +29,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/retr0h/meshx/internal/bus"
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 	"github.com/retr0h/meshx/internal/meshx/pump"
 	"github.com/retr0h/meshx/internal/meshx/storage"
 	"github.com/retr0h/meshx/internal/radio"
-	"github.com/retr0h/meshx/internal/sdk"
 )
 
 // model uses the canonical item types from model/. Local aliases
@@ -249,6 +249,8 @@ const (
 type model struct {
 	*radio.State
 
+	eventBus *bus.Bus
+
 	w, h int
 
 	mode mode
@@ -306,13 +308,6 @@ type model struct {
 	// newModel from the concrete *radio.Session's AttachPump method;
 	// nil-safe so demo / remote modes (no local pump) skip cleanly.
 	attachPump func(radio.Pump)
-
-	// remoteMode is true when the model is talking to a remote daemon
-	// over HTTP+SSE rather than owning the radio in-process. Init()
-	// branches on this — local mode fires openPumpMsg to spawn the
-	// transport pump; remote mode skips it because the daemon owns
-	// the pump and feeds events back via SSE.
-	remoteMode bool
 
 	// initialFocusCmd captures the tea.Cmd returned by
 	// textinput.Focus() in newModel — the bubbles cursor blink
@@ -405,9 +400,17 @@ func RunRadio(dest string) error {
 	drv := radio.New(sess, nil, nil)
 	// Surface the first persistence failure of the session as a
 	// permanent "-!- storage: ..." row in the messages pane;
-	// subsequent failures drop silently so a degraded sqlite handle
+	// subsequent failures drop silently so a degraded bolt handle
 	// can't machine-gun the log.
 	drv.OnStoreError = drv.AlertStorageError
+	// Attach the event bus so pump events fan out to any future
+	// subscriber in addition to the TUI's tea.Program.Send path.
+	// busAdapter bridges *bus.Bus (Publish takes bus.Event) to the
+	// radio.Bus interface (Publish takes any) — bus.Event is a named
+	// alias for any, but Go's structural typing requires exact
+	// signature match, so the one-liner adapter is the right seam.
+	eventBus := bus.New()
+	drv.AttachBus(busAdapter{b: eventBus})
 
 	// Local-mode hydration: open SQLite, replay history, claim radio
 	// identity, run stale-pending sweep. Returns the system-line
@@ -415,10 +418,7 @@ func RunRadio(dest string) error {
 	notices := hydrateLocalSession(drv, dest)
 
 	m := newModel(drv, notices...)
-	// Off-interface concrete-type wiring: AttachPump is a once-per-
-	// session construction step, not running-TUI behavior, so it
-	// stays off radioSession. Bind the concrete method as a callback
-	// the tea loop can invoke when the dialed pump message arrives.
+	m.eventBus = eventBus
 	m.attachPump = drv.AttachPump
 	// Close the persistence handle when the tea loop exits. Nil-safe:
 	// if hydration didn't open a store, StoreHandle() is nil and the
@@ -443,76 +443,14 @@ func RunRadio(dest string) error {
 	return err
 }
 
-// RunRadioRemote launches the TUI against a remote daemon. The daemon
-// owns the radio (pump, storage, persistence); the TUI consumes its
-// HTTP+SSE API. State is seeded from /radios/{id} + /channels +
-// /nodes + /messages, then the SSE stream injects mdl.X events into
-// the model's Update loop where the existing apply* handlers run.
-//
-// authToken is the bearer token the daemon expects (empty = no auth,
-// for loopback daemons that pass --auth-disabled or run unauthed).
-// It's forwarded into NewRemote so every HTTP call + the SSE stream
-// carry `Authorization: Bearer <token>`.
-//
-// No Pump.Send happens client-side — outbound mdl.SendText goes
-// through Remote.Send which POSTs to /radios/{id}/messages. No store
-// either — StoreHandle returns nil and the apply* handlers' nil-check
-// pattern (already present for demo mode) becomes a no-op.
-func RunRadioRemote(serverURL, authToken, radioID string) error {
-	r, err := sdk.NewRemote(serverURL, authToken, radioID)
-	if err != nil {
-		return err
-	}
-	defer r.Stop()
+// (RunRadioRemote removed — remote/daemon mode deleted in Phase 1 simplification.
+// RunRadio is the only entry point; the TUI always owns the radio in-process.)
 
-	notices := []string{"remote: connected to " + serverURL}
-	if n := len(r.Snapshot().Messages); n > 0 {
-		notices = append(notices, fmt.Sprintf(
-			"remote: replayed %d messages from daemon", n,
-		))
-	}
-	if n := len(r.Snapshot().Nodes); n > 0 {
-		notices = append(notices, fmt.Sprintf(
-			"remote: %d known peers from daemon", n,
-		))
-	}
+// busAdapter bridges *bus.Bus (whose Publish takes bus.Event, a named
+// alias for any) to the radio.Bus interface (Publish takes any).
+type busAdapter struct{ b *bus.Bus }
 
-	m := newModel(r, notices...)
-	// Remote mode never opens a local pump, but bind anyway in case
-	// a future remote-with-fallback flow attaches one. *sdk.Remote
-	// embeds *radio.Session, so AttachPump is method-promoted.
-	m.attachPump = r.AttachPump
-	slot := &programSlot{}
-	m.programSlot = slot
-	program := tea.NewProgram(m, tea.WithAltScreen())
-	slot.p = program
-	defer func() { slot.p = nil }()
-
-	// Wire SSE into the running tea program. program.Send is the
-	// thread-safe way to inject messages from a goroutine into the
-	// model's Update loop. tea.Program.Send takes a tea.Msg (which is
-	// any), so the func(any) shape on Remote stays bubbletea-free.
-	r.Start(func(msg any) { program.Send(msg) })
-
-	_, err = program.Run()
-	return err
-}
-
-// (newRemoteModel removed — collapsed into the unified newModel above.
-// Both RunRadio and RunRadioRemote now hand a populated radioSession
-// to newModel along with their own startup-notice slices.)
-
-// teaProgramSink wraps *tea.Program to satisfy pump.Sink. tea.Msg is
-// `any` and Send's bodies are identical, but Go's structural typing
-// requires exact signature match — Send(tea.Msg) and Send(any) are
-// distinct method sets even though the parameter types collapse to
-// the same interface{}.
-type teaProgramSink struct{ p *tea.Program }
-
-// Send forwards an event into the running tea program. Called from
-// the pump goroutine; tea.Program.Send is documented as goroutine-
-// safe (it pushes onto an internal channel the runtime drains).
-func (s teaProgramSink) Send(msg any) { s.p.Send(msg) }
+func (a busAdapter) Publish(event any) { a.b.Publish(event) }
 
 // programSlot is a hand-off type that lets the model surface the
 // running *tea.Program to Update without resorting to package-level
@@ -579,16 +517,10 @@ func mod(x, y float64) float64 {
 
 // newModel is the unified bubble-tea constructor — works against any
 // radioSession. The driver's *State must already be populated by the
-// caller (RunRadio replays from SQLite, RunRadioRemote seeds via
-// HTTP); newModel builds the UI shell, drops the splash card, and
-// emits any caller-supplied startup notices in order. extraNotices
-// are emitted as `-!-` system rows BEFORE the splash so the BitchX
-// banner stays at the bottom of the log on launch.
-//
-// remoteMode is inferred from the driver: a driver with no Pump and
-// no Store IS a remote driver (it's neither dialing radios nor
-// owning local persistence — both are the daemon's job). The flag
-// gates Init()'s openPumpMsg dispatch.
+// caller (RunRadio replays from SQLite); newModel builds the UI shell,
+// drops the splash card, and emits any caller-supplied startup notices
+// in order. extraNotices are emitted as `-!-` system rows BEFORE the
+// splash so the BitchX banner stays at the bottom of the log on launch.
 func newModel(d radioSession, extraNotices ...string) model {
 	// Always-on input bar at the bottom — composes messages, or runs
 	// /commands when the line begins with "/". irssi-style.
@@ -618,9 +550,8 @@ func newModel(d radioSession, extraNotices ...string) model {
 
 	chosenSplash := pickSplash()
 	m := model{
-		State:       d.Snapshot(),
+		State:       d.GetState(),
 		session:     d,
-		remoteMode:  d.PumpHandle() == nil && d.StoreHandle() == nil,
 		mode:        modeInput,
 		focused:     paneMessages,
 		splash:      chosenSplash,
@@ -678,11 +609,11 @@ func hydrateLocalSession(drv *radio.Session, dest string) []string {
 	if err != nil {
 		return notices
 	}
-	sqliteStore, err := storage.New(path)
+	boltStore, err := storage.New(path)
 	if err != nil {
 		return notices
 	}
-	var store radio.Store = sqliteStore
+	var store radio.Store = boltStore
 	drv.AttachStore(store)
 
 	// Identity + NodeDB + history + ghost-peer + last-heard backfill
@@ -703,10 +634,10 @@ func hydrateLocalSession(drv *radio.Session, dest string) []string {
 	// rows leave the model defaults intact. Lives in the TUI rather
 	// than HydrateFromStore because these are presentation prefs the
 	// daemon doesn't need to read.
-	if v, ok := store.GetSetting("", "ding_muted"); ok {
+	if v, ok, _ := store.GetSetting("", "ding_muted"); ok {
 		drv.State.DingMuted = v == "on"
 	}
-	if v, ok := store.GetSetting(drv.State.RadioID, "radio_buzzer"); ok {
+	if v, ok, _ := store.GetSetting(drv.State.RadioID, "radio_buzzer"); ok {
 		drv.State.RadioBuzzerEnabled = v != "off"
 	}
 
@@ -745,14 +676,12 @@ func (m model) Init() tea.Cmd {
 		// ops when there's nothing expiring.
 		noticeTickCmd(),
 	}
-	// Live-radio mode: kick off the pump from within the running
-	// program. Deferring to Init (rather than RunRadio) guarantees
-	// tea's main loop is up before the pump's first p.Send() — no
-	// deadlock. The tea.Cmd returns an openPumpMsg which we handle
-	// in Update by doing the actual Dial+spawn. Skipped in remote
-	// mode — the daemon owns the pump there, we receive events over
-	// SSE instead.
-	if !m.remoteMode && m.ConnectDest != "" {
+	// Kick off the pump from within the running program. Deferring to
+	// Init (rather than RunRadio) guarantees tea's main loop is up
+	// before the pump's first p.Send() — no deadlock. The tea.Cmd
+	// returns an openPumpMsg which we handle in Update by doing the
+	// actual Dial+spawn.
+	if m.ConnectDest != "" {
 		cmds = append(cmds, func() tea.Msg {
 			return openPumpMsg{dest: m.ConnectDest}
 		})
@@ -848,15 +777,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = m.reconnectFlashText()
 		m.flashSeen = m.flash
 		m.flashSeenAt = time.Now()
-		// Concrete *pump.Pump cast to the Pump interface at the
-		// construction site (osapi-io). The compile-time assertion
-		// here catches any drift the moment the interface gains a
-		// method *pump.Pump doesn't implement. The Sink wrapper
-		// adapts *tea.Program (whose Send takes tea.Msg) to
-		// pump.Sink (whose Send takes any) — same underlying type,
-		// different signature, so Go's structural typing needs the
-		// trampoline.
-		var p radio.Pump = pump.New(msg.dest, teaProgramSink{p: m.programSlot.p})
+		// Pump publishes to the Bus only. The TUI subscribes to
+		// the Bus like any other consumer — a goroutine bridges
+		// Bus events to tea.Program.Send.
+		var p radio.Pump = pump.New(msg.dest, &pump.BusSink{
+			Bus: m.session.BusHandle(),
+		})
+		// Subscribe the TUI to the Bus.
+		sub := m.eventBus.Subscribe(64)
+		prog := m.programSlot.p
+		go func() {
+			for ev := range sub {
+				prog.Send(ev)
+			}
+		}()
 		if m.attachPump != nil {
 			m.attachPump(p)
 		}

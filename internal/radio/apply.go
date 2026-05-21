@@ -21,14 +21,12 @@
 package radio
 
 // apply.go is the canonical inbound-event handler — the single place
-// State mutates in response to a translated FromRadio event. Both
-// the TUI (local mode) and the daemon's pump-driven sink (server
-// mode + remote mode TUI consuming SSE) call into these methods so
-// State stays consistent regardless of who's driving.
+// State mutates in response to a translated FromRadio event. The TUI
+// (local mode) calls into these methods so State stays consistent.
 //
 // Design split:
-//   - Session.ApplyX  — STATE truth: collection mutations, persistence,
-//                      Publish fan-out. Idempotent enough for replay.
+//   - Session.ApplyX  — STATE truth: collection mutations, persistence.
+//                      Idempotent enough for replay.
 //   - TUI react*     — TUI-only consequences: flash text, scrollback
 //                      cursor follow-tail, terminal ding, systemBlock /
 //                      systemLine emissions, modeFlash transitions.
@@ -62,9 +60,6 @@ type ApplyMyInfoResult struct {
 // we keep the old RadioID so apply* paths don't crash later trying
 // to scope by an empty key.
 func (s *Session) ApplyMyInfo(msg mdl.MyInfo) ApplyMyInfoResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.Publish(Event{Kind: EventMyInfo, Data: msg})
 	res := ApplyMyInfoResult{OldRadioID: s.State.RadioID}
 	s.State.MyNodeNum = msg.NodeNum
 	if s.store != nil {
@@ -80,9 +75,6 @@ func (s *Session) ApplyMyInfo(msg mdl.MyInfo) ApplyMyInfoResult {
 // ApplyMetadata stamps firmware + hw flags from the radio's one-shot
 // Metadata envelope. Surfaces in the status bar.
 func (s *Session) ApplyMetadata(msg mdl.Metadata) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.Publish(Event{Kind: EventMetadata, Data: msg})
 	s.State.RadioFirmware = msg.FirmwareVersion
 	s.State.RadioDeviceState = msg.DeviceStateVer
 	s.State.RadioHasWifi = msg.HasWifi
@@ -92,9 +84,6 @@ func (s *Session) ApplyMetadata(msg mdl.Metadata) {
 // ApplyLoraConfig stamps the radio's tx_power, region, and modem
 // preset.
 func (s *Session) ApplyLoraConfig(msg mdl.LoraConfig) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.Publish(Event{Kind: EventLoRaConfig, Data: msg})
 	s.State.RadioTxPower = msg.TxPowerDBm
 	s.State.RadioRegion = string(msg.Region)
 	s.State.RadioModemPreset = string(msg.ModemPreset)
@@ -103,9 +92,6 @@ func (s *Session) ApplyLoraConfig(msg mdl.LoraConfig) {
 // ApplyDeviceConfig stamps the radio's role (Client / Router /
 // Repeater / Tracker).
 func (s *Session) ApplyDeviceConfig(msg mdl.DeviceConfig) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.Publish(Event{Kind: EventDeviceConfig, Data: msg})
 	s.State.RadioRole = string(msg.Role)
 }
 
@@ -113,9 +99,6 @@ func (s *Session) ApplyDeviceConfig(msg mdl.DeviceConfig) {
 // telemetry. Peer metrics are ignored here for now (peer metrics
 // land in PeerEnv via ApplyEnvMetrics).
 func (s *Session) ApplyDeviceMetrics(msg mdl.DeviceMetrics) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.Publish(Event{Kind: EventDeviceMetrics, Data: msg})
 	if msg.FromNodeNum == s.State.MyNodeNum || msg.FromNodeNum == 0 {
 		s.State.BatteryLevel = msg.BatteryLevel
 		s.State.BatteryVoltage = msg.Voltage
@@ -129,9 +112,6 @@ func (s *Session) ApplyDeviceMetrics(msg mdl.DeviceMetrics) {
 // temperature / humidity / pressure / gas. Indexed by FromNodeNum
 // so /env or per-peer dashboards can render the freshest reading.
 func (s *Session) ApplyEnvMetrics(msg mdl.EnvMetrics) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.Publish(Event{Kind: EventEnvMetrics, Data: msg})
 	if s.State.PeerEnv == nil {
 		s.State.PeerEnv = make(map[uint32]PeerEnvMetrics)
 	}
@@ -154,9 +134,6 @@ type ApplyPositionResult struct {
 // ApplyPosition mutates PeerPositions and (for self) MyLatitude /
 // MyLongitude / MyAltitude.
 func (s *Session) ApplyPosition(msg mdl.Position, grid string) ApplyPositionResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.PublishPosition(msg)
 	if s.State.PeerPositions == nil {
 		s.State.PeerPositions = make(map[uint32]PeerPosition)
 	}
@@ -182,12 +159,8 @@ func (s *Session) ApplyPosition(msg mdl.Position, grid string) ApplyPositionResu
 // so a future /channel new can find the first free slot. PSK rides
 // along (RAM-only — never persisted) so /channel share can build a
 // meshtastic:// URL without a second roundtrip. Preserves unread
-// counts across re-apply. Publishes after mutation so SSE
-// subscribers see the event in lockstep with State.
+// counts across re-apply.
 func (s *Session) ApplyChannelInfo(msg mdl.ChannelInfo) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.PublishChannelInfo(msg)
 	const roleDisabled = "DISABLED"
 	for len(s.State.Channels) <= msg.Index {
 		s.State.Channels = append(s.State.Channels, mdl.ChannelItem{Role: roleDisabled})
@@ -236,11 +209,8 @@ type ApplyNodeInfoResult struct {
 // ApplyNodeInfo upserts a peer NodeInfo. Synthesizes firmware-default
 // callsigns when the wire payload is content-free (peer the radio has
 // only forwarded for). Preserves user prefs (Fav) and the freshest
-// LastHeardAt across updates. Publishes after mutation.
+// LastHeardAt across updates.
 func (s *Session) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.PublishNodeInfo(msg)
 	unresolved := false
 	if msg.LongName == "" && msg.ShortName == "" {
 		long, short := mdl.DefaultCallsign(msg.NodeNum)
@@ -305,19 +275,10 @@ func (s *Session) ApplyNodeInfo(msg mdl.NodeInfo) ApplyNodeInfoResult {
 
 // ApplyPing records a REPLY_APP echo's telemetry against the
 // matching peer's NodeItem (LastHops / LastSNR / LastRSSI /
-// LastHeardAt) and publishes the event so SSE consumers see the
-// ping land. The TUI side correlates the ping against its
+// LastHeardAt). The TUI side correlates the ping against its
 // PendingPing slot and renders the systemBlock — that lives in
 // the TUI because the report shape is presentation, not state.
-//
-// The state mutation here mirrors the per-Node telemetry refresh
-// that happens on every text packet, so a remote client doing
-// /whois on a peer that just answered a /ping reads the freshest
-// signal numbers without needing the TUI's correlation logic.
 func (s *Session) ApplyPing(msg mdl.Ping) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.PublishPing(msg)
 	if idx, ok := s.State.NodesByNum[msg.FromNum]; ok && idx < len(s.State.Nodes) {
 		s.State.Nodes[idx].LastHops = msg.Hops
 		if msg.SNR != "" {
@@ -331,14 +292,10 @@ func (s *Session) ApplyPing(msg mdl.Ping) {
 }
 
 // ApplyTraceroute records a TRACEROUTE_APP reply's hop count on
-// the source peer's NodeItem and publishes the event. Path
-// rendering (systemBlock with the resolved hop chain) lives in
-// the TUI — it's presentation, and the daemon doesn't know which
-// callsigns the consumer wants to see.
+// the source peer's NodeItem. Path rendering (systemBlock with the
+// resolved hop chain) lives in the TUI — it's presentation, and
+// the daemon doesn't know which callsigns the consumer wants to see.
 func (s *Session) ApplyTraceroute(msg mdl.Traceroute) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.PublishTraceroute(msg)
 	if idx, ok := s.State.NodesByNum[msg.FromNum]; ok && idx < len(s.State.Nodes) {
 		s.State.Nodes[idx].LastHops = len(msg.Route)
 	}
@@ -359,25 +316,15 @@ type RecordOutboundOptions struct {
 }
 
 // RecordOutbound appends a "mine" row for a just-sent text packet
-// into State.Messages, persists it, indexes by PacketID, and
-// publishes the synthesized mdl.Text event so SSE consumers (remote
-// TUIs in particular) see their own outbound message reflected in
-// the chat log immediately rather than waiting for the radio to
-// echo a packet that's never coming.
+// into State.Messages, persists it, and indexes by PacketID.
 //
 // State mutation is single-source: TUI's sendPlainReply /
-// sendBangReply and the daemon's handleSendMessage both call this.
-// Without it, remote-mode TUIs would type a message, see it
-// disappear, and never know the daemon actually accepted it.
+// sendBangReply both call this.
 func (s *Session) RecordOutbound(opts RecordOutboundOptions) ApplyTextResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.recordOutbound(opts)
 }
 
-// recordOutbound is the lock-free core of RecordOutbound. Caller must
-// hold s.mu. Split out so SendMessage (which already holds the lock)
-// can call this without re-entering the mutex.
+// recordOutbound is the core of RecordOutbound.
 func (s *Session) recordOutbound(opts RecordOutboundOptions) ApplyTextResult {
 	channelName := s.State.CurrentChannel
 	if opts.Channel >= 0 && opts.Channel < len(s.State.Channels) {
@@ -407,14 +354,6 @@ func (s *Session) recordOutbound(opts RecordOutboundOptions) ApplyTextResult {
 	if s.store != nil {
 		s.storeError(s.store.SaveMessage(s.State.RadioID, channelName, item.Message))
 	}
-	// Publish a synthesized mdl.Text so SSE subscribers get a
-	// live "new outbound message" event in lockstep with the
-	// State.Messages append. Mirrors the inbound ApplyText path.
-	s.Publish(Event{Kind: EventText, Data: mdl.Text{
-		Body:    item.Message,
-		Channel: opts.Channel,
-		ToNum:   opts.ToNum,
-	}})
 	return ApplyTextResult{Index: idx, FromMine: true}
 }
 
@@ -426,16 +365,8 @@ func timeHHMM(t time.Time) string {
 	return t.Format("15:04")
 }
 
-// ApplyReconnecting reflects the pump's retry banner onto State and
-// publishes the event so SSE subscribers (remote TUIs, monitoring
-// dashboards) see the dialing/retry status in lockstep with the
-// daemon's own State. Without publishing, a remote TUI watching the
-// daemon would only learn the radio dropped when text packets stop
-// arriving.
+// ApplyReconnecting reflects the pump's retry banner onto State.
 func (s *Session) ApplyReconnecting(ev mdl.Reconnecting) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.Publish(Event{Kind: EventReconnecting, Data: ev})
 	s.State.Reconnect = &ReconnectState{
 		Attempt: ev.Attempt,
 		ReadyAt: time.Now().Add(ev.After),
@@ -443,13 +374,10 @@ func (s *Session) ApplyReconnecting(ev mdl.Reconnecting) {
 	}
 }
 
-// ApplyDisconnected flips Connected = false and publishes. The
-// reconnect banner is left intact; ApplyReconnecting owns its
-// lifecycle (clear happens on the next ApplyConfigComplete).
-func (s *Session) ApplyDisconnected(ev mdl.Disconnected) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer s.Publish(Event{Kind: EventDisconnected, Data: ev})
+// ApplyDisconnected flips Connected = false. The reconnect banner is
+// left intact; ApplyReconnecting owns its lifecycle (clear happens
+// on the next ApplyConfigComplete).
+func (s *Session) ApplyDisconnected(_ mdl.Disconnected) {
 	s.State.Connected = false
 }
 
@@ -458,13 +386,10 @@ func (s *Session) ApplyDisconnected(ev mdl.Disconnected) {
 // the first ConfigComplete (TUI uses it to decide whether to emit
 // the "sync complete" system line).
 func (s *Session) ApplyConfigComplete() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	wasDisconnected := !s.State.Connected
 	s.State.Connected = true
 	s.State.Reconnect = nil
 	s.State.SyncReceived = 0
-	s.Publish(Event{Kind: EventConfigComplete, Data: mdl.ConfigComplete{}})
 	return wasDisconnected
 }
 

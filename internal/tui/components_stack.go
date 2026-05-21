@@ -151,27 +151,25 @@ func distribute(total int, children []SizedChild) []int {
 	return out
 }
 
-// BorderChars defines the glyph set a Bordered uses for its frame.
-// Allows DoubleBorder (╔ ═ ╗ ║ ╚ ╝) and NormalBorder (┌ ─ ┐ │ └ ┘)
-// without coupling to lipgloss.
+// BorderChars defines the glyph set a Bordered uses for its top and
+// bottom rules. Left/right rails are intentionally absent — panes use
+// only horizontal rules so emoji-width overflow can never push content
+// off the right edge.
 type BorderChars struct {
-	TopLeft, Top, TopRight          string
-	Left, Right                     string
-	BottomLeft, Bottom, BottomRight string
+	Top    string
+	Bottom string
 }
 
-// DoubleBorder is the heavy double-line frame used by focused panes.
+// DoubleBorder is the heavy double-line rule used by focused panes.
 var DoubleBorder = BorderChars{
-	TopLeft: "╔", Top: "═", TopRight: "╗",
-	Left: "║", Right: "║",
-	BottomLeft: "╚", Bottom: "═", BottomRight: "╝",
+	Top:    "═",
+	Bottom: "═",
 }
 
-// NormalBorder is the thin single-line frame used by unfocused panes.
+// NormalBorder is the thin single-line rule used by unfocused panes.
 var NormalBorder = BorderChars{
-	TopLeft: "┌", Top: "─", TopRight: "┐",
-	Left: "│", Right: "│",
-	BottomLeft: "└", Bottom: "─", BottomRight: "┘",
+	Top:    "─",
+	Bottom: "─",
 }
 
 // Bordered wraps Inner in a frame, subtracting 2 cells (left+right)
@@ -197,13 +195,15 @@ type Bordered struct {
 }
 
 // Render produces the bordered frame at exactly box.Width × box.Height.
+// Only top and bottom horizontal rules are drawn — no left/right rails —
+// so emoji-width content can never push a rail character off-column.
 func (b Bordered) Render(box Box) string {
-	if box.Width < 2 || box.Height < 2 {
+	if box.Width < 1 || box.Height < 2 {
 		// Degenerate: fall back to Spacer so the parent's box budget
 		// is still satisfied.
 		return Spacer{}.Render(box)
 	}
-	innerW := box.Width - 2 - b.Padding[1] - b.Padding[3]
+	innerW := box.Width - b.Padding[1] - b.Padding[3]
 	innerH := box.Height - 2 - b.Padding[0] - b.Padding[2]
 	if innerW < 0 {
 		innerW = 0
@@ -211,33 +211,22 @@ func (b Bordered) Render(box Box) string {
 	if innerH < 0 {
 		innerH = 0
 	}
-	// Top border row: ╔═══...═══╗
-	top := b.Chars.TopLeft +
-		strings.Repeat(b.Chars.Top, box.Width-2) +
-		b.Chars.TopRight
+	// Top border row: ═══...═══ (full width, no corners).
+	top := strings.Repeat(b.Chars.Top, box.Width)
 	if b.BorderStyle != nil {
 		top = b.BorderStyle.Render(top)
 	}
 	// Bottom border row.
-	bot := b.Chars.BottomLeft +
-		strings.Repeat(b.Chars.Bottom, box.Width-2) +
-		b.Chars.BottomRight
+	bot := strings.Repeat(b.Chars.Bottom, box.Width)
 	if b.BorderStyle != nil {
 		bot = b.BorderStyle.Render(bot)
 	}
 	// Inner content: render Inner at the smaller box, then wrap each
-	// line with side rails and any horizontal padding.
+	// line with horizontal padding only (no side rails).
 	var innerLines []string
 	if innerW > 0 && innerH > 0 {
 		out := renderAndCheck(b.Inner, Box{Width: innerW, Height: innerH})
 		innerLines = strings.Split(out, "\n")
-	}
-	// Side rails for content + padding rows.
-	leftRail := b.Chars.Left
-	rightRail := b.Chars.Right
-	if b.BorderStyle != nil {
-		leftRail = b.BorderStyle.Render(b.Chars.Left)
-		rightRail = b.BorderStyle.Render(b.Chars.Right)
 	}
 	hpadL := strings.Repeat(" ", b.Padding[3])
 	hpadR := strings.Repeat(" ", b.Padding[1])
@@ -250,7 +239,7 @@ func (b Bordered) Render(box Box) string {
 		}
 	}
 	wrap := func(content string) string {
-		return leftRail + hpadL + content + hpadR + rightRail
+		return hpadL + content + hpadR
 	}
 	// Vertical padding rows (above and below inner content).
 	padRow := func() string {

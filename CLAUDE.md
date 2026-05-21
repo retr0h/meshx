@@ -4,73 +4,60 @@ Architecture intent + standards for Claude Code working in this repo.
 File-by-file orientation lives in each package's `doc.go` and is
 cheaper to discover via `ls` / `grep` than to mirror here — that map
 rots silently every PR and stale info in context is worse than none.
-Setup, dev workflow, design notes, deployment modes, testing
-standards are in [`docs/development.md`](./docs/development.md).
+Setup, dev workflow, testing standards are in
+[`docs/development.md`](./docs/development.md).
 
 ## Project
 
 **meshX** — irssi-style terminal Meshtastic messenger. Connects to a
 Meshtastic-compatible LoRa radio over USB-serial, TCP (`meshtasticd`,
-port 4403), or BLE; surfaces the mesh in a Bubble Tea TUI; ships an
-HTTP+SSE daemon for headless / remote / agent consumers; plus an MCP
-server for LLM-agent integrations.
+port 4403), or BLE and surfaces the mesh in a Bubble Tea TUI.
 
 All three transports share one `Client` interface and funnel through
-the same pump → tea.Msg → model path, so the renderer never branches
+the same pump → event bus → TUI path, so the renderer never branches
 on transport type. Every telemetry field maps 1:1 to Meshtastic
 protobuf fields — no faked numbers.
 
 ## Architecture in one screen
 
 ```
-                radio (USB / BLE / TCP)
-                         │
-                         ▼
-                ┌──────────────────────┐
-                │  internal/meshx/     │  protobuf wire ⇄ canonical model
-                │  {model,pump,        │  (the lingua franca)
-                │   storage,transport} │
-                └──────────┬───────────┘
-                           ▼
-            ┌──────────────────────────────┐
-            │  internal/radio/             │  single source of truth:
-            │  *radio.Session              │  State + Apply* + ops_*
-            │  (Pump + Store + Subscribe)  │  (Mint/Send/Ping/Config…)
-            └──────┬──────┬──────┬─────────┘
-                   │      │      │
-                   ▼      ▼      ▼
-           ┌────────┐ ┌──────┐ ┌──────────┐
-           │  tui   │ │server│ │   mcp    │  three consumers of the
-           │ (local │ │(HTTP+│ │ (stdio   │  same Session methods —
-           │  TUI)  │ │ SSE) │ │  JSON-RPC)│ each is a thin adapter
-           └────────┘ └──┬───┘ └──────────┘
-                         │
-                         │ HTTP + SSE
-                         │
-              ┌──────────┴─────────────┐
-              │  meshx client {…}      │  CLI adapter (Phase A + B)
-              │  meshx mcp start       │  MCP adapter (stdio)
-              │  TUI in remote mode    │  sdk.Remote (gen.Client + SSE)
-              └────────────────────────┘
+            radio (USB / BLE / TCP)
+                     │
+                     ▼
+            ┌──────────────────────┐
+            │  internal/meshx/     │  protobuf wire ⇄ canonical model
+            │  {model,pump,        │
+            │   storage,transport} │
+            └──────────┬───────────┘
+                       │
+                  ┌────┴────┐
+                  │  write  │
+                  ▼         ▼
+            ┌─────────┐  ┌──────────┐
+            │  bbolt   │  │ event    │
+            │  Store   │  │ bus      │
+            └────┬────┘  └────┬─────┘
+                 │            │
+                 ▼            ▼
+            ┌──────────────────────┐
+            │  internal/tui/       │  Bubble Tea TUI
+            │  reads Store on      │  receives bus events
+            │  startup + events    │  via tea.Program.Send
+            └──────────────────────┘
 ```
 
 Key invariants:
 
-- **One source of truth per operation.** Every channel/config/send/
-  radio op lives once on `*radio.Session` (the `ops_*.go` files);
-  HTTP, TUI, MCP are 5–10 line adapters over those methods.
-- **Multi-radio.** The daemon's `Registry` multiplexes by `radio_id`;
-  every route + every MCP tool is radio-scoped.
-- **osapi-io / consumer-side interfaces.** Each package that consumes
-  a "driver" (server, tui, mcp) declares its own narrow `Driver` /
-  `radioSession` interface — concrete-type imports live only at the
-  constructor (`New`), where the compiler verifies structural fit.
-- **Transports are exclusive.** When the daemon is running, it owns
-  the BLE/USB adapter — clients (CLI, MCP) route through HTTP.
+- **Store is the source of truth.** The pump writes to bbolt, the
+  TUI reads from it. No shared mutable in-memory state.
+- **Event bus for real-time.** The pump publishes typed events after
+  each Store write; the TUI subscribes and re-reads. DB is
+  persistence, bus is notification.
+- **Store interface for testability.** Both pump and TUI depend on
+  the `Store` interface, not the concrete bbolt implementation.
+  Tests inject mocks/fakes.
 - **`internal/radio` is framework-free.** Ops methods return
-  `radio.OpError` (a domain error with an HTTP-like status code);
-  `internal/server` translates to `huma.Error*` at the handler
-  boundary. The radio package never imports HTTP frameworks.
+  `radio.OpError`; the TUI translates at its own boundary.
 
 ## Code standards
 
@@ -81,9 +68,11 @@ Key invariants:
   format + lint suite locally.
 - **Tests, not test plans** — every PR ships with the tests that
   verify it. See [`docs/development.md`](./docs/development.md#testing)
-  for the rules (table-driven, `httptest` for HTTP / SSE, in-process
-  `*radio.Session` for apply/publish/subscribe, one `Test<Subject>`
-  per public surface, `foo.go ↔ foo_test.go` file pairing).
+  for the rules (table-driven, in-process `*radio.Session` for ops,
+  one `Test<Subject>` per public surface, `foo.go ↔ foo_test.go`
+  file pairing).
+- **Interface-driven design** — Store, Pump, and Bus are interfaces.
+  Mocks for testing, concrete implementations for production.
 - **No inline hex colors** — palette constants live in
   `internal/tui/palette.go`. Names referenced below.
 

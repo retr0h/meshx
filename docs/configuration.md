@@ -3,8 +3,8 @@
 Every meshx subcommand resolves its inputs through three layers in strict
 precedence:
 
-1. **Explicit CLI flag** — e.g., `--server http://host:4404`.
-2. **Environment variable** — e.g., `MESHX_CLIENT_SERVER=...`.
+1. **Explicit CLI flag** — e.g., `--debug`.
+2. **Environment variable** — e.g., `MESHX_DEBUG=1`.
 3. **Hard-coded default** — what ships when neither is set.
 
 This is viper's standard precedence chain (`pflag > env > default`). Subcommands
@@ -21,55 +21,6 @@ These live on the cobra root (`cmd/root.go`) and apply to every subcommand.
 | `--json`  | —             | `false` | JSON log output via `slog.NewJSONHandler` (for aggregators) |
 | `-j`      | —             | `false` | Shorthand for `--json`                                      |
 
-## Server (`meshx server start`)
-
-| Flag                | Env                            | Default          | Purpose                                                                                                                                                         |
-| ------------------- | ------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--bind`            | `MESHX_SERVER_BIND`            | `127.0.0.1:4404` | HTTP listener. `127.0.0.1:*` is loopback-only; `:4404` or `0.0.0.0:4404` exposes the daemon                                                                     |
-| `--radio`           | `MESHX_SERVER_RADIO`           | _(none)_         | Pre-register a radio at boot (`ble:<uuid>`, `/dev/cu.usb…`, `host:port`)                                                                                        |
-| `--auth-token-file` | `MESHX_SERVER_AUTH_TOKEN_FILE` | _(none)_         | Path to the bearer-token file. Generated on first run (32 random bytes hex, mode 0o600). Required when `--bind` is non-loopback unless `--auth-disabled` is set |
-| `--auth-disabled`   | `MESHX_SERVER_AUTH_DISABLED`   | `false`          | Explicit opt-out of auth on a non-loopback bind. Useful for trusted internal networks                                                                           |
-
-The bind-aware auth policy:
-
-- **Loopback bind** (`127.0.0.1:*`, `localhost:*`): unauthenticated by default.
-  Operator can still opt in with `--auth-token-file`.
-- **Non-loopback bind**: refuses to start without either `--auth-token-file`
-  (sets up bearer auth) or `--auth-disabled` (explicit opt-out, logged loudly).
-- `/healthz` is always exempt — auth middleware skips it so external liveness
-  probes work without credentials.
-
-## Client (`meshx client …`)
-
-Persistent flags on the `client` parent — every subcommand (`status`, `scan`,
-`pair`, `connect`, `list`, `forget`, `fav`, `unfav`, `send`, `tail`) inherits
-them.
-
-| Flag                | Env                            | Default                 | Purpose                                                                                                                                                    |
-| ------------------- | ------------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--server`, `-s`    | `MESHX_CLIENT_SERVER`          | `http://127.0.0.1:4404` | Daemon URL the client talks to (`scheme://host:port`)                                                                                                      |
-| `--auth-token-file` | `MESHX_CLIENT_AUTH_TOKEN_FILE` | _(none)_                | Path to the same token file the server wrote. The client reads it on startup and sends `Authorization: Bearer <token>` on every HTTP call + the SSE stream |
-
-The client never _generates_ a token — it only reads. If the file is missing the
-command errors out cleanly; if it's empty after `strings.TrimSpace`, same.
-Tokens rotate by daemon restart (write a new file, restart the daemon, hand the
-new file to clients).
-
-## MCP server (`meshx mcp …`)
-
-Persistent flags on the `mcp` parent. Same shape as the `client` parent — the
-MCP server is the third client of the daemon (alongside the TUI and the
-`meshx client` CLI), spawned by an agent (Claude Code, Cursor, …) per session.
-
-| Flag                | Env                         | Default                 | Purpose                                                                                   |
-| ------------------- | --------------------------- | ----------------------- | ----------------------------------------------------------------------------------------- |
-| `--server`, `-s`    | `MESHX_MCP_SERVER`          | `http://127.0.0.1:4404` | Daemon URL the MCP server proxies to                                                      |
-| `--auth-token-file` | `MESHX_MCP_AUTH_TOKEN_FILE` | _(none)_                | Path to the daemon's bearer-token file; same file `--auth-token-file` on the server wrote |
-
-Subcommand: `meshx mcp start` runs the MCP server over stdio. Logs go to stderr
-only — stdout is the JSON-RPC wire and writing anything else there corrupts the
-protocol.
-
 ## TUI launcher (`meshx`, `meshx usb connect`, `meshx ble connect`)
 
 Bare `meshx` (no subcommand) auto-detects: if a favorite BLE radio is saved, it
@@ -80,9 +31,44 @@ accept an optional positional radio argument and open the local TUI.
 | -------- | ------------ | ------- | ------------------------------------------------------------------------------------------------------------- |
 | `--demo` | `MESHX_DEMO` | `false` | Skip the radio dial; populate state from `internal/tui.DefaultDemo()` so the UI renders for screenshots / dev |
 
+## USB transport (`meshx usb connect`)
+
+| Flag       | Env | Default  | Purpose                                                                     |
+| ---------- | --- | -------- | --------------------------------------------------------------------------- |
+| `[device]` | —   | _(auto)_ | Serial port path (e.g., `/dev/cu.usbmodem2101`). Auto-detected when omitted |
+
+## TCP transport (`meshx tcp connect`)
+
+| Flag          | Env | Default  | Purpose                                                                         |
+| ------------- | --- | -------- | ------------------------------------------------------------------------------- |
+| `host[:port]` | —   | _(none)_ | TCP address of the radio or `meshtasticd`. Port defaults to `4403` when omitted |
+
+## BLE transport (`meshx ble *`)
+
+BLE subcommands operate on the device database at `~/.meshx/meshx.bolt`.
+
+| Subcommand                       | Purpose                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------- |
+| `meshx ble scan`                 | 10s scan — table of nearby Meshtastic radios with UUID + name + RSSI      |
+| `meshx ble pair <uuid>`          | Save a radio to the bbolt store; OS pairing dialog fires on first connect |
+| `meshx ble list`                 | Show saved Bluetooth devices (`★` marks the auto-connect favorite)        |
+| `meshx ble connect <uuid\|name>` | Open the TUI over Bluetooth against a saved device                        |
+| `meshx ble fav <uuid\|name>`     | Mark a saved device as the bare-`meshx` fallback target                   |
+| `meshx ble disconnect`           | Clear the favorite flag (opposite of `fav`)                               |
+| `meshx ble forget <uuid\|name>`  | Remove a saved device from persistence                                    |
+| `meshx ble probe <uuid>`         | 15s diagnostic: dump every FromRadio packet the radio sends               |
+
 ## Environment-variable naming
 
 All meshx env vars share the `MESHX_` prefix. Viper's auto-binding maps a viper
-key like `client.server` to env var `MESHX_CLIENT_SERVER` — the dot becomes an
-underscore, the entire chain uppercases. This means new subcommands inherit env
-support "for free" the moment their flag is bound via `viper.BindPFlag`.
+key like `debug` to env var `MESHX_DEBUG` — the dot becomes an underscore, the
+entire chain uppercases. This means new subcommands inherit env support "for
+free" the moment their flag is bound via `viper.BindPFlag`.
+
+## Debug logging
+
+`MESHX_DEBUG=1 meshx ble connect <uuid>` writes every pump event (transport
+start, SendWantConfig nonce, each translated FromRadio, errors) to
+`/tmp/meshx-pump.log`. Set `MESHX_DEBUG=/some/other/path` to control the
+destination. Alt-screen TUIs swallow stderr, so this file is the only way to
+inspect live transport flow without leaving the session.

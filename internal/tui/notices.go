@@ -217,7 +217,7 @@ func (m *model) systemBlock(header string, lines ...string) {
 	m.noticeBlock(header, lines...)
 }
 
-// storagePersist wraps a save-to-sqlite call and surfaces the first
+// storagePersist wraps a save-to-bolt call and surfaces the first
 // failure per session as a systemLine ("-!- storage: ..."). Every
 // subsequent error from any save path is silently swallowed so a
 // degraded db doesn't machine-gun the messages pane. Runtime keeps

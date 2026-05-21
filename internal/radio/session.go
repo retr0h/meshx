@@ -24,36 +24,34 @@
 // narrow consumer interfaces (Pump, Store) declared in this package
 // per the osapi-io pattern.
 //
-// Both the TUI and the meshx serve daemon hold a *Session and route
-// inbound mdl.X events through Apply* methods that mutate the
-// canonical State + publish to subscribers, so render layers and
-// HTTP+SSE handlers see the same single source of truth. The type
-// is named Session (the live, stateful interaction with one radio),
-// mirroring ssh.Session / database/sql semantics.
+// The TUI holds a *Session and routes inbound mdl.X events through
+// Apply* methods that mutate the canonical State, so the render
+// layer has a single source of truth. The type is named Session
+// (the live, stateful interaction with one radio), mirroring
+// ssh.Session / database/sql semantics.
 package radio
 
 import (
-	"sync"
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
-// Session is the per-radio session wrapper — owns Pump (outbound +
-// reconnect), Store (persistence), and the canonical *State. The
-// TUI today and the future meshx serve daemon both read State while
-// Session mutates it through the apply* path.
-type Session struct {
-	// mu protects *State from concurrent read/write access between
-	// the pump goroutine (Apply* methods) and HTTP handler goroutines
-	// (Snapshot reads). Writers (Apply*, RecordOutbound, ops, hydrate)
-	// take a full Lock; Snapshot takes an RLock and returns a shallow
-	// struct copy so readers iterate a frozen snapshot.
-	mu sync.RWMutex
+// Bus is the event notification surface. The pump publishes translated
+// events; consumers subscribe for real-time updates. Declared here (at
+// the consumer seam) per the osapi-io pattern so *bus.Bus satisfies it
+// structurally without a concrete-type import in this package.
+type Bus interface {
+	Publish(event any)
+}
 
+// Session is the per-radio session wrapper — owns Pump (outbound +
+// reconnect), Store (persistence), and the canonical *State. The TUI
+// reads State directly while Session mutates it through the Apply* path.
+type Session struct {
 	// State is the canonical in-memory state — channels, nodes,
 	// messages, telemetry, in-flight ping/tr bookkeeping. Shared by
-	// pointer with consumers; Session is the sole writer.
+	// pointer with the TUI model; Session is the sole writer.
 	State *State
 
 	// pump is the outbound + reconnect bridge — Session.Send forwards
@@ -67,17 +65,15 @@ type Session struct {
 	// PutSetting / SaveNodePrefs / HydrateFromStore / etc.
 	store Store
 
+	// bus is the event bus handle. Nil until AttachBus is called.
+	// Unexported; callers route through AttachBus / BusHandle.
+	bus Bus
+
 	// OnStoreError fires once per failed Store call inside Apply*
 	// and RecordOutbound. Nil = errors are dropped (test fixtures,
 	// demo mode). The TUI sets this to surface "-!- storage:
-	// degraded" once-per-session; the daemon points it at slog.
-	// Session doesn't decide policy — caller does.
+	// degraded" once-per-session; callers decide the policy.
 	OnStoreError func(error)
-
-	// subState owns the Subscribe/Publish fan-out registry. Embedded
-	// so callers can read s.Subscribe / s.Publish at the receiver
-	// without indirection.
-	subState
 }
 
 // storeError centralizes the "did a store call fail; should we
@@ -114,19 +110,14 @@ func (s *Session) SaveNodePrefs(radioID string, nodeNum uint32, favorite, muted 
 // AlertStorageError is the canonical OnStoreError implementation
 // — appends a permanent "-!- storage: ..." system row to
 // State.Messages on the FIRST failure of a session, drops every
-// subsequent error so a degraded sqlite handle doesn't machine-gun
+// subsequent error so a degraded store handle doesn't machine-gun
 // the messages pane. State.StorageAlerted is the gate; flips true
 // on first surface.
 //
 // Callers wire this in via:
 //
 //	drv.OnStoreError = drv.AlertStorageError
-//
-// Daemon callers may prefer a slog-only sink instead — they wire
-// their own callback that does not touch State.Messages.
 func (s *Session) AlertStorageError(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err == nil || s.State.StorageAlerted {
 		return
 	}
@@ -143,11 +134,22 @@ func (s *Session) AlertStorageError(err error) {
 // New returns a Session wired with the given Pump, Store, and State.
 // A nil State gets a fresh empty one. A nil Pump or Store is allowed
 // (the daemon serves an empty session until a radio attaches).
-func New(s *State, p Pump, st Store) *Session {
+func New(
+	s *State,
+	p Pump,
+	st Store,
+) *Session {
 	if s == nil {
 		s = NewState()
 	}
 	return &Session{State: s, pump: p, store: st}
+}
+
+// GetState returns the canonical *State directly. The TUI accesses
+// State through this method at construction time so it can embed the
+// pointer without depending on the concrete *Session type.
+func (s *Session) GetState() *State {
+	return s.State
 }
 
 // Send dispatches an outbound mdl.Command via the Pump. Returns the
@@ -170,27 +172,6 @@ func (s *Session) Stop() {
 		return
 	}
 	s.pump.Stop()
-}
-
-// Snapshot returns the canonical State. Method (rather than direct
-// field access) lets consumers depend on a narrow interface at their
-// own seam — see internal/server/session.go for the server's Driver
-// interface, internal/tui/session.go for the TUI's radioSession.
-//
-// Named Snapshot rather than Session() because *Session is embedded
-// in *sdk.Remote — `r.Session` would resolve to the embedded field
-// and shadow a Session() method, which Go silently allows but breaks
-// callers expecting the method.
-func (s *Session) Snapshot() *State {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.State == nil {
-		return nil
-	}
-	// Shallow struct copy freezes slice headers so concurrent
-	// appends by the writer don't race the reader's iteration.
-	snap := *s.State
-	return &snap
 }
 
 // AttachPump sets the pump handle. Called by the TUI once the tea
@@ -218,4 +199,18 @@ func (s *Session) PumpHandle() Pump {
 // call this; future follow-ups will replace these with driver methods.
 func (s *Session) StoreHandle() Store {
 	return s.store
+}
+
+// AttachBus sets the event bus handle. Called by RunRadio after the
+// bus is constructed so the TUI can hand it to StoreBusSink when the
+// pump is dialed.
+func (s *Session) AttachBus(b Bus) {
+	s.bus = b
+}
+
+// BusHandle returns the current Bus, which may be nil (no bus
+// attached). The TUI reads this when constructing StoreBusSink so the
+// pump can fan events to both the bus and the tea.Program.
+func (s *Session) BusHandle() Bus {
+	return s.bus
 }

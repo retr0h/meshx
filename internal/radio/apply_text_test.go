@@ -27,12 +27,10 @@ import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
-// TestSessionApplyText pins down the contract that drives every SSE /
-// agent consumer of the text path: a DM addressed to MyNodeNum fires
-// dm_received; everything else (broadcasts, DMs to other peers we
-// overhear, pre-handshake packets where MyNodeNum is still 0) fires
-// text. Mutual exclusion is the value here — consumers subscribe to
-// one kind and trust they aren't also picking up the other.
+// TestSession_ApplyText pins down the text-apply contract: inbound
+// packets are appended to State.Messages with the correct From,
+// Mine, and Status fields; duplicate PacketIDs are deduped in place;
+// unread counters are bumped on inactive channels.
 func TestSession_ApplyText(t *testing.T) {
 	t.Parallel()
 
@@ -40,39 +38,44 @@ func TestSession_ApplyText(t *testing.T) {
 	const otherNum = uint32(0xc0ffee)
 
 	cases := []struct {
-		name      string
-		myNodeNum uint32 // 0 simulates pre-MyInfo handshake
-		toNum     uint32
-		fromNum   uint32
-		wantKind  string
+		name       string
+		myNodeNum  uint32 // 0 simulates pre-MyInfo handshake
+		toNum      uint32
+		fromNum    uint32
+		wantMine   bool
+		wantStatus mdl.MessageStatus
 	}{
 		{
-			name:      "broadcast-fires-text",
-			myNodeNum: myNum,
-			toNum:     mdl.BroadcastNum,
-			fromNum:   otherNum,
-			wantKind:  EventText,
+			name:       "broadcast-from-peer-not-mine",
+			myNodeNum:  myNum,
+			toNum:      mdl.BroadcastNum,
+			fromNum:    otherNum,
+			wantMine:   false,
+			wantStatus: mdl.StatusAck,
 		},
 		{
-			name:      "dm-to-me-fires-dm-received",
-			myNodeNum: myNum,
-			toNum:     myNum,
-			fromNum:   otherNum,
-			wantKind:  EventDMReceived,
+			name:       "dm-to-me-from-peer-not-mine",
+			myNodeNum:  myNum,
+			toNum:      myNum,
+			fromNum:    otherNum,
+			wantMine:   false,
+			wantStatus: mdl.StatusAck,
 		},
 		{
-			name:      "dm-between-other-peers-fires-text",
-			myNodeNum: myNum,
-			toNum:     otherNum,
-			fromNum:   0xbabe,
-			wantKind:  EventText,
+			name:       "message-from-self-is-mine",
+			myNodeNum:  myNum,
+			toNum:      mdl.BroadcastNum,
+			fromNum:    myNum,
+			wantMine:   true,
+			wantStatus: mdl.StatusAck,
 		},
 		{
-			name:      "pre-handshake-mynodenum-zero-fires-text",
-			myNodeNum: 0,
-			toNum:     myNum, // would be a DM to me — but we don't know MyNodeNum yet
-			fromNum:   otherNum,
-			wantKind:  EventText,
+			name:       "pre-handshake-mynodenum-zero-not-mine",
+			myNodeNum:  0,
+			toNum:      myNum,
+			fromNum:    otherNum,
+			wantMine:   false,
+			wantStatus: mdl.StatusAck,
 		},
 	}
 
@@ -80,9 +83,8 @@ func TestSession_ApplyText(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestSession()
 			s.State.MyNodeNum = tc.myNodeNum
-			ch := s.Subscribe(t.Context())
 
-			s.ApplyText(mdl.Text{
+			res := s.ApplyText(mdl.Text{
 				Channel: 0,
 				ToNum:   tc.toNum,
 				Body: mdl.Message{
@@ -93,13 +95,58 @@ func TestSession_ApplyText(t *testing.T) {
 				},
 			}, "hi", false, false)
 
-			events := drainKinds(ch, 1, 200*time.Millisecond)
-			if got := len(events); got != 1 {
-				t.Fatalf("len(events) = %d, want 1", got)
+			if res.Skipped {
+				t.Fatal("Skipped = true, want false (first occurrence)")
 			}
-			if events[0].Kind != tc.wantKind {
-				t.Fatalf("event kind = %q, want %q", events[0].Kind, tc.wantKind)
+			if res.Index < 0 {
+				t.Fatal("Index < 0, want valid index")
+			}
+			if got := len(s.State.Messages); got != 1 {
+				t.Fatalf("State.Messages len = %d, want 1", got)
+			}
+			row := s.State.Messages[res.Index]
+			if row.Mine != tc.wantMine {
+				t.Fatalf("row.Mine = %v, want %v", row.Mine, tc.wantMine)
+			}
+			if row.Status != tc.wantStatus {
+				t.Fatalf("row.Status = %q, want %q", row.Status, tc.wantStatus)
 			}
 		})
 	}
+
+	// Duplicate PacketID must be deduped — second call upgrades the
+	// existing row in place rather than appending a new one.
+	t.Run("duplicate-packet-id-deduped-in-place", func(t *testing.T) {
+		s := newTestSession()
+		s.State.MyNodeNum = myNum
+
+		ev := mdl.Text{
+			Channel: 0,
+			ToNum:   mdl.BroadcastNum,
+			Body: mdl.Message{
+				FromNum:  otherNum,
+				Text:     "first",
+				PacketID: 42,
+				SentAt:   time.Now(),
+			},
+		}
+		res1 := s.ApplyText(ev, "first", false, false)
+		if res1.Skipped {
+			t.Fatal("first call: Skipped = true, want false")
+		}
+
+		// Seed the pending status so we can verify the upgrade path.
+		s.State.Messages[res1.Index].Status = mdl.StatusPending
+
+		res2 := s.ApplyText(ev, "first", false, false)
+		if !res2.Skipped {
+			t.Fatal("second call: Skipped = false, want true (dedupe)")
+		}
+		if got := len(s.State.Messages); got != 1 {
+			t.Fatalf("State.Messages len = %d, want 1 after dedupe", got)
+		}
+		if s.State.Messages[res1.Index].Status != mdl.StatusAck {
+			t.Fatal("deduped row status not upgraded to Ack")
+		}
+	})
 }

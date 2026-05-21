@@ -27,25 +27,8 @@ import (
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
 )
 
-// drainKinds reads the channel non-blockingly and returns the
-// observed Event values in order. Lets a table-driven test assert
-// "the publish stream produced exactly these event kinds in this
-// order" without bookkeeping per row.
-func drainKinds(ch <-chan Event, n int, timeout time.Duration) []Event {
-	out := make([]Event, 0, n)
-	deadline := time.After(timeout)
-	for len(out) < n {
-		select {
-		case ev, ok := <-ch:
-			if !ok {
-				return out
-			}
-			out = append(out, ev)
-		case <-deadline:
-			return out
-		}
-	}
-	return out
+func newTestSession() *Session {
+	return New(nil, nil, nil)
 }
 
 // seedOutboundRow appends a "mine" message row with the given
@@ -59,15 +42,15 @@ func seedOutboundRow(s *Session, packetID uint32) {
 			Status:   mdl.StatusPending,
 		},
 	})
+	s.State.MessagesByPacketID[packetID] = len(s.State.Messages) - 1
 }
 
 // TestSession_ApplyRouting covers the public ApplyRouting surface.
-// The dispatch-shape scenarios (which routing replies surface a
-// message_status update, which fall through, what status the row
-// flips to) live as a table — uniform mechanics. The Ackers snapshot-
-// independence property has genuinely different mechanics (two
-// subscribers, two ApplyRouting calls, copy-vs-alias check) so it
-// runs as a t.Run sub-test under the same parent.
+// Scenarios (which routing replies flip a message row, which fall
+// through, what status the row lands on) are table rows — uniform
+// mechanics. The Ackers roll-up property has genuinely different
+// mechanics (two ApplyRouting calls, dedup check) so it runs as a
+// t.Run sub-test under the same parent.
 func TestSession_ApplyRouting(t *testing.T) {
 	t.Parallel()
 
@@ -77,17 +60,16 @@ func TestSession_ApplyRouting(t *testing.T) {
 	}
 
 	cases := []struct {
-		name        string
-		packetID    uint32 // outbound row's PacketID; 0 = no row seeded
-		seedAckers  []ackerSeed
-		routing     mdl.Routing
-		wantKinds   []string          // Event.Kind sequence (ordered)
-		wantStatus  mdl.MessageStatus // final row.Status
-		wantPubStat mdl.MessageStatus // status carried in MessageStatusUpdate
-		wantAckers  int               // count of Ackers in the published update
+		name       string
+		packetID   uint32 // outbound row's PacketID; 0 = no row seeded
+		seedAckers []ackerSeed
+		routing    mdl.Routing
+		wantMatch  bool
+		wantStatus mdl.MessageStatus // final row.Status; checked only when packetID != 0
+		wantAckers int               // count of Ackers on the row after apply
 	}{
 		{
-			name:     "ok-flips-row-to-ack-and-publishes-status-update",
+			name:     "ok-flips-row-to-ack",
 			packetID: 100,
 			routing: mdl.Routing{
 				RequestID: 100,
@@ -96,13 +78,12 @@ func TestSession_ApplyRouting(t *testing.T) {
 				Hops:      1,
 				At:        time.Unix(1700000000, 0),
 			},
-			wantKinds:   []string{EventMessageStatus, EventRouting},
-			wantStatus:  mdl.StatusAck,
-			wantPubStat: mdl.StatusAck,
-			wantAckers:  1,
+			wantMatch:  true,
+			wantStatus: mdl.StatusAck,
+			wantAckers: 1,
 		},
 		{
-			name:     "fail-flips-row-to-fail-and-publishes-status-update",
+			name:     "fail-flips-row-to-fail",
 			packetID: 101,
 			routing: mdl.Routing{
 				RequestID: 101,
@@ -111,25 +92,23 @@ func TestSession_ApplyRouting(t *testing.T) {
 				FromNum:   2066382700,
 				At:        time.Unix(1700000001, 0),
 			},
-			wantKinds:   []string{EventMessageStatus, EventRouting},
-			wantStatus:  mdl.StatusFail,
-			wantPubStat: mdl.StatusFail,
-			wantAckers:  0,
+			wantMatch:  true,
+			wantStatus: mdl.StatusFail,
+			wantAckers: 0,
 		},
 		{
-			// packetID 0 → don't seed a row; Routing reply has no
-			// match and falls through without flipping anything.
-			name: "no-matching-row-publishes-routing-only",
+			// packetID 0 → don't seed a row; Routing reply has no match.
+			name: "no-matching-row-returns-unmatched",
 			routing: mdl.Routing{
 				RequestID: 999,
 				OK:        true,
 				FromNum:   2066382700,
 				At:        time.Unix(1700000002, 0),
 			},
-			wantKinds: []string{EventRouting},
+			wantMatch: false,
 		},
 		{
-			name:       "second-acker-still-publishes-status-update",
+			name:       "second-acker-appended",
 			packetID:   102,
 			seedAckers: []ackerSeed{{nodeNum: 100, hops: 1}},
 			routing: mdl.Routing{
@@ -139,17 +118,15 @@ func TestSession_ApplyRouting(t *testing.T) {
 				Hops:      2,
 				At:        time.Unix(1700000003, 0),
 			},
-			wantKinds:   []string{EventMessageStatus, EventRouting},
-			wantStatus:  mdl.StatusAck,
-			wantPubStat: mdl.StatusAck,
-			wantAckers:  2,
+			wantMatch:  true,
+			wantStatus: mdl.StatusAck,
+			wantAckers: 2,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestSession()
-			ch := s.Subscribe(t.Context())
 
 			if tc.packetID != 0 {
 				seedOutboundRow(s, tc.packetID)
@@ -162,84 +139,116 @@ func TestSession_ApplyRouting(t *testing.T) {
 				}
 			}
 
-			s.ApplyRouting(tc.routing)
+			res := s.ApplyRouting(tc.routing)
 
-			events := drainKinds(ch, len(tc.wantKinds), 200*time.Millisecond)
-			if got := len(events); got != len(tc.wantKinds) {
-				t.Fatalf("len(events) = %d, want %d", got, len(tc.wantKinds))
-			}
-			for i, want := range tc.wantKinds {
-				if events[i].Kind != want {
-					t.Fatalf("events[%d].Kind = %q, want %q", i, events[i].Kind, want)
-				}
+			if res.Matched != tc.wantMatch {
+				t.Fatalf("Matched = %v, want %v", res.Matched, tc.wantMatch)
 			}
 
-			if tc.packetID != 0 {
-				row := s.State.Messages[len(s.State.Messages)-1]
-				if row.Status != tc.wantStatus {
-					t.Fatalf("row.Status = %q, want %q", row.Status, tc.wantStatus)
-				}
-			}
-
-			if tc.wantPubStat == "" {
+			if tc.packetID == 0 {
 				return
 			}
-			// message_status is published inline; PublishRouting
-			// is deferred — so the order on the wire is
-			// message_status, then routing.
-			updateEv := events[0]
-			update, ok := updateEv.Data.(mdl.MessageStatusUpdate)
-			if !ok {
-				t.Fatalf("Data is %T, want mdl.MessageStatusUpdate", updateEv.Data)
+
+			row := s.State.Messages[len(s.State.Messages)-1]
+			if row.Status != tc.wantStatus {
+				t.Fatalf("row.Status = %q, want %q", row.Status, tc.wantStatus)
 			}
-			if update.PacketID != tc.packetID {
-				t.Fatalf("update.PacketID = %d, want %d", update.PacketID, tc.packetID)
-			}
-			if update.Status != tc.wantPubStat {
-				t.Fatalf("update.Status = %q, want %q", update.Status, tc.wantPubStat)
-			}
-			if got := len(update.Ackers); got != tc.wantAckers {
-				t.Fatalf("update.Ackers len = %d, want %d", got, tc.wantAckers)
+			if got := len(row.Ackers); got != tc.wantAckers {
+				t.Fatalf("row.Ackers len = %d, want %d", got, tc.wantAckers)
 			}
 		})
 	}
 
-	// Property check: the Ackers slice carried on a published
-	// MessageStatusUpdate is a copy, not a live alias of the row's
-	// Ackers. A later ack on the same row mustn't retroactively
-	// mutate the previously-published event payload.
-	t.Run("published-ackers-are-snapshotted-not-aliased-to-row", func(t *testing.T) {
+	// RequestID == 0 must return an unmatched result immediately.
+	t.Run("zero-request-id-returns-unmatched", func(t *testing.T) {
 		s := newTestSession()
-		ch := s.Subscribe(t.Context())
+		res := s.ApplyRouting(mdl.Routing{RequestID: 0, OK: true})
+		if res.Matched {
+			t.Fatal("Matched = true for RequestID=0, want false")
+		}
+	})
 
-		const pid = 200
+	// When the Routing reply comes from MyNodeNum, it must NOT be added
+	// to Ackers (local ack-of-send is excluded from the mesh peer list).
+	t.Run("local-radio-ack-excluded-from-ackers", func(t *testing.T) {
+		s := newTestSession()
+		const myNum = uint32(0xdeadbeef)
+		s.State.MyNodeNum = myNum
+		const pid = uint32(300)
 		seedOutboundRow(s, pid)
 
 		s.ApplyRouting(mdl.Routing{
-			RequestID: pid, OK: true, FromNum: 100, Hops: 1,
+			RequestID: pid,
+			OK:        true,
+			FromNum:   myNum, // local ack — must be excluded
+			Hops:      0,
+			At:        time.Unix(1700000010, 0),
+		})
+
+		row := s.State.Messages[len(s.State.Messages)-1]
+		if len(row.Ackers) != 0 {
+			t.Fatalf("Ackers len = %d, want 0 (local ack excluded)", len(row.Ackers))
+		}
+		if row.Status != mdl.StatusAck {
+			t.Fatalf("row.Status = %q, want ack", row.Status)
+		}
+	})
+
+	// callsignForAck path: acker is a known node with a callsign.
+	t.Run("known-node-callsign-used-in-acker", func(t *testing.T) {
+		s := newTestSession()
+		const pid = uint32(400)
+		const peerNum = uint32(0xCAFE)
+		seedOutboundRow(s, pid)
+
+		// Seed a known node so callsignForAck resolves the callsign.
+		s.State.Nodes = append(s.State.Nodes, mdl.NodeItem{
+			NodeNum:  peerNum,
+			Callsign: "Mesh-cafe",
+		})
+		s.State.NodesByNum[peerNum] = len(s.State.Nodes) - 1
+
+		s.ApplyRouting(mdl.Routing{
+			RequestID: pid,
+			OK:        true,
+			FromNum:   peerNum,
+			Hops:      1,
+			At:        time.Unix(1700000020, 0),
+		})
+
+		row := s.State.Messages[len(s.State.Messages)-1]
+		if len(row.Ackers) != 1 {
+			t.Fatalf("Ackers len = %d, want 1", len(row.Ackers))
+		}
+		if row.Ackers[0].Callsign != "Mesh-cafe" {
+			t.Fatalf("Ackers[0].Callsign = %q, want Mesh-cafe", row.Ackers[0].Callsign)
+		}
+	})
+
+	// Property: a second ack from a different peer at shorter hops
+	// replaces the existing Ackers entry for that peer (shorter wins).
+	t.Run("same-peer-shorter-hops-updates-in-place", func(t *testing.T) {
+		s := newTestSession()
+		const pid = 200
+		seedOutboundRow(s, pid)
+
+		// First ack from peer 100 at 3 hops.
+		s.ApplyRouting(mdl.Routing{
+			RequestID: pid, OK: true, FromNum: 100, Hops: 3,
 			At: time.Unix(1700000000, 0),
 		})
-		_ = drainKinds(ch, 2, 200*time.Millisecond)
-
-		// Re-trigger via a fresh subscriber so we capture the
-		// SECOND publish's Ackers payload. The first publish's
-		// Ackers slice (already drained above) must not have grown
-		// by the time the second publish lands.
-		ch2 := s.Subscribe(t.Context())
+		// Second ack from the same peer at 1 hop — should update, not append.
 		s.ApplyRouting(mdl.Routing{
-			RequestID: pid, OK: true, FromNum: 200, Hops: 2,
+			RequestID: pid, OK: true, FromNum: 100, Hops: 1,
 			At: time.Unix(1700000001, 0),
 		})
-		events := drainKinds(ch2, 2, 200*time.Millisecond)
-		if len(events) < 2 {
-			t.Fatalf("got %d events, want 2", len(events))
+
+		row := s.State.Messages[len(s.State.Messages)-1]
+		if got := len(row.Ackers); got != 1 {
+			t.Fatalf("Ackers len = %d, want 1 (same peer deduped)", got)
 		}
-		upd, ok := events[0].Data.(mdl.MessageStatusUpdate)
-		if !ok {
-			t.Fatalf("Data is %T, want mdl.MessageStatusUpdate", events[0].Data)
-		}
-		if got := len(upd.Ackers); got != 2 {
-			t.Fatalf("second-update.Ackers len = %d, want 2", got)
+		if row.Ackers[0].Hops != 1 {
+			t.Fatalf("Ackers[0].Hops = %d, want 1 (shorter hops wins)", row.Ackers[0].Hops)
 		}
 	})
 }

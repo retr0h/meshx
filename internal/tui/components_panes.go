@@ -93,7 +93,7 @@ func (p nodesPane) Render(box Box) string {
 	//
 	// Grid layout — fixed-width cells, as many columns as fit.
 	// Each cell: "[ @callsign    ] " → up to ~20 visible cells.
-	inner := box.Width - 4 // minus pane border + pane padding
+	inner := box.Width - 2 // minus pane padding (no side rails)
 	if inner < 18 {
 		inner = 18
 	}
@@ -178,10 +178,10 @@ func (p helpPane) Render(box Box) string {
 	dim := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(mhDrained))
 		//
-	// Width budget for kv lines = pane width - frame (2) - padding (6).
+	// Width budget for kv lines = pane width - padding (6, no side rails).
 	// Routes through helpKVLine so the cell math (key column 14 cells,
 	// description as the flex slot) lives in components_overlays.go.
-	kvW := box.Width - 2 - 6
+	kvW := box.Width - 6
 	if kvW < 30 {
 		kvW = 30
 	}
@@ -741,19 +741,18 @@ func paneAccentColor(paneIdx int) string {
 }
 
 // paneInnerWidth returns the content-area width inner renderers
-// should target given a `width` argument from View(). One place to
-// change the math instead of hunting down `width-4` literals.
+// should target given a `width` argument from View(). With no side
+// rails, only horizontal padding (1 cell each side) is subtracted.
 func paneInnerWidth(width int) int {
-	return width - 4
+	return width - 2
 }
 
 // renderBorderedPane wraps pre-rendered inner content (each line
-// already padded to width-4 cells per ansiCells) in the same ║/═
-// frame paneStyle draws — using the Bordered Component so the math
-// goes through ansiCells (keycap-aware) instead of lipgloss's
-// runewidth measurement that under-counts keycap emoji and would
-// land the right ║ frame off-column on rows containing "7️⃣"-style
-// glyphs. This is the architectural promise — no overflow ever.
+// already padded to width-2 cells per ansiCells) in top/bottom ═══
+// rules — using the Bordered Component so the math goes through
+// ansiCells (keycap-aware). No left/right rails are drawn, so
+// emoji-width content can never push a border character off-column.
+// This is the architectural promise — no overflow ever.
 func renderBorderedPane(
 	inner string, width, height, paneIdx int, focused bool,
 ) string {

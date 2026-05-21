@@ -47,7 +47,7 @@ var usbConnectCmd = &cobra.Command{
 		log := logger.With(slog.String("subsystem", "usb.connect"))
 		log.Debug("running", slog.String("device", dest))
 		if dest == "" {
-			// AutoDetect doesn't need the sqlite store — construct a
+			// AutoDetect doesn't need the bolt store — construct a
 			// storeless Manager.
 			mgr := newTransportsManager(nil)
 			auto, err := mgr.AutoDetectUSB(context.Background(), 1500)

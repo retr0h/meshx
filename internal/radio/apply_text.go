@@ -22,9 +22,7 @@ package radio
 
 // TEXT_MESSAGE_APP inbound handling — broadcast / DM dispatch,
 // sender NodeDB upsert, packet-ID dedupe, channel-unread bump,
-// persistence. The DM-vs-broadcast split also picks the SSE event
-// shape (dm_received vs text) so consumers can subscribe to whichever
-// firehose they care about.
+// persistence.
 
 import (
 	"time"
@@ -46,26 +44,14 @@ type ApplyTextResult struct {
 // peer hasn't sent NodeInfo yet), dedupes against a packet-ID replay,
 // appends or refreshes the message row, bumps unread on non-active
 // channels, and persists if a Store is wired. Sanitization of the
-// text body is the caller's concern (lives in TUI today; daemon
-// passes pre-sanitized text or ignores cleanup). The `alert` flag
-// rides alongside `corrupted` — sender embedded a BEL (0x07), the
-// Meshtastic external_notification trigger; renderer surfaces 🔔.
+// text body is the caller's concern (lives in TUI today). The `alert`
+// flag rides alongside `corrupted` — sender embedded a BEL (0x07),
+// the Meshtastic external_notification trigger; renderer surfaces 🔔.
 func (s *Session) ApplyText(
 	ev mdl.Text,
 	sanitizedText string,
 	corrupted, alert bool,
 ) ApplyTextResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Inbound DMs addressed to MyNodeNum fire dm_received; channel
-	// broadcasts (and pre-handshake packets where MyNodeNum=0) fire
-	// text. Mutually exclusive — agents subscribe to whichever they
-	// care about without filtering the firehose.
-	if s.State.MyNodeNum != 0 && ev.ToNum == s.State.MyNodeNum {
-		defer s.PublishDMReceived(ev)
-	} else {
-		defer s.PublishText(ev)
-	}
 	body := ev.Body
 	defaultLong, _ := mdl.DefaultCallsign(body.FromNum)
 	from := defaultLong

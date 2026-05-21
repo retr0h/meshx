@@ -43,39 +43,44 @@ go run . ble fav <uuid|name>               # mark bare-launch favorite
 go run . ble connect <uuid|name>           # open TUI over Bluetooth
 go run . ble probe <uuid>                  # 15s diagnostic FromRadio dump
 
-# Headless HTTP+SSE daemon
-go run . server start                      # bind 127.0.0.1:4404 (default)
-go run . server start --bind :4404         # listen on all interfaces
-MESHX_SERVER_BIND=:9000 go run . server start  # env-var override
-
 # Debug logging — `--debug` (or MESHX_DEBUG=1) flips the global slog
-# level so each subcommand's "running" line + the daemon's request log
-# become visible. `--json` / `-j` swaps to JSON for log aggregators.
+# level so each subcommand's "running" line becomes visible. `--json` / `-j`
+# swaps to JSON for log aggregators.
 go run . --debug ble pair <uuid>
 ```
 
 ## Architecture
 
+```
+transport (USB / BLE / TCP)
+         │
+         ▼
+   internal/meshx/pump      ← proto ↔ model translation, reconnect
+         │
+    ┌────┴────┐
+    ▼         ▼
+  bbolt     event bus        ← storage + fan-out
+  store       │
+    └────┬────┘
+         ▼
+      internal/tui           ← Bubble Tea render loop
+```
+
 Package-level overview (file-level detail lives in each package's headers —
 `ls internal/<pkg>/` + read the top-of-file comments):
 
-| Package                     | Role                                                                                                                                                                              |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cmd/`                      | Cobra command tree — `usb`, `ble`, `server`, `client`, `mcp` subcommands                                                                                                          |
-| `internal/radio/`           | Per-radio session layer — canonical `*State`, `Apply*` handlers, `ops_*` (channels/config/radio/send), `Subscribe`/`Publish` fan-out, `RWMutex`-guarded for concurrent HTTP reads |
-| `internal/transports/`      | Hardware management surface — `*Manager` for BLE/USB scan/pair/list/forget/fav                                                                                                    |
-| `internal/server/`          | HTTP+SSE daemon (Huma) — multi-radio `Registry`, per-route handlers, auth, SSE events                                                                                             |
-| `internal/mcp/`             | MCP server (stdio) — generated tools from OpenAPI spec (`tools_gen.go`), event subscription bridge, `Driver` consumer interface                                                   |
-| `internal/sdk/gen/`         | Generated OpenAPI client (`client.gen.go`) + spec-dump generator (`dumpspec/`)                                                                                                    |
-| `internal/sdk/`             | `*Remote` driver — TUI-as-HTTP-client mode (wraps `gen.Client` + SSE)                                                                                                             |
-| `internal/tui/`             | Bubble Tea rendering — `Component` tree, layout primitives, pane Components, input/commands                                                                                       |
-| `internal/meshx/model/`     | Canonical wire/persisted shapes — the lingua franca all layers share                                                                                                              |
-| `internal/meshx/pump/`      | Transport ↔ tea bridge — reconnect policy, proto↔model translation                                                                                                              |
-| `internal/meshx/storage/`   | SQLite persistence — messages, nodes, BLE devices, goose migrations                                                                                                               |
-| `internal/meshx/transport/` | `Client` interface + serial/TCP/BLE implementations + frame codec                                                                                                                 |
-| `internal/version/`         | Build identity (Version / Commit / Date / BuiltBy)                                                                                                                                |
-
-````
+| Package                     | Role                                                                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `cmd/`                      | Cobra command tree — `usb`, `ble`, `tcp`, `demo` subcommands                                                                      |
+| `internal/radio/`           | Per-radio session layer — canonical `*State`, `Apply*` handlers, `ops_*` (channels/config/radio/send)                             |
+| `internal/bus/`             | In-process publish/subscribe event bus — fan-out to TUI and any other subscriber; slow consumers drop events rather than blocking |
+| `internal/meshx/model/`     | Canonical wire/persisted shapes — the lingua franca all layers share                                                              |
+| `internal/meshx/pump/`      | Transport ↔ tea bridge — reconnect policy, proto ↔ model translation                                                            |
+| `internal/meshx/storage/`   | bbolt persistence — messages, nodes, BLE devices (`~/.meshx/meshx.bolt`)                                                          |
+| `internal/meshx/transport/` | `Client` interface + serial/TCP/BLE implementations + frame codec                                                                 |
+| `internal/tui/`             | Bubble Tea rendering — `Component` tree, layout primitives, pane Components, input/commands                                       |
+| `internal/cli/`             | CLI-only output helpers (themed lipgloss rendering, banner) — imported only by `cmd/`, never by the TUI                           |
+| `internal/version/`         | Build identity (Version / Commit / Date / BuiltBy)                                                                                |
 
 ### Public API
 
@@ -87,9 +92,8 @@ transport.ScanBLE(timeout)                   // BLE discovery
 transport.PairBLE(uuid)                      // OS-level bonding
 transport.IdentifyAllSerial(timeout)         // USB scan + handshake probe
 transport.AutoDetectMeshtastic(timeout)      // single-Meshtastic-port helper
-storage.New(path) → *Sqlite                  // SQLite handle (BLE devices, messages, …)
-server.New(server.Config{...}) → *Server     // HTTP+SSE daemon
-````
+storage.New(path) → *Bolt                    // bbolt handle (BLE devices, messages, …)
+```
 
 `tui.RunRadio` calls
 `tea.NewProgram(newModel(dest), tea.WithAltScreen()).Run()`.
@@ -106,108 +110,48 @@ in the codebase speaks. Three consumers all traffic in `mdl.X`:
 flowchart TB
   M["**model package**<br/>Message · NodeInfo · Position · Routing · Ping<br/>LoraConfig · ExternalNotification · …"]
   P["**pump**<br/>proto→model"]
-  S["**storage**<br/>CRUD · *Sqlite"]
-  H["**server**<br/>HTTP+SSE"]
+  S["**storage**<br/>CRUD · *Bolt"]
+  B["**bus**<br/>fan-out events"]
   T["**TUI Update**<br/>case mdl.Text / NodeInfo / Position / …"]
   P --> M
   S --> M
-  H --> M
-  M --> T
+  M --> B
+  B --> T
 ```
 
 Inbound, `pump/translate.go` projects `*pb.FromRadio` → `model.X` events.
 Outbound, `pump/outbound.go::Send(model.Command)` is a type-switch dispatcher
 that builds the matching `*pb.ToRadio` envelope. The pump package is the
 **only** place in the codebase where `gomeshproto` types meet `model` types in
-either direction. Everywhere else — the meshx TUI, the storage layer, future
-daemon — sees only `mdl.X`. The proto<->model bridges for full-record configs
-that need round-trip preservation (today: `ExternalNotification`) live in
-`pump/config.go`; `commands.go` calls those bridges when crafting outbound
-`AdminMessage` envelopes so it never directly assembles a config proto.
+either direction. Everywhere else — the meshx TUI, the storage layer — sees only
+`mdl.X`. The proto↔model bridges for full-record configs that need round-trip
+preservation (today: `ExternalNotification`) live in `pump/config.go`;
+`commands.go` calls those bridges when crafting outbound `AdminMessage`
+envelopes so it never directly assembles a config proto.
 
 ### Consumer interfaces (osapi-io pattern)
 
-Both `pump.Pump` and `storage.Sqlite` are concrete structs in their own
-packages. Where they're consumed (the meshx TUI), the consumer declares a narrow
-interface listing only the methods it uses:
+Both `pump.Pump` and `storage.Bolt` are concrete structs in their own packages.
+Where they're consumed (the meshx TUI), the consumer declares a narrow interface
+listing only the methods it uses:
 
 - `internal/meshx/pump.go` — `Pump` interface (`Enqueue`, `Stop`)
-- `internal/meshx/store.go` — `Store` interface (the 17 methods the TUI calls)
+- `internal/meshx/store.go` — `Store` interface (the methods the TUI calls)
 
-Both interfaces sit next to each other so future consumers (e.g. a daemon
-package) can declare their own — likely larger — interfaces without bloating the
-TUI's view of the contract. The compile-time binding
-`var p Pump = pump.New(...)` at the construction site catches drift the moment a
-method gets renamed.
+Both interfaces sit next to each other so future consumers can declare their own
+— likely larger — interfaces without bloating the TUI's view of the contract.
+The compile-time binding `var p Pump = pump.New(...)` at the construction site
+catches drift the moment a method gets renamed.
 
-The same pattern applies in `cmd/`: `cmd/ble_deps.go` declares `bleScanner` /
-`blePairer` / `bleStore` interfaces and `cmd/usb_deps.go` declares `usbScanner`.
-Production wiring sits at the bottom of each file (`cliBLEScanner`,
-`cliBLEPairer`, `cliOpenBLEStore`, `cliUSBScanner`) and tests can swap the
-package-level vars to fake the host. The transport adapters
-(`transportBLEScanner`, etc.) all delegate into `internal/meshx/transport`,
-which means **`meshx ble scan`, `meshx usb scan`, etc. don't need a daemon to be
-running** — they're direct OS interrogations.
+The same pattern applies in `cmd/`: `cmd/transports_deps.go` declares
+`bleScanner` / `blePairer` / `bleStore` interfaces and `cmd/usb_*.go` declares
+`usbScanner`. Production wiring sits at the bottom of each file and tests can
+swap the package-level vars to fake the host. The transport adapters all
+delegate into `internal/meshx/transport`, which means **`meshx ble scan`,
+`meshx usb scan`, etc. don't need a daemon to be running** — they're direct OS
+interrogations.
 
-## Deployment modes
-
-Five modes share one binary, all converging on the same `*radio.Session` state
-layer:
-
-1. **Local TUI** — `meshx ble connect <name>` / `meshx usb connect` runs radio +
-   TUI in one process. The TUI holds `*radio.Session` directly.
-2. **Headless daemon** — `meshx server start` owns the radio behind HTTP+SSE; no
-   TUI. Clients reach it over HTTP.
-3. **Remote TUI** — `meshx client connect [<radio>]` runs the TUI against a
-   remote daemon. `*sdk.Remote` satisfies `radioSession` over HTTP+SSE —
-   outbound calls go through `gen.Client`, inbound events arrive via the SSE
-   stream and get forwarded as `tea.Msg` into the same Update path the local TUI
-   uses. The TUI doesn't branch on mode.
-4. **CLI client** —
-   `meshx client {status,scan,pair,list,forget,fav,unfav,send, tail}` — one-shot
-   HTTP calls against the daemon for scripting / admin.
-5. **MCP agent** — `meshx mcp start` opens a Model Context Protocol server over
-   stdio. An agent (Claude Code, Cursor, …) spawns it per session; every daemon
-   operation becomes an MCP tool the agent can call. When the agent disconnects,
-   the MCP process exits; the daemon keeps running.
-
-The daemon owns the BLE/USB adapter exclusively while it's running. CLI client
-commands and the MCP server both route through the daemon's HTTP API — neither
-touches hardware directly. This avoids two-process contention over the Bluetooth
-stack.
-
-Remote TUI mode has two independent reconnect loops: radio↔daemon (pump backoff
-on the daemon side) and TUI↔daemon (SSE re-subscribe + snapshot re-fetch on
-network blips). The daemon keeps the radio session alive across TUI restarts.
-
-### Client lifecycle (modes 3–5)
-
-```bash
-# 1. Start the daemon (owns the radio long-term)
-meshx server start --radio /dev/cu.usbmodem2101
-
-# 2. From another terminal (or agent), use client commands:
-meshx client status                   # is the daemon up? which radios?
-meshx client scan ble                 # discover BLE radios via the daemon
-meshx client pair <uuid>              # pair one
-meshx client connect                  # open the TUI in remote mode
-meshx client send 0xabcdef01 -t "hi"  # one-shot message
-meshx client tail 0xabcdef01          # live SSE stream (jq-able)
-
-# 3. Or wire an MCP agent (example: Claude Code config)
-meshx mcp start --server http://127.0.0.1:4404
-```
-
-All flags / env vars for `meshx client` and `meshx mcp` are documented in
-[`docs/configuration.md`](./configuration.md).
-
-## Daemon, logging, config
-
-`meshx server start` runs the HTTP+SSE daemon. Default bind is `127.0.0.1:4404`
-(chosen to sit adjacent to meshtasticd's `4403` — "4403 talks to the radio, 4404
-talks to clients of meshx"). The bind address resolves through viper: `--bind`
-flag > `MESHX_SERVER_BIND` env > default. `MESHX_SERVER_RADIO` plus the
-`--radio <dest>` flag pre-register a pending radio at startup.
+## Logging
 
 Logging is a single package-level `slog.Logger` set up in
 `cmd/root.go::initLogger` via `cobra.OnInitialize`. The default handler is
@@ -215,126 +159,23 @@ Logging is a single package-level `slog.Logger` set up in
 `-j` swaps in `slog.NewJSONHandler` for log aggregators; `--debug` / `-d` flips
 the level. Subcommands tag their child logger with `subsystem=<verb>.<action>`
 and emit a `Debug("running", …)` line at the top of each `RunE` so debugging
-shows the parsed inputs without polluting default UX. The daemon emits `Info`
-"config" + "listening" lines at boot and a structured request log line per HTTP
-request.
-
-`internal/server/middleware.go` wires three Huma middlewares (outermost-first):
-panic recovery (logs stack + 500), request-id (honors inbound `X-Request-ID` or
-generates 8-byte hex; echoes header, stashes on context, retrievable via
-`server.RequestIDFromContext`), and a structured request log (method, path,
-status, duration, request_id, remote, user-agent — Error level for 5xx, Warn for
-4xx, Info otherwise).
-
-## Server architecture
-
-A request flows: Huma router → middleware stack (panic / request-id / log) →
-`internal/server/handlers.go` → `resolveRadio({radio_id})` → `Registry.Get(id)`
-→ `Driver` (the consumer interface in `internal/server/session.go`, satisfied by
-`*radio.Session`). Handlers project model types (`mdl.ChannelItem`,
-`mdl.NodeItem`, `mdl.MessageItem`) directly into responses — no DTO duplication,
-the JSON shape on the wire IS the model shape. Multi-radio is the `Registry`
-multiplex (`radio_id → Driver`, RWMutex-guarded); routes are radio-scoped under
-`/radios/{radio_id}/...` and transport admin under `/transports/{ble,usb}/...`.
-The SSE stream (`/radios/{id}/events`) sits on `Driver.Subscribe(ctx)` and
-dispatches per-event-kind via `eventsTypeMap` so each variant gets the right
-`event:` line on the wire.
-
-## Code generation pipeline
-
-The daemon's Huma router is the single source of truth for the API. Three
-downstream consumers are generated from it, each invoked by `just generate` in
-strict order — no running daemon required:
-
-```
-Huma router (internal/server/)
-      │
-      ▼  (1) dumpspec
-api.yaml  (OpenAPI 3.0)
-      │
-      ├──▶ (2) oapi-codegen ──▶ client.gen.go  (typed HTTP client)
-      │
-      └──▶ (3) mcpgen ────────▶ tools_gen.go   (MCP tool registrations)
-```
-
-### Stage 1 — extract the OpenAPI spec
-
-`internal/sdk/gen/dumpspec/main.go` imports `internal/server`, calls
-`Server.OpenAPISpec()` to pull the 3.0 YAML straight from Huma in-process,
-writes `api.yaml`. Registered as a `tool` in `go.mod` and invoked via
-`go tool .../dumpspec` from the `//go:generate` directive in
-`internal/sdk/gen/generate.go`.
-
-### Stage 2 — generate the typed HTTP client
-
-`oapi-codegen` (also a go.mod `tool`) runs against `api.yaml` + `cfg.yaml` to
-produce `client.gen.go`. This is the typed Go HTTP client the TUI's remote mode
-(`internal/sdk/remote.go`), the CLI (`cmd/client_*.go`), and the MCP server
-(`internal/mcp/`) all consume.
-
-### Stage 3 — generate MCP tool registrations
-
-`internal/mcp/mcpgen/main.go` reads `api.yaml` with `kin-openapi`, and for each
-operation (except SSE streaming endpoints) emits an args struct, a handler
-method, and a tool registration call into `internal/mcp/tools_gen.go` using
-`dave/jennifer`. When you add a new HTTP endpoint to the daemon and run
-`just generate`, the matching MCP tool appears automatically — no hand-wiring.
-
-### Running
-
-```bash
-just generate    # runs all three stages in order
-```
-
-The justfile sequences `go generate` per-package so stage 1 writes `api.yaml`
-before stages 2 and 3 read it:
-
-```
-go generate ./internal/sdk/gen/...     # (1) dumpspec + (2) oapi-codegen
-go generate ./internal/tui/emoji/...   # emoji widths (independent)
-go generate ./internal/mcp/...         # (3) mcpgen
-```
-
-### Drift detection
-
-`TestAPISpecMatchesVendoredCopy` (in `internal/server/server_test.go`) fails
-`just test` if the on-disk `api.yaml` doesn't match what the in-process daemon
-would emit — catches "someone changed a handler but forgot `just generate`."
-Breaking changes are caught in CI by `oasdiff` between the PR branch's
-`api.yaml` and main's — see `.github/workflows/go.yml`.
-
-### Notes
-
-- oapi-codegen still can't consume OpenAPI 3.1 (oapi-codegen #373) so the
-  pipeline uses the 3.0 downgrade path.
-- `client.gen.go` and `tools_gen.go` are both checked in so consumers can build
-  without invoking codegen.
-- **Schema-name caveat**: oapi-codegen auto-generates a `<OpId>Response` struct
-  per operation. Avoid `*Response` schema names in handler types — that's why
-  the send-message body is `SendMessageResult`, not `SendMessageResponse`.
-- `internal/sdk/remote.go` is the hand-written companion that wraps
-  `gen.Client` + an SSE consumer behind the `tui.radioSession` interface for
-  remote-mode TUI. SSE isn't generated by oapi-codegen, so the event reader is
-  hand-rolled against `/radios/{id}/events`.
+shows the parsed inputs without polluting default UX.
 
 ## Dependencies
 
-| Package                         | Purpose                                        |
-| ------------------------------- | ---------------------------------------------- |
-| `charmbracelet/bubbletea`       | Elm-style TUI framework                        |
-| `charmbracelet/bubbles`         | textinput widget for input + search prompts    |
-| `charmbracelet/lipgloss`        | colors, borders, layout primitives             |
-| `spf13/cobra`                   | CLI command tree                               |
-| `spf13/viper`                   | flag/env/default config resolution             |
-| `lmittmann/tint`                | colored slog handler                           |
-| `lmatte7/gomesh/...gomeshproto` | Meshtastic protobuf definitions                |
-| `go.bug.st/serial`              | cross-platform USB-serial                      |
-| `tinygo.org/x/bluetooth`        | cross-platform Bluetooth LE (macOS / Linux)    |
-| `google.golang.org/protobuf`    | proto marshal / unmarshal                      |
-| `mattn/go-sqlite3`              | SQLite driver (CGo) for scrollback persistence |
-| `pressly/goose`                 | embedded SQL migrations                        |
-| `danielgtaylor/huma/v2`         | HTTP+OpenAPI framework for the daemon          |
-| `oapi-codegen/oapi-codegen/v2`  | Go client codegen from the OpenAPI spec (tool) |
+| Package                         | Purpose                                     |
+| ------------------------------- | ------------------------------------------- |
+| `charmbracelet/bubbletea`       | Elm-style TUI framework                     |
+| `charmbracelet/bubbles`         | textinput widget for input + search prompts |
+| `charmbracelet/lipgloss`        | colors, borders, layout primitives          |
+| `spf13/cobra`                   | CLI command tree                            |
+| `spf13/viper`                   | flag/env/default config resolution          |
+| `lmittmann/tint`                | colored slog handler                        |
+| `lmatte7/gomesh/...gomeshproto` | Meshtastic protobuf definitions             |
+| `go.bug.st/serial`              | cross-platform USB-serial                   |
+| `tinygo.org/x/bluetooth`        | cross-platform Bluetooth LE (macOS / Linux) |
+| `google.golang.org/protobuf`    | proto marshal / unmarshal                   |
+| `go.etcd.io/bbolt`              | embedded key-value store for persistence    |
 
 ## Modal UI — where the code lives
 
@@ -499,15 +340,26 @@ resolution chain.
 `program.Send()` deadlock. Each `FromRadio` envelope is mapped to exactly one
 `radio<Name>Msg` type and sent to the tea loop.
 
-## Persistence — SQLite scrollback
+## Persistence — bbolt scrollback
 
-Live-radio mode opens `~/.meshx/meshx.db` (WAL journal, `_busy_timeout=5000`)
-via the `internal/meshx/storage` package and replays the last 500 messages on
-boot. The TUI consumes a narrow `Store` interface (defined in `store.go`); the
-concrete `*storage.Sqlite` implements it. The schema is one flat `messages`
-table mirroring `mdl.Message` (the wire/persistence shape that `MessageItem`
-embeds) plus a `channel` column. System / flash rows are skipped on save. Write
-errors are logged-then-swallowed; losing history beats crashing the UI.
+Live-radio mode opens `~/.meshx/meshx.bolt` via the `internal/meshx/storage`
+package and replays the last 500 messages on boot. The TUI consumes a narrow
+`Store` interface (defined in `store.go`); the concrete `*storage.Bolt`
+implements it. The bucket layout is:
+
+```
+meta/
+  schema_version → "1"
+radios/
+  <uuid> → JSON-encoded radio record (name, favorite flag, …)
+messages/
+  <channel>/<seq> → JSON-encoded message record
+nodes/
+  <node-num> → JSON-encoded node record
+```
+
+System / flash rows are skipped on save. Write errors are logged-then-swallowed;
+losing history beats crashing the UI.
 
 ## Threading
 
@@ -536,8 +388,8 @@ body so long parents don't blow the width budget.
 Every PR that adds or changes behavior ships with the tests that verify it. **No
 "Test plan" sections in PR descriptions that ask the human to verify by hand.**
 Manual checklists rot; automated tests don't. If a behavior genuinely cannot be
-tested (real-radio integration, browser-only EventSource semantics, hardware
-reset), call it out explicitly — don't bury it.
+tested (real-radio integration, hardware reset), call it out explicitly — don't
+bury it.
 
 ### The shape rule (non-negotiable)
 
@@ -550,19 +402,16 @@ forbidden.
 
 A "public surface" is:
 
-- An HTTP route (one `TestEndpoint<OperationID>` per route registered in
-  `routes.go`).
 - An exported type's public method (one `Test<Type>_<Method>` per method — see
   naming below).
 - A package-level function (one `Test<Function>` per function).
 
 #### Naming
 
-| Subject in code                        | Test name                 |
-| -------------------------------------- | ------------------------- |
-| `LoadAuthToken` (function)             | `TestLoadAuthToken`       |
-| `Session.ApplyText` (method on a type) | `TestSession_ApplyText`   |
-| HTTP route operation `SendMessage`     | `TestEndpointSendMessage` |
+| Subject in code                        | Test name               |
+| -------------------------------------- | ----------------------- |
+| `LoadAuthToken` (function)             | `TestLoadAuthToken`     |
+| `Session.ApplyText` (method on a type) | `TestSession_ApplyText` |
 
 The underscore is reserved for the `Type.Method` separator — Go-stdlib idiom
 (`TestFile_Stat`, `TestBuffer_WriteByte`), and `go test -run Type/Method`
@@ -580,38 +429,25 @@ tests cancellation, another tests delivery), the table holds a
 parent — _still one parent function_, never sibling top-levels.
 
 ```go
-func TestEndpointSendMessage(t *testing.T) {
+func TestSession_ApplyText(t *testing.T) {
     t.Parallel()
 
     cases := []struct {
-        name       string
-        body       any
-        wantStatus int
-        wantBody   func(t *testing.T, body []byte)
+        name     string
+        input    mdl.Text
+        wantLen  int
+        wantBody string
     }{
         {
-            name:       "happy-path-broadcast",
-            body:       SendMessageRequest{Channel: 0, Text: "hi"},
-            wantStatus: http.StatusOK,
-            wantBody: func(t *testing.T, body []byte) {
-                var got SendMessageResult
-                require.NoError(t, json.Unmarshal(body, &got))
-                require.NotZero(t, got.PacketID)
-                require.True(t, got.OK)
-            },
+            name:     "appends-message",
+            input:    mdl.Text{Body: "hi"},
+            wantLen:  1,
+            wantBody: "hi",
         },
         {
-            name:       "happy-path-dm-with-to_num",
-            // …
-        },
-        {
-            name:       "rejects-empty-text-422",
-            body:       SendMessageRequest{Channel: 0, Text: ""},
-            wantStatus: http.StatusUnprocessableEntity,
-        },
-        {
-            name:       "rejects-unknown-radio-404",
-            // …
+            name:    "ignores-empty-body",
+            input:   mdl.Text{Body: ""},
+            wantLen: 0,
         },
     }
     for _, tc := range cases {
@@ -636,50 +472,29 @@ Two narrow exceptions, and only these two:
    otherwise inline them.
 2. **`main_test.go`** for `TestMain` / package-wide setup.
 
-Test files for code in `handlers.go` that grew enough to split (e.g., separate
-tests for send-message vs list-messages logic) is a signal that `handlers.go`
-itself should be split into `handlers_send_message.go` + `handlers_messages.go`
-first — never invent a `_test.go` file that doesn't pair with production.
+Test files for code in a file that grew enough to split is a signal that the
+production file itself should be split first — never invent a `_test.go` file
+that doesn't pair with production.
 
 ### Tooling
 
 - **`testing` + `testify/require`** for unit tests. Standard library first;
   reach for `testify` only when an assertion would otherwise need a long custom
   message.
-- **`net/http/httptest`** for every HTTP and SSE endpoint —
-  `httptest.NewServer(s.http.Handler)` against the same `*Server` production
-  uses. No fake handlers, no parallel mock router.
 - **In-process `*radio.Session`** (constructed via `radio.New(nil, nil, nil)`)
-  for testing the apply / publish / subscribe paths without a real radio. Inject
-  events via `Session.Publish`; assert on `Subscribe` / `SubscribeWithReplay`
-  output. For radio-dispatch verification (commands reaching the pump), satisfy
-  `radio.Pump` with a fake that captures dispatched commands — see `fakePump` in
-  `internal/server/handlers_radio_ops_test.go` for the canonical shape.
-- **Race detector** — `go test -race ./...` for anything with goroutines
-  (Subscribe, Pump, the SSE handler). Cheapest way to catch a slipped lock.
-
-### HTTP-specific rules
-
-- **100% endpoint coverage.** Every route registered in
-  `internal/server/routes.go` has a dedicated `TestEndpoint*` test function with
-  happy-path + every distinct failure mode as table rows. If a route isn't
-  tested, the PR isn't done.
-- **Verify the wire shape on happy paths.** Every happy-path row decodes the
-  response body into the exported response type (`mdl.MessageItem`,
-  `SendMessageResult`, etc.) and asserts on key fields. Catches "we accidentally
-  renamed a JSON field" before the SDK regen does.
-- **Cover failure modes explicitly:** missing-required-field (422),
-  unknown-radio (404), bad path-param (400/422), buffer-full / pump-down (503),
-  validation rejects (422). One row per distinct failure.
-- **Test naming.** `TestEndpointListMessages`, `TestEndpointSendMessage`,
-  `TestEndpointMintChannel` — operation-id-shaped, predictable from the route
-  registration.
+  for testing the apply paths without a real radio. For radio-dispatch
+  verification (commands reaching the pump), satisfy `radio.Pump` with a fake
+  that captures dispatched commands.
+- **bbolt test patterns** — use `storage.New(t.TempDir() + "/test.bolt")` to get
+  a real database in a temp directory; `t.Cleanup` handles removal.
+- **Race detector** — `go test -race ./...` for anything with goroutines (bus,
+  pump). Cheapest way to catch a slipped lock.
 
 ### Other rules
 
-- **Test public-facing surfaces** — the HTTP route, the exported type, the wire
-  shape. Internal-only helpers can be tested incidentally through their public
-  callers; don't write a parallel test for every unexported function.
+- **Test public-facing surfaces** — the exported type, the wire shape. Internal-
+  only helpers can be tested incidentally through their public callers; don't
+  write a parallel test for every unexported function.
 - **Bound waits.** Anything blocking takes
   `select { case … : case <-time.After(time.Second): t.Fatal("timed out") }`. A
   test that hangs the whole suite on regression is a bad test.
@@ -694,9 +509,9 @@ what the human needs to do. Reference the test names, not "checked locally":
 ```
 ## Test plan
 
-- [x] `TestEndpointSendMessage` — happy paths (broadcast, DM via to_num, reply via reply_id) + failure rows (empty text, unknown radio, idempotency dedupe)
-- [x] `TestEndpointListMessages` — empty state, with limit, with ?dm=mine filter, unknown radio
-- [x] `TestSessionPublish` — monotonic IDs, fan-out to N subs, ring overflow keeps newest, cursor replay
+- [x] `TestSession_ApplyText` — appends message, ignores empty body
+- [x] `TestBolt_SaveMessage` — round-trips message through bbolt
+- [x] `TestBus_Publish` — fan-out to N subscribers, slow consumer drops
 ```
 
 ### Running
@@ -704,7 +519,7 @@ what the human needs to do. Reference the test names, not "checked locally":
 ```bash
 just test                                    # full suite (lint + format + unit + coverage)
 go test -race ./...                          # all tests with race detector
-go test -run TestEndpointSendMessage ./internal/server/  # one test, verbose
+go test -run TestSession_ApplyText ./internal/radio/  # one test, verbose
 ```
 
 ## Color palette (Max Headroom)

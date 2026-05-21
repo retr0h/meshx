@@ -68,8 +68,8 @@ go build -o meshx .
 
 - Follow existing patterns in the codebase
 - Use multi-line function signatures for any function with 2+ params
-- Palette colors live in `internal/meshx/palette.go` — add new colors there with
-  a named constant, never inline hex elsewhere
+- Palette colors live in `internal/tui/palette.go` — add new colors there with a
+  named constant, never inline hex elsewhere
 - Every widget uses lipgloss; no direct ANSI escape codes
 - Tab completion should honor the same contextual rules (commands / channels /
   nicks) — if you add a new `/command`, also add it to `slashCommands` in
@@ -82,9 +82,9 @@ go build -o meshx .
 
 ## Scope reminders
 
-- meshX is a **client**, not a radio configurator. PSK/channel creation lives on
-  the radio side (official Meshtastic app). meshX imports channels; it does not
-  create them from scratch.
+- meshX is a **client**, not a radio configurator. Region / modem preset / role
+  changes require a reboot and are handled by the official Meshtastic app. meshX
+  covers `/nick`, `/tag`, and channel management (mint, import, share, delete).
 - meshX is **text + telemetry**. No maps, no audio, no voice.
 - meshX is **terminal-first**. Every feature should work cleanly in a 80×24
   vt100 at minimum. If you add something that needs more pixels, make it degrade

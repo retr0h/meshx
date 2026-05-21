@@ -27,18 +27,18 @@ import (
 )
 
 // Store is the storage surface the Session consumes — the concrete
-// implementation lives in internal/meshx/storage as *storage.Sqlite,
+// implementation lives in internal/meshx/storage as *storage.Bolt,
 // cast to this interface at construction in cmd/. Defined here
 // (where it's consumed) per the osapi-io pattern: each consumer
 // declares only the methods it actually calls, so a future remote
-// client (MR-5) can declare a smaller surface without bloating the
+// client can declare a smaller surface without bloating the
 // Session's view of storage.
 //
-// Methods are the subset of *storage.Sqlite's API the Session and
+// Methods are the subset of *storage.Bolt's API the Session and
 // its callers (TUI Update arms, daemon sink) actually use. BLE
-// pairing storage isn't part of this surface — it's CLI / HTTP
-// admin territory and the driver-side seam should not pull it in.
-// See server.Store / cmd's BLE deps for that.
+// pairing storage isn't part of this surface — it's CLI admin
+// territory and the driver-side seam should not pull it in.
+// See cmd's BLE deps for that.
 type Store interface {
 	// identity
 	ResolveRadioByConnection(transport, addr string) (string, error)
@@ -55,7 +55,7 @@ type Store interface {
 	SaveNodePrefs(radioID string, nodeNum uint32, favorite, muted bool) error
 
 	// settings
-	GetSetting(radioID, key string) (string, bool)
+	GetSetting(radioID, key string) (string, bool, error)
 	PutSetting(radioID, key, value string) error
 
 	// diagnostics

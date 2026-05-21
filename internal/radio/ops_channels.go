@@ -133,8 +133,6 @@ type ChannelShareResult struct {
 // updates State.Channels so a follow-up Mint doesn't race, builds
 // the share URL.
 func (s *Session) MintChannel(req MintChannelRequest) (MintChannelResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	name := strings.TrimSpace(req.Name)
 	name = strings.TrimPrefix(name, "#")
 	if name == "" {
@@ -215,8 +213,6 @@ func (s *Session) MintChannel(req MintChannelRequest) (MintChannelResult, error)
 // conditions are recorded in Skipped[] rather than failing the whole
 // call (matches the TUI's "additive only" semantics).
 func (s *Session) ImportChannel(req ImportChannelRequest) (ImportChannelResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	url := strings.TrimSpace(req.URL)
 	if url == "" {
 		return ImportChannelResult{}, ErrBadRequest("share url is empty")
@@ -295,8 +291,6 @@ func (s *Session) ImportChannel(req ImportChannelRequest) (ImportChannelResult, 
 // the firmware requires one to operate. Optimistically clears local
 // state.
 func (s *Session) DeleteChannel(req DeleteChannelRequest) (DeleteChannelResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if req.Index <= 0 || req.Index >= channelSlotsMax {
 		return DeleteChannelResult{}, ErrBadRequestf(
 			"slot %d out of range (1..%d)",
@@ -328,8 +322,6 @@ func (s *Session) DeleteChannel(req DeleteChannelRequest) (DeleteChannelResult, 
 // ShareChannel — builds a meshtastic:// URL for the named slot. 404
 // for slot indexes beyond the channel table or for DISABLED slots.
 func (s *Session) ShareChannel(req ShareChannelRequest) (ChannelShareResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.State == nil ||
 		req.Index < 0 || req.Index >= len(s.State.Channels) {
 		return ChannelShareResult{}, ErrNotFoundf("no channel at slot %d", req.Index)
@@ -364,8 +356,6 @@ func (s *Session) ShareChannel(req ShareChannelRequest) (ChannelShareResult, err
 // Lives here so the TUI's findChannelByName + the daemon's
 // future name-based admin commands share one resolution rule.
 func (s *Session) LookupChannelByName(typed string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.State == nil {
 		return -1
 	}

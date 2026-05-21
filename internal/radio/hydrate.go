@@ -69,7 +69,7 @@ type HydrationResult struct {
 type Sanitizer func(text string) (cleaned string, corrupted, alert bool)
 
 // Resolver looks up the canonical radio_id for a (transport,
-// addr) pair. Backed by *storage.Sqlite.ResolveRadioByConnection.
+// addr) pair. Backed by *storage.Bolt.ResolveRadioByConnection.
 // Pulled out as a function type so this package doesn't import
 // storage.
 type Resolver func(transport, addr string) (string, error)
@@ -132,8 +132,6 @@ type HydrationOptions struct {
 // Returns counters for the caller to surface and the boot notes the
 // store accumulated during migration / open.
 func (s *Session) HydrateFromStore(opts HydrationOptions) HydrationResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var res HydrationResult
 	if s.store == nil {
 		return res

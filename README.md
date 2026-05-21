@@ -38,8 +38,6 @@ baked in.
 - 📌 **Stable tmux-pane channel tabs** + `Alt+1..4` quick-hop
 - ❓ **Scrollable `?` help overlay** — every keybinding and command, vim-scrollable
 - 💾 **bbolt-backed history** — message log, node cache, and paired BLE devices survive restarts (`~/.meshx/meshx.bolt`)
-- ⏳ **Ephemeral notices** — `/whois` / `/ping` / `/config` cards auto-expire after 60s with a fade; `/pin` or `P` holds them with `⌜ ⌟` corners
-- 🔁 **Stale-send recovery** — `R` resends pending or failed messages; boot sweep flips zombie rows to `✗` so they're actionable
 
 ## 🔧 Install
 

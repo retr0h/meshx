@@ -61,7 +61,6 @@ git clone https://github.com/retr0h/meshx.git
 cd meshx
 just deps
 go build -o meshx .
-./meshx demo
 ```
 
 ## Code style

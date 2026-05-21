@@ -1664,7 +1664,7 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// you want surfaced without waiting for the next organic
 		// NODEINFO_APP broadcast.
 		if m.session.PumpHandle() == nil {
-			m.flash = "/sync needs a live radio connection (demo mode)"
+			m.flash = "/sync needs a live radio connection"
 			return nil
 		}
 		if _, err := m.session.Sync(); err != nil {

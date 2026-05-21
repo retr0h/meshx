@@ -96,7 +96,7 @@ func (m model) findMessageByPacketID(id uint32) *messageItem {
 // This is what backfills "node 0xdeadbeef" → real callsign once the
 // corresponding NodeInfo arrives — without it, the ingest-time
 // fallback is baked into the row forever. Falls back to msg.from
-// when the node isn't in nodesByNum (demo seeds with no fromNum,
+// when the node isn't in nodesByNum (ghost nodes with no fromNum,
 // or peers we never learned about).
 //
 // Own ("mine") rows go through myCallsign() so rows sent BEFORE
@@ -108,7 +108,7 @@ func (m model) findMessageByPacketID(id uint32) *messageItem {
 // we've only synthesized a firmware-default callsign for (no real
 // NodeInfo has arrived). Used by the row renderer to dim the FROM
 // column + accent tick and prepend the 👻 marker. Own messages and
-// rows with no fromNum (demo seeds, system rows) are never flagged.
+// rows with no fromNum (ghost nodes, system rows) are never flagged.
 func (m model) senderUnresolved(msg messageItem) bool {
 	if msg.Mine || msg.FromNum == 0 {
 		return false

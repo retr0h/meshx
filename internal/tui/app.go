@@ -297,7 +297,7 @@ type model struct {
 	// the model embeds. Typed as the narrow radioSession interface
 	// (declared in tui/driver.go) so a test double or future in-process
 	// variant can satisfy it without the concrete *radio.Session.
-	// Nil-safe: demo mode leaves PumpHandle and StoreHandle nil and
+	// Nil-safe: no-radio mode leaves PumpHandle and StoreHandle nil and
 	// the session runs in-memory.
 	session radioSession
 
@@ -306,7 +306,7 @@ type model struct {
 	// so radioSession can stay focused on running-TUI behavior — pump
 	// wiring is a once-per-session construction concern. Set in
 	// newModel from the concrete *radio.Session's AttachPump method;
-	// nil-safe so demo / remote modes (no local pump) skip cleanly.
+	// nil-safe so modes with no local pump (no local pump) skip cleanly.
 	attachPump func(radio.Pump)
 
 	// initialFocusCmd captures the tea.Cmd returned by

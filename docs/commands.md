@@ -11,7 +11,6 @@ trees, each with their own verbs. Bare `meshx` picks a transport for you.
 | Command                          | What it does                                                                                            |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `meshx`                          | Auto-connect: exactly-one USB radio → use it; else single saved BLE device → use it; else favorite BLE. |
-| `meshx demo`                     | Canned-fixture TUI. No radio needed.                                                                    |
 | `meshx usb probe`                | List USB-serial ports and label each as Meshtastic or not.                                              |
 | `meshx usb connect [dev]`        | Open the TUI over serial. Auto-detects when `[dev]` is omitted.                                         |
 | `meshx tcp connect host[:port]`  | Open the TUI over TCP. Port defaults to 4403.                                                           |
@@ -313,7 +312,7 @@ Live-radio mode persists to `~/.meshx/meshx.bolt` (bbolt):
   `meshx ble list` reads, `meshx ble fav` flips the favorite flag in a single
   transaction so there's never two.
 
-Demo mode never writes to disk.
+Offline mode never writes to disk.
 
 ### Stale-send recovery
 

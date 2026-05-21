@@ -71,7 +71,7 @@ Package-level overview (file-level detail lives in each package's headers —
 
 | Package                     | Role                                                                                                                              |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `cmd/`                      | Cobra command tree — `usb`, `ble`, `tcp`, `demo` subcommands                                                                      |
+| `cmd/`                      | Cobra command tree — `usb`, `ble`, `tcp` subcommands                                                                              |
 | `internal/radio/`           | Per-radio session layer — canonical `*State`, `Apply*` handlers, `ops_*` (channels/config/radio/send)                             |
 | `internal/bus/`             | In-process publish/subscribe event bus — fan-out to TUI and any other subscriber; slow consumers drop events rather than blocking |
 | `internal/meshx/model/`     | Canonical wire/persisted shapes — the lingua franca all layers share                                                              |

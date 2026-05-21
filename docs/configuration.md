@@ -27,9 +27,8 @@ Bare `meshx` (no subcommand) auto-detects: if a favorite BLE radio is saved, it
 connects to that; otherwise it tries USB. Both `usb connect` and `ble connect`
 accept an optional positional radio argument and open the local TUI.
 
-| Flag     | Env          | Default | Purpose                                                                                                       |
-| -------- | ------------ | ------- | ------------------------------------------------------------------------------------------------------------- |
-| `--demo` | `MESHX_DEMO` | `false` | Skip the radio dial; populate state from `internal/tui.DefaultDemo()` so the UI renders for screenshots / dev |
+| Flag | Env | Default | Purpose |
+| ---- | --- | ------- | ------- |
 
 ## USB transport (`meshx usb connect`)
 

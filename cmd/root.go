@@ -25,13 +25,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/lmittmann/tint"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"golang.org/x/term"
 
 	"github.com/retr0h/meshx/internal/cli"
 )
@@ -111,20 +111,53 @@ func initConfig() {
 // color when stderr is a TTY, plain text otherwise. --json swaps in
 // the slog JSON handler — for log aggregators that prefer structured
 // input. Level follows --debug.
+// debugLogPath is where --debug writes. Lives under the meshx data
+// directory so `tail -f` is predictable.
+var debugLogPath = filepath.Join(meshxDataDir(), "debug.log")
+
+func meshxDataDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/tmp"
+	}
+	return filepath.Join(home, ".meshx")
+}
+
 func initLogger() {
+	debug := viper.GetBool("debug")
 	level := slog.LevelInfo
-	if viper.GetBool("debug") {
+	if debug {
 		level = slog.LevelDebug
 	}
 
 	var handler slog.Handler
-	if jsonOutput {
+	if debug {
+		_ = os.MkdirAll(filepath.Dir(debugLogPath), 0o755)
+		f, err := os.OpenFile(
+			debugLogPath,
+			os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+			0o644,
+		)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "meshx: cannot open debug log %s: %v\n", debugLogPath, err)
+			os.Exit(1)
+		}
+		if jsonOutput {
+			handler = slog.NewJSONHandler(f, &slog.HandlerOptions{Level: level})
+		} else {
+			handler = tint.NewHandler(f, &tint.Options{
+				Level:      level,
+				TimeFormat: time.Kitchen,
+				NoColor:    true,
+			})
+		}
+	} else if jsonOutput {
 		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
 	} else {
 		handler = tint.NewHandler(os.Stderr, &tint.Options{
 			Level:      level,
 			TimeFormat: time.Kitchen,
-			NoColor:    !term.IsTerminal(int(os.Stderr.Fd())),
+			NoColor:    true,
 		})
 	}
 

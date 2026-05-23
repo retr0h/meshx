@@ -24,6 +24,8 @@ package radio
 // on a request_id match, aggregates per-peer Ackers for ack roll-up.
 
 import (
+	"fmt"
+	"log/slog"
 	"sort"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
@@ -60,14 +62,25 @@ func (s *Session) ApplyRouting(msg mdl.Routing) ApplyRoutingResult {
 	}
 	i, ok := s.State.MessagesByPacketID[msg.RequestID]
 	if !ok || i < 0 || i >= len(s.State.Messages) || !s.State.Messages[i].Mine {
+		slog.Debug("routing no match",
+			"reqID", fmt.Sprintf("0x%08x", msg.RequestID),
+			"ok", msg.OK,
+			"reason", msg.ErrorName)
 		return ApplyRoutingResult{}
 	}
 	row := &s.State.Messages[i]
 	if msg.OK {
 		row.Status = mdl.StatusAck
 		s.recordAck(row, msg)
+		slog.Debug("routing ack",
+			"reqID", fmt.Sprintf("0x%08x", msg.RequestID),
+			"from", fmt.Sprintf("0x%08x", msg.FromNum),
+			"hops", msg.Hops)
 	} else {
 		row.Status = mdl.StatusFail
+		slog.Debug("routing fail",
+			"reqID", fmt.Sprintf("0x%08x", msg.RequestID),
+			"reason", msg.ErrorName)
 	}
 	if s.store != nil {
 		s.storeError(s.store.SaveMessage(

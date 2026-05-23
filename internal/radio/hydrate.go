@@ -21,6 +21,7 @@
 package radio
 
 import (
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -246,5 +247,11 @@ func (s *Session) HydrateFromStore(opts HydrationOptions) HydrationResult {
 	res.LastHeardBackfilled = len(touched)
 
 	res.BootNotes = s.store.ConsumeBootNotes()
+	slog.Debug("hydrate complete",
+		"messages", res.MessagesLoaded,
+		"nodes", res.NodesLoaded,
+		"ghosts", res.GhostsCreated,
+		"staleExpired", res.StalePendingExpired,
+		"lastHeardBackfilled", res.LastHeardBackfilled)
 	return res
 }

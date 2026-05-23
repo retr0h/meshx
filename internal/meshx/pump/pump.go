@@ -309,6 +309,7 @@ func (p *Pump) runSession(ctx context.Context) (bool, error) {
 	slog.Debug("SendWantConfig", "nonce", fmt.Sprintf("0x%08x", nonce))
 
 	totalIn := 0
+	syncing := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -323,25 +324,33 @@ func (p *Pump) runSession(ctx context.Context) (bool, error) {
 			return totalIn > 0, nil
 		case msg := <-inbound:
 			if msg == nil {
-				slog.Debug("pump inbound nil, skipping")
 				continue
 			}
 			totalIn++
 			tms := p.translate(msg)
 			if len(tms) == 0 {
-				slog.Debug("pump inbound housekeeping", "seq", totalIn)
 				continue
 			}
 			for _, tm := range tms {
-				if r, ok := tm.(model.Routing); ok {
-					slog.Debug("pump inbound routing",
-						"seq", totalIn,
-						"reqID", fmt.Sprintf("0x%08x", r.RequestID),
-						"ok", r.OK,
-						"reason", r.ErrorName,
-						"hops", r.Hops)
-				} else {
-					slog.Debug("pump inbound event", "seq", totalIn, "type", fmt.Sprintf("%T", tm))
+				if _, ok := tm.(model.ConfigComplete); ok {
+					syncing = false
+					slog.Debug("pump sync complete", "frames", totalIn)
+				} else if !syncing {
+					switch v := tm.(type) {
+					case model.Routing:
+						slog.Debug("pump routing",
+							"reqID", fmt.Sprintf("0x%08x", v.RequestID),
+							"ok", v.OK,
+							"reason", v.ErrorName,
+							"hops", v.Hops)
+					case model.Text:
+						slog.Debug("pump text",
+							"from", fmt.Sprintf("0x%08x", v.Body.FromNum),
+							"ch", v.Channel,
+							"pid", fmt.Sprintf("0x%08x", v.Body.PacketID))
+					default:
+						slog.Debug("pump event", "type", fmt.Sprintf("%T", tm))
+					}
 				}
 				p.sink.Send(tm)
 			}

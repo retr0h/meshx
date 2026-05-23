@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
 )
@@ -71,9 +72,7 @@ func runStream(
 			}
 			msg, err := UnmarshalFromRadio(payload)
 			if err != nil {
-				// Decode errors are survivable — log via the channel
-				// consumer ideally, but for now just drop the frame
-				// and keep going.
+				slog.Debug("stream read unmarshal error", "err", err, "bytes", len(payload))
 				continue
 			}
 			select {
@@ -106,6 +105,7 @@ func runStream(
 					errCh <- fmt.Errorf("write: %w", err)
 					return
 				}
+				slog.Debug("stream write", "bytes", len(payload))
 			}
 		}
 	}()

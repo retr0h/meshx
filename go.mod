@@ -15,7 +15,6 @@ require (
 	github.com/spf13/viper v1.21.0
 	go.bug.st/serial v1.7.0
 	go.etcd.io/bbolt v1.4.3
-	golang.org/x/term v0.43.0
 	google.golang.org/protobuf v1.36.11
 	tinygo.org/x/bluetooth v0.15.1-0.20260517055521-fc635e3ddf8c
 )
@@ -242,6 +241,7 @@ require (
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

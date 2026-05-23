@@ -25,6 +25,8 @@ package radio
 // persistence.
 
 import (
+	"fmt"
+	"log/slog"
 	"time"
 
 	mdl "github.com/retr0h/meshx/internal/meshx/model"
@@ -113,12 +115,21 @@ func (s *Session) ApplyText(
 			if prev.Status == mdl.StatusPending {
 				prev.Status = mdl.StatusAck
 			}
+			slog.Debug("text dedup upgrade",
+				"pid", fmt.Sprintf("0x%08x", body.PacketID),
+				"from", from)
 			if s.store != nil {
 				s.storeError(s.store.SaveMessage(s.State.RadioID, channelName, prev.Message))
 			}
 			return ApplyTextResult{Index: existing, Skipped: true, FromMine: mine}
 		}
 	}
+	slog.Debug("text inbound",
+		"pid", fmt.Sprintf("0x%08x", body.PacketID),
+		"from", from,
+		"ch", channelName,
+		"hops", body.Hops,
+		"mine", mine)
 	s.State.Messages = append(s.State.Messages, item)
 	idx := len(s.State.Messages) - 1
 	if body.PacketID != 0 {

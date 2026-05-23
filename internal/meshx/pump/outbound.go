@@ -29,6 +29,7 @@ package pump
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 
 	pb "github.com/lmatte7/gomesh/github.com/meshtastic/gomeshproto"
@@ -52,24 +53,34 @@ func (p *Pump) Send(cmd model.Command) (uint32, bool) {
 	case model.SendText:
 		envelope, pid := buildText(c.Text, uint32(c.Channel), c.ReplyID, c.ToNum)
 		ok := p.enqueue(envelope)
-		p.logf("outbound SendText pid=0x%08x ch=%d to=0x%08x ok=%t text=%q",
-			pid, c.Channel, c.ToNum, ok, truncate(c.Text, 64))
+		slog.Debug("outbound SendText",
+			"pid", fmt.Sprintf("0x%08x", pid),
+			"ch", c.Channel,
+			"to", fmt.Sprintf("0x%08x", c.ToNum),
+			"ok", ok,
+			"text", truncate(c.Text, 64))
 		return pid, ok
 
 	case model.SendPing:
 		envelope, pid := buildPing(c.TargetNum)
 		ok := p.enqueue(envelope)
-		p.logf("outbound SendPing pid=0x%08x to=0x%08x ok=%t", pid, c.TargetNum, ok)
+		slog.Debug("outbound SendPing",
+			"pid", fmt.Sprintf("0x%08x", pid),
+			"to", fmt.Sprintf("0x%08x", c.TargetNum),
+			"ok", ok)
 		return pid, ok
 
 	case model.SendTraceroute:
 		envelope, pid, err := buildTraceroute(c.TargetNum)
 		if err != nil {
-			p.logf("outbound SendTraceroute build failed: %v", err)
+			slog.Debug("outbound SendTraceroute build failed", "err", err)
 			return 0, false
 		}
 		ok := p.enqueue(envelope)
-		p.logf("outbound SendTraceroute pid=0x%08x to=0x%08x ok=%t", pid, c.TargetNum, ok)
+		slog.Debug("outbound SendTraceroute",
+			"pid", fmt.Sprintf("0x%08x", pid),
+			"to", fmt.Sprintf("0x%08x", c.TargetNum),
+			"ok", ok)
 		return pid, ok
 
 	case model.SetOwner:

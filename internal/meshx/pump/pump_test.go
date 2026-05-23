@@ -21,13 +21,11 @@
 package pump
 
 // pump_test.go — unit tests for pump-level helpers (reconnect backoff,
-// debug log open, setClient / getClient under the mutex, Enqueue).
+// setClient / getClient under the mutex, Enqueue).
 // The run loop itself talks to real transports so it is not tested here.
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -84,55 +82,6 @@ func TestReconnectBackoff_Monotonic(t *testing.T) {
 			t.Errorf("attempt %d: %v > maxReconnectBackoff %v", i, d, maxReconnectBackoff)
 		}
 		prev = d
-	}
-}
-
-// ---- openPumpDebugLog -------------------------------------------------------
-
-func TestOpenPumpDebugLog_EnvUnset_ReturnsNil(t *testing.T) {
-	t.Setenv("MESHX_DEBUG", "")
-	f := openPumpDebugLog()
-	if f != nil {
-		_ = f.Close()
-		t.Fatal("expected nil when MESHX_DEBUG is empty")
-	}
-}
-
-func TestOpenPumpDebugLog_EnvOne_UsesDefaultPath(t *testing.T) {
-	// "1" → /tmp/meshx-pump.log. We can't guarantee /tmp is writable in
-	// all CI environments, so just check the function returns non-nil and
-	// close the file immediately.
-	t.Setenv("MESHX_DEBUG", "1")
-	f := openPumpDebugLog()
-	if f == nil {
-		t.Skip("could not open /tmp/meshx-pump.log (filesystem limitation)")
-	}
-	_ = f.Close()
-	// Clean up after the test.
-	_ = os.Remove("/tmp/meshx-pump.log")
-}
-
-func TestOpenPumpDebugLog_CustomPath(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "pump-debug.log")
-	t.Setenv("MESHX_DEBUG", path)
-	f := openPumpDebugLog()
-	if f == nil {
-		t.Fatalf("expected non-nil file for custom path %q", path)
-	}
-	_ = f.Close()
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("log file not created: %v", err)
-	}
-}
-
-func TestOpenPumpDebugLog_BadPath_ReturnsNil(t *testing.T) {
-	// A path under a non-existent directory cannot be created.
-	t.Setenv("MESHX_DEBUG", "/no/such/directory/pump.log")
-	f := openPumpDebugLog()
-	if f != nil {
-		_ = f.Close()
-		t.Fatal("expected nil for unwritable path")
 	}
 }
 

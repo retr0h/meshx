@@ -43,7 +43,7 @@ package pump
 import (
 	"context"
 	"fmt"
-	"os"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -121,22 +121,8 @@ type Pump struct {
 	// the underlying Transport gets swapped out.
 	outbound chan *pb.ToRadio
 
-	// debugLog is the $MESHX_DEBUG log file, shared between the run
-	// goroutine (inbound) and Send callers (outbound). Append-mode
-	// writes are atomic for short lines on POSIX.
-	debugLog *os.File
-
 	// Cancellation for the running goroutines.
 	cancel context.CancelFunc
-}
-
-// logf writes a timestamped line to the debug log when active.
-func (p *Pump) logf(format string, args ...any) {
-	if p.debugLog == nil {
-		return
-	}
-	line := fmt.Sprintf(format, args...)
-	_, _ = fmt.Fprintf(p.debugLog, "[%s] %s\n", time.Now().Format("15:04:05.000"), line)
 }
 
 // setClient swaps the live transport under the mutex. Returns the
@@ -220,22 +206,12 @@ func (p *Pump) Enqueue(msg *pb.ToRadio) bool {
 // flowing when a BLE / serial session appears to hang. Pipe-friendly
 // single-line records so `tail -f` reads cleanly.
 func (p *Pump) run(ctx context.Context) {
-	p.debugLog = openPumpDebugLog()
-	defer func() {
-		if p.debugLog != nil {
-			_ = p.debugLog.Close()
-		}
-	}()
-	dbgf := func(format string, args ...any) {
-		p.logf(format, args...)
-	}
-
-	dbgf("pump.run start dest=%s", p.dest)
+	slog.Debug("pump start", "dest", p.dest)
 
 	attempt := 0
 	for {
 		if ctx.Err() != nil {
-			dbgf("ctx done before next session — exiting")
+			slog.Debug("pump ctx done before next session")
 			return
 		}
 
@@ -243,10 +219,10 @@ func (p *Pump) run(ctx context.Context) {
 		// client is nil (set by New) so we always dial here.
 		var sessErr error
 		if p.getClient() == nil {
-			dbgf("re-dial attempt %d", attempt+1)
+			slog.Debug("pump re-dial", "attempt", attempt+1)
 			client, derr := transport.Dial(p.dest)
 			if derr != nil {
-				dbgf("re-dial failed: %v", derr)
+				slog.Debug("pump re-dial failed", "err", derr)
 				sessErr = derr
 			} else {
 				p.setClient(client)
@@ -254,9 +230,9 @@ func (p *Pump) run(ctx context.Context) {
 		}
 
 		if sessErr == nil && p.getClient() != nil {
-			established, err := p.runSession(ctx, dbgf)
+			established, err := p.runSession(ctx)
 			if ctx.Err() != nil {
-				dbgf("ctx done after session — exiting")
+				slog.Debug("pump ctx done after session")
 				return
 			}
 			// A session that produced any inbound frames counts as a
@@ -273,7 +249,7 @@ func (p *Pump) run(ctx context.Context) {
 				// Clean disconnect — radio rebooted or got unplugged.
 				// Don't auto-redial; the user probably did this on
 				// purpose and the pump goroutine should exit.
-				dbgf("clean disconnect — not retrying")
+				slog.Debug("pump clean disconnect")
 				p.sink.Send(model.Disconnected{})
 				return
 			}
@@ -285,7 +261,7 @@ func (p *Pump) run(ctx context.Context) {
 		// ctx cancel (user quit) or clean disconnect (radio rebooted).
 		attempt++
 		backoff := reconnectBackoff(attempt)
-		dbgf("retry %d in %s after: %v", attempt, backoff, sessErr)
+		slog.Debug("pump retry", "attempt", attempt, "backoff", backoff, "err", sessErr)
 		p.sink.Send(model.Reconnecting{
 			Attempt: attempt,
 			After:   backoff,
@@ -293,7 +269,7 @@ func (p *Pump) run(ctx context.Context) {
 		})
 		select {
 		case <-ctx.Done():
-			dbgf("ctx done during backoff — exiting")
+			slog.Debug("pump ctx done during backoff")
 			return
 		case <-time.After(backoff):
 		}
@@ -306,10 +282,7 @@ func (p *Pump) run(ctx context.Context) {
 // established=true when at least one inbound frame arrived (so the
 // caller can reset its retry budget) and the underlying error from
 // transport.Run if any.
-func (p *Pump) runSession(
-	ctx context.Context,
-	dbgf func(string, ...any),
-) (bool, error) {
+func (p *Pump) runSession(ctx context.Context) (bool, error) {
 	inbound := make(chan *pb.FromRadio, 64)
 
 	// Each session runs under a child ctx so cancelling it (e.g. when
@@ -326,71 +299,52 @@ func (p *Pump) runSession(
 	go func() {
 		runErr <- client.Run(sessCtx, inbound, p.outbound)
 	}()
-	dbgf("transport.Run goroutine started")
+	slog.Debug("transport.Run started")
 
 	// Fire the config handshake — prompts the radio to dump its
 	// NodeDB, channels, configs, and ConfigComplete. We do this on
 	// every (re)connect; the consumer's dedup logic absorbs the
 	// replay.
 	nonce := transport.SendWantConfig(p.outbound)
-	dbgf("SendWantConfig nonce=0x%08x", nonce)
+	slog.Debug("SendWantConfig", "nonce", fmt.Sprintf("0x%08x", nonce))
 
 	totalIn := 0
 	for {
 		select {
 		case <-ctx.Done():
-			dbgf("ctx.Done in session")
+			slog.Debug("pump session ctx done")
 			return totalIn > 0, nil
 		case err := <-runErr:
 			if err != nil {
-				dbgf("transport.Run returned error: %v", err)
+				slog.Debug("transport.Run error", "err", err)
 				return totalIn > 0, err
 			}
-			dbgf("transport.Run returned cleanly (radio disconnect?)")
+			slog.Debug("transport.Run clean return")
 			return totalIn > 0, nil
 		case msg := <-inbound:
 			if msg == nil {
-				dbgf("inbound nil — skipping")
+				slog.Debug("pump inbound nil, skipping")
 				continue
 			}
 			totalIn++
 			tms := p.translate(msg)
 			if len(tms) == 0 {
-				dbgf("[%d] inbound translated to nil (housekeeping)", totalIn)
+				slog.Debug("pump inbound housekeeping", "seq", totalIn)
 				continue
 			}
 			for _, tm := range tms {
 				if r, ok := tm.(model.Routing); ok {
-					dbgf("[%d] sending model.Routing to sink reqID=0x%08x ok=%t reason=%s hops=%d",
-						totalIn, r.RequestID, r.OK, r.ErrorName, r.Hops)
+					slog.Debug("pump inbound routing",
+						"seq", totalIn,
+						"reqID", fmt.Sprintf("0x%08x", r.RequestID),
+						"ok", r.OK,
+						"reason", r.ErrorName,
+						"hops", r.Hops)
 				} else {
-					dbgf("[%d] sending %T to sink", totalIn, tm)
+					slog.Debug("pump inbound event", "seq", totalIn, "type", fmt.Sprintf("%T", tm))
 				}
 				p.sink.Send(tm)
 			}
 		}
 	}
-}
-
-// openPumpDebugLog opens the pump debug log file when $MESHX_DEBUG
-// is set. Value is interpreted as a file path; special value "1"
-// expands to /tmp/meshx-pump.log for convenience. Returns nil (no
-// error) when the env var is unset — pump.run no-ops its logging
-// in that case. Safe to call at process startup; the file is opened
-// in append mode so repeated sessions accumulate.
-func openPumpDebugLog() *os.File {
-	path := os.Getenv("MESHX_DEBUG")
-	if path == "" {
-		return nil
-	}
-	if path == "1" {
-		path = "/tmp/meshx-pump.log"
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		// Silently fall back to no logging. Anything else (stderr
-		// write) would get eaten by the TUI's alt-screen anyway.
-		return nil
-	}
-	return f
 }

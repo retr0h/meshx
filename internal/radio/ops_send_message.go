@@ -20,7 +20,12 @@
 
 package radio
 
-import mdl "github.com/retr0h/meshx/internal/meshx/model"
+import (
+	"fmt"
+	"log/slog"
+
+	mdl "github.com/retr0h/meshx/internal/meshx/model"
+)
 
 // Text-send op — single source of truth for the Send + RecordOutbound
 // pair every locally-originated chat / DM / ham-bang message goes
@@ -72,6 +77,11 @@ func (s *Session) SendMessage(req SendMessageRequest) SendMessageResult {
 		ReplyID: req.ReplyID,
 		ToNum:   req.ToNum,
 	})
+	slog.Debug("session send",
+		"pid", fmt.Sprintf("0x%08x", pid),
+		"ch", req.Channel,
+		"to", fmt.Sprintf("0x%08x", req.ToNum),
+		"ok", ok)
 	res := s.recordOutbound(RecordOutboundOptions{
 		Channel:  req.Channel,
 		Text:     req.Text,

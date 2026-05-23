@@ -23,6 +23,7 @@ package transport
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -142,9 +143,11 @@ func DialBLE(addr string) (Client, error) {
 	// already-known peripherals on the same central — the very bug
 	// that made restart-meshx work but in-process retry not).
 	if cachedAddr, ok := loadScannedAddr(addr); ok {
+		slog.Debug("ble dial cached", "addr", addr)
 		if c, err := connectAndWire(adapter, cachedAddr, addr); err == nil {
 			return c, nil
 		}
+		slog.Debug("ble cached connect failed, re-scanning", "addr", addr)
 		forgetScannedAddr(addr)
 		// Re-enable after connectAndWire's Reset tore down the central.
 		if err := adapter.Enable(); err != nil {
@@ -153,16 +156,19 @@ func DialBLE(addr string) (Client, error) {
 	}
 
 	// Slow path: scan for the target advertisement.
+	slog.Debug("ble scan start", "addr", addr, "timeout", bleScanTimeout)
 	found, scanErr := scanForDevice(adapter, addr)
 	if scanErr != nil {
 		return nil, scanErr
 	}
+	slog.Debug("ble scan found", "addr", addr)
 
 	c, err := connectAndWire(adapter, found.Address, addr)
 	if err != nil {
 		return nil, err
 	}
 	cacheScannedAddr(addr, found.Address)
+	slog.Debug("ble connected", "addr", addr)
 	return c, nil
 }
 
@@ -475,15 +481,10 @@ func (c *bleClient) Run(
 			if err != nil {
 				return fmt.Errorf("marshal ToRadio: %w", err)
 			}
-			// Write WITH response — Meshtastic's reference clients
-			// (python, android) all use response-required writes to
-			// toRadio. Some firmware versions silently drop write-
-			// without-response, which looks to the client like the
-			// write succeeded but the radio never acts on it. The
-			// extra round-trip cost is negligible at chat rates.
 			if _, err := c.toRadio.Write(data); err != nil {
 				return fmt.Errorf("ble write toRadio: %w", err)
 			}
+			slog.Debug("ble write", "bytes", len(data))
 			// Post-write drain — the radio's response to our
 			// handshake / message is sitting in fromRadio right
 			// now. Draining immediately gets it into the pump

@@ -75,7 +75,7 @@ type tabState struct {
 // Keep alphabetical — users see this in the "N matches: …" flash
 // so order matters for predictability.
 var slashCommands = []string{
-	"73", "88", "channel", "channels", "clear", "close", "config",
+	"73", "88", "bell", "channel", "channels", "clear", "close", "config",
 	"cq", "cqr", "exit", "grid", "h", "help", "ignore", "info", "join",
 	"k", "lastlog", "list", "me", "mesh", "msg", "mute", "nearby", "nick",
 	"nodes", "part", "pin", "ping", "q", "qrm", "qrz", "qsb", "qsl", "qth",
@@ -96,6 +96,7 @@ var callsignArgCommands = map[string]bool{
 	"rs":   true,
 	"ping": true,
 	"tr":   true, "trace": true, "traceroute": true,
+	"bell":  true,
 	"msg":   true,
 	"query": true,
 	"reply": true, "r": true,

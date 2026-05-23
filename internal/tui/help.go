@@ -102,6 +102,10 @@ var helpEntries = map[string]helpEntry{
 		usage:   "/msg <call> <text>",
 		summary: "send a direct message to <call> — opens a @peer DM tab; subsequent typing keeps replying to that peer",
 	},
+	"bell": {
+		usage:   "/bell <call> [text]",
+		summary: "DM with BEL alert — buzzes the peer's radio if they have External Notification enabled",
+	},
 	"query": {
 		usage:   "/query <call>",
 		summary: "open (or focus) a DM tab for <call> without sending — irssi convention",

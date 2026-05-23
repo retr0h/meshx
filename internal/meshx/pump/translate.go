@@ -99,6 +99,17 @@ import (
 // This file is the ONE place in the codebase where pb.* types meet
 // model.* types — every projection lives here so model can stay
 // proto-free.
+// rxTime returns the packet's RxTime as a time.Time, falling back to
+// time.Now() when the radio didn't set it (RxTime=0). Without this,
+// epoch-zero renders as "16:00" in US/Pacific and dedup treats every
+// zero-timestamped message as identical.
+func rxTime(ts uint32) time.Time {
+	if ts == 0 {
+		return time.Now()
+	}
+	return time.Unix(int64(ts), 0)
+}
+
 func (p *Pump) translate(msg *pb.FromRadio) []any {
 	switch v := msg.GetPayloadVariant().(type) {
 	case *pb.FromRadio_MyInfo:
@@ -240,7 +251,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []any {
 		// Bang, Status) left zero for the consumer to enrich.
 		// Time ("15:04") is pre-formatted off SentAt so the
 		// renderer doesn't need to re-format on every paint.
-		at := time.Unix(int64(pkt.GetRxTime()), 0)
+		at := rxTime(pkt.GetRxTime())
 		return []any{model.Text{
 			Channel: int(pkt.GetChannel()),
 			ToNum:   pkt.GetTo(),
@@ -327,7 +338,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []any {
 			SNR:         fmt.Sprintf("%.1f", pkt.GetRxSnr()),
 			RSSI:        fmt.Sprintf("%d", pkt.GetRxRssi()),
 			Hops:        int(pkt.GetHopStart()) - int(pkt.GetHopLimit()),
-			LastHeardAt: time.Unix(int64(pkt.GetRxTime()), 0),
+			LastHeardAt: rxTime(pkt.GetRxTime()),
 		}}
 	case pb.PortNum_ADMIN_APP:
 		// AdminMessage replies — the radio answers our
@@ -369,7 +380,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []any {
 			Hops:      int(pkt.GetHopStart()) - int(pkt.GetHopLimit()),
 			SNR:       fmt.Sprintf("%.1f", pkt.GetRxSnr()),
 			RSSI:      fmt.Sprintf("%d", pkt.GetRxRssi()),
-			At:        time.Unix(int64(pkt.GetRxTime()), 0),
+			At:        rxTime(pkt.GetRxTime()),
 		}}
 	case pb.PortNum_TRACEROUTE_APP:
 		// Reply to a /tr request. Payload is a RouteDiscovery proto
@@ -389,7 +400,7 @@ func (p *Pump) translatePacket(pkt *pb.MeshPacket) []any {
 			FromNum:   pkt.GetFrom(),
 			ToNum:     pkt.GetTo(),
 			Route:     append([]uint32(nil), rd.GetRoute()...),
-			At:        time.Unix(int64(pkt.GetRxTime()), 0),
+			At:        rxTime(pkt.GetRxTime()),
 		}}
 	case pb.PortNum_ROUTING_APP:
 		// Routing payload carries the radio's verdict on a packet

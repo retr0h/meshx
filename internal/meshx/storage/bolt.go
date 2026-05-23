@@ -490,6 +490,12 @@ func (b *Bolt) LoadMessages(
 			if channel != "" && env.Channel != channel {
 				continue
 			}
+			// Skip messages with epoch-zero SentAt — these were
+			// persisted before the rxTime fix and carry no real
+			// timestamp (they render as "16:00" in US/Pacific).
+			if env.Message.SentAt.Unix() == 0 {
+				continue
+			}
 			buf = append(buf, env.Message)
 			if limit > 0 && len(buf) >= limit {
 				break

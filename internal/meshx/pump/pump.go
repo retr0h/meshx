@@ -121,8 +121,22 @@ type Pump struct {
 	// the underlying Transport gets swapped out.
 	outbound chan *pb.ToRadio
 
+	// debugLog is the $MESHX_DEBUG log file, shared between the run
+	// goroutine (inbound) and Send callers (outbound). Append-mode
+	// writes are atomic for short lines on POSIX.
+	debugLog *os.File
+
 	// Cancellation for the running goroutines.
 	cancel context.CancelFunc
+}
+
+// logf writes a timestamped line to the debug log when active.
+func (p *Pump) logf(format string, args ...any) {
+	if p.debugLog == nil {
+		return
+	}
+	line := fmt.Sprintf(format, args...)
+	_, _ = fmt.Fprintf(p.debugLog, "[%s] %s\n", time.Now().Format("15:04:05.000"), line)
 }
 
 // setClient swaps the live transport under the mutex. Returns the
@@ -206,18 +220,14 @@ func (p *Pump) Enqueue(msg *pb.ToRadio) bool {
 // flowing when a BLE / serial session appears to hang. Pipe-friendly
 // single-line records so `tail -f` reads cleanly.
 func (p *Pump) run(ctx context.Context) {
-	dbg := openPumpDebugLog()
+	p.debugLog = openPumpDebugLog()
 	defer func() {
-		if dbg != nil {
-			_ = dbg.Close()
+		if p.debugLog != nil {
+			_ = p.debugLog.Close()
 		}
 	}()
 	dbgf := func(format string, args ...any) {
-		if dbg == nil {
-			return
-		}
-		line := fmt.Sprintf(format, args...)
-		_, _ = fmt.Fprintf(dbg, "[%s] %s\n", time.Now().Format("15:04:05.000"), line)
+		p.logf(format, args...)
 	}
 
 	dbgf("pump.run start dest=%s", p.dest)
@@ -350,7 +360,12 @@ func (p *Pump) runSession(
 				continue
 			}
 			for _, tm := range tms {
-				dbgf("[%d] sending %T to sink", totalIn, tm)
+				if r, ok := tm.(model.Routing); ok {
+					dbgf("[%d] sending model.Routing to sink reqID=0x%08x ok=%t reason=%s hops=%d",
+						totalIn, r.RequestID, r.OK, r.ErrorName, r.Hops)
+				} else {
+					dbgf("[%d] sending %T to sink", totalIn, tm)
+				}
 				p.sink.Send(tm)
 			}
 		}

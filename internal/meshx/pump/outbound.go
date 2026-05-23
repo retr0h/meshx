@@ -51,18 +51,26 @@ func (p *Pump) Send(cmd model.Command) (uint32, bool) {
 	switch c := cmd.(type) {
 	case model.SendText:
 		envelope, pid := buildText(c.Text, uint32(c.Channel), c.ReplyID, c.ToNum)
-		return pid, p.enqueue(envelope)
+		ok := p.enqueue(envelope)
+		p.logf("outbound SendText pid=0x%08x ch=%d to=0x%08x ok=%t text=%q",
+			pid, c.Channel, c.ToNum, ok, truncate(c.Text, 64))
+		return pid, ok
 
 	case model.SendPing:
 		envelope, pid := buildPing(c.TargetNum)
-		return pid, p.enqueue(envelope)
+		ok := p.enqueue(envelope)
+		p.logf("outbound SendPing pid=0x%08x to=0x%08x ok=%t", pid, c.TargetNum, ok)
+		return pid, ok
 
 	case model.SendTraceroute:
 		envelope, pid, err := buildTraceroute(c.TargetNum)
 		if err != nil {
+			p.logf("outbound SendTraceroute build failed: %v", err)
 			return 0, false
 		}
-		return pid, p.enqueue(envelope)
+		ok := p.enqueue(envelope)
+		p.logf("outbound SendTraceroute pid=0x%08x to=0x%08x ok=%t", pid, c.TargetNum, ok)
+		return pid, ok
 
 	case model.SetOwner:
 		envelope, err := buildAdminSetOwner(p.myNum, c.LongName, c.ShortName, c.IsLicensed)
@@ -434,4 +442,11 @@ func channelRoleToProto(role model.ChannelRole) (pb.Channel_Role, error) {
 		return pb.Channel_SECONDARY, nil
 	}
 	return 0, errors.New("unknown channel role: " + string(role))
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }

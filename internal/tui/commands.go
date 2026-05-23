@@ -1264,6 +1264,29 @@ func (m *model) executeCommand(raw string) tea.Cmd {
 		// this peer without retyping `/msg <peer>` every line.
 		// Mirrors irssi's `/msg target text` (focus follows query).
 		m.switchToDMThread(nodeNum)
+	case "bell":
+		parts := strings.SplitN(rest, " ", 2)
+		target := strings.TrimPrefix(parts[0], "@")
+		if target == "" {
+			m.flash = "usage: /bell <peer> [text]"
+			return nil
+		}
+		nodeNum := m.nodeNumOf(target)
+		if nodeNum == 0 {
+			m.flash = fmt.Sprintf("/bell: peer %q not found in nodes — try /nodes to list", target)
+			return nil
+		}
+		call := target
+		if idx, ok := m.NodesByNum[nodeNum]; ok && idx < len(m.Nodes) {
+			call = m.Nodes[idx].Callsign
+		}
+		body := "🔔"
+		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
+			body = strings.TrimSpace(parts[1])
+		}
+		m.sendDM(nodeNum, call, "\x07"+body, 0)
+		m.switchToDMThread(nodeNum)
+		m.flash = fmt.Sprintf("🔔 bell sent to %s", call)
 	case "query":
 		// /query <peer> opens (or focuses) a DM tab for peer without
 		// sending anything yet. Subsequent typing routes through

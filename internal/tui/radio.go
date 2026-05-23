@@ -449,6 +449,7 @@ func (m *model) resend(idx int) {
 		Channel: int(m.currentChannelIndex()),
 		Text:    msg.Text,
 		ReplyID: msg.ReplyID,
+		ToNum:   msg.ToNum,
 	})
 	msg.PacketID = pid
 	msg.Status = mdl.StatusPending

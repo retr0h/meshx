@@ -690,8 +690,8 @@ go.augendre.info/arangolint v0.4.0 h1:xSCZjRoS93nXazBSg5d0OGCi9APPLNMmmLrC995tR5
 go.augendre.info/arangolint v0.4.0/go.mod h1:l+f/b4plABuFISuKnTGD4RioXiCCgghv2xqst/xOvAA=
 go.augendre.info/fatcontext v0.9.0 h1:Gt5jGD4Zcj8CDMVzjOJITlSb9cEch54hjRRlN3qDojE=
 go.augendre.info/fatcontext v0.9.0/go.mod h1:L94brOAT1OOUNue6ph/2HnwxoNlds9aXDF2FcUntbNw=
-go.bug.st/serial v1.7.0 h1:Svs5xR0s4JF+KIg+1d9QE4iXqEIJvTr5vESFUjSu7mE=
-go.bug.st/serial v1.7.0/go.mod h1:PZfOSahry47TWtrd0tvoKZvmVa7FGrc/1xG9q8Ho3xU=
+go.bug.st/serial v1.7.1 h1:5aP8wYL0UjEYOVs3oPAGscjaSfRQLHtCvBFXNN/rwtc=
+go.bug.st/serial v1.7.1/go.mod h1:d0MmS16Qt9b1m06yoYRNUXhRRTJV5Qg2S5EKqQtnayQ=
 go.etcd.io/bbolt v1.4.3 h1:dEadXpI6G79deX5prL3QRNP6JB8UxVkqo4UPnHaNXJo=
 go.etcd.io/bbolt v1.4.3/go.mod h1:tKQlpPaYCVFctUIgFKFnAlvbmB3tpy1vkTnDWohtc0E=
 go.opencensus.io v0.21.0/go.mod h1:mSImk1erAIZhrmZN+AvHh14ztQfjbGwt4TtuofqLduU=

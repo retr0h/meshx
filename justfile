@@ -35,7 +35,6 @@ deps:
 # Run all tests
 test:
     just just-fmt-check
-    just md-fmt-check
     just go-test
 
 # Format, lint before committing

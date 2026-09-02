@@ -9,7 +9,7 @@ Build: `just deps && go build .` | Test: `just test` | Lint: `just ready`
 | `internal/radio/`           | Per-radio session: `*State`, `Apply*` handlers, `ops_*` operations    |
 | `internal/bus/`             | In-process pub/sub event bus; slow consumers drop rather than block   |
 | `internal/meshx/model/`     | Canonical wire + persisted shapes — the lingua franca                 |
-| `internal/meshx/pump/`      | Transport ↔ TUI bridge, reconnect policy, proto ↔ model translation  |
+| `internal/meshx/pump/`      | Transport ↔ TUI bridge, reconnect policy, proto ↔ model translation   |
 | `internal/meshx/storage/`   | bbolt persistence — messages, nodes, BLE devices                      |
 | `internal/meshx/transport/` | `Client` interface + serial / TCP / BLE implementations + frame codec |
 | `internal/tui/`             | Bubble Tea rendering — Component tree, panes, input, commands         |

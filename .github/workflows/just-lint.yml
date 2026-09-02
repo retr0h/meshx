@@ -17,4 +17,4 @@ jobs:
       - name: Fetch justfiles
         run: just fetch
       - name: Lint justfiles
-        run: just just::fmt-check
+        run: just just-fmt-check

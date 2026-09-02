@@ -22,10 +22,10 @@ just deps     # install tool dependencies
 just deps          # install all dependencies
 just test          # all tests (lint + format check + unit + coverage)
 just ready         # format + lint before committing
-just go::unit      # unit tests only
-just go::vet       # golangci-lint
-just go::fmt       # auto-format (gofumpt + golines)
-just just::fmt     # format justfiles
+just go-unit       # unit tests only
+just go-vet        # golangci-lint
+just go-fmt        # auto-format (gofumpt + golines)
+just just-fmt      # format justfiles
 ```
 
 ## Running
@@ -75,7 +75,7 @@ Package-level overview (file-level detail lives in each package's headers —
 | `internal/radio/`           | Per-radio session layer — canonical `*State`, `Apply*` handlers, `ops_*` (channels/config/radio/send)                             |
 | `internal/bus/`             | In-process publish/subscribe event bus — fan-out to TUI and any other subscriber; slow consumers drop events rather than blocking |
 | `internal/meshx/model/`     | Canonical wire/persisted shapes — the lingua franca all layers share                                                              |
-| `internal/meshx/pump/`      | Transport ↔ tea bridge — reconnect policy, proto ↔ model translation                                                            |
+| `internal/meshx/pump/`      | Transport ↔ tea bridge — reconnect policy, proto ↔ model translation                                                              |
 | `internal/meshx/storage/`   | bbolt persistence — messages, nodes, BLE devices (`~/.meshx/meshx.bolt`)                                                          |
 | `internal/meshx/transport/` | `Client` interface + serial/TCP/BLE implementations + frame codec                                                                 |
 | `internal/tui/`             | Bubble Tea rendering — `Component` tree, layout primitives, pane Components, input/commands                                       |

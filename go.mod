@@ -15,7 +15,7 @@ require (
 	github.com/spf13/viper v1.21.0
 	go.bug.st/serial v1.8.0
 	go.etcd.io/bbolt v1.5.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 	tinygo.org/x/bluetooth v0.15.1-0.20260517055521-fc635e3ddf8c
 )
 

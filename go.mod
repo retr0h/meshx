@@ -16,7 +16,7 @@ require (
 	go.bug.st/serial v1.8.0
 	go.etcd.io/bbolt v1.5.0
 	google.golang.org/protobuf v1.36.12
-	tinygo.org/x/bluetooth v0.16.0
+	tinygo.org/x/bluetooth v0.17.0
 )
 
 require (
@@ -187,7 +187,7 @@ require (
 	github.com/ryancurrah/gomodguard/v2 v2.1.3 // indirect
 	github.com/ryanrolds/sqlclosecheck v0.6.0 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
-	github.com/saltosystems/winrt-go v0.0.0-20260317170058-9c2fec580d96 // indirect
+	github.com/saltosystems/winrt-go v0.0.0-20261015065339-8ef619c103a3 // indirect
 	github.com/sanposhiho/wastedassign/v2 v2.1.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/sashamelentyev/interfacebloat v1.1.0 // indirect
@@ -198,8 +198,8 @@ require (
 	github.com/sivchari/containedctx v1.0.3 // indirect
 	github.com/sonatard/noctx v0.5.1 // indirect
 	github.com/sourcegraph/go-diff v0.9.0 // indirect
-	github.com/soypat/cyw43439 v0.1.2-0.20260731160358-f2a6af121857 // indirect
-	github.com/soypat/lneto v0.3.2 // indirect
+	github.com/soypat/cyw43439 v0.2.0 // indirect
+	github.com/soypat/lneto v0.4.0 // indirect
 	github.com/soypat/seqs v0.0.0-20260125140838-2c1c6b1bd69e // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
@@ -212,7 +212,7 @@ require (
 	github.com/tetafro/godot v1.5.6 // indirect
 	github.com/timakin/bodyclose v0.0.0-20260723120731-857993a2939c // indirect
 	github.com/timonwong/loggercheck v0.13.0 // indirect
-	github.com/tinygo-org/cbgo v0.0.4 // indirect
+	github.com/tinygo-org/cbgo v0.1.0 // indirect
 	github.com/tinygo-org/pio v0.3.0 // indirect
 	github.com/tomarrell/wrapcheck/v2 v2.13.0 // indirect
 	github.com/tommy-muehle/go-mnd/v2 v2.5.1 // indirect
@@ -248,7 +248,7 @@ require (
 	honnef.co/go/tools v0.8.2 // indirect
 	mvdan.cc/gofumpt v0.12.0 // indirect
 	mvdan.cc/unparam v0.0.0-20260823230713-2fa3d841b0c8 // indirect
-	tinygo.org/x/espradio v0.3.0 // indirect
+	tinygo.org/x/espradio v0.5.0 // indirect
 )
 
 tool (

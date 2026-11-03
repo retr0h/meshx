@@ -99,7 +99,7 @@ func ScanBLE(timeout time.Duration) ([]BLESighting, error) {
 		if err := adapter.StopScan(); err != nil {
 			return nil, fmt.Errorf("stop scan: %w", err)
 		}
-		<-scanDone
+		<-scanDone //nolint:errcheck // deliberate drain, see comment above
 	}
 
 	mu.Lock()

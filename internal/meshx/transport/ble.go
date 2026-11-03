@@ -199,12 +199,12 @@ func scanForDevice(adapter *bluetooth.Adapter, addr string) (bluetooth.ScanResul
 		// CBPeripheral cache entry survives into the Connect call.
 		// scanErrCh will drain when caller eventually stops.
 		go func() {
-			<-scanErrCh
+			<-scanErrCh //nolint:errcheck // deliberate drain, see comment above
 		}()
 		return found, nil
 	case <-time.After(bleScanTimeout):
 		_ = adapter.StopScan()
-		<-scanErrCh
+		<-scanErrCh //nolint:errcheck // deliberate drain, see comment above
 		return bluetooth.ScanResult{}, fmt.Errorf(
 			"ble: device %s not found within %s — is it powered on and in range?",
 			addr, bleScanTimeout,

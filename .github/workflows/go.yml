@@ -15,7 +15,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: stable
+          go-version-file: go.mod
       - name: Install just
         uses: extractions/setup-just@v4
       - name: Fetch justfiles

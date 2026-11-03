@@ -120,7 +120,7 @@ func bleProbe(addr string) error {
 			fmt.Fprintln(os.Stderr, "  step 5: 15s elapsed — summarizing")
 			summarizeProbe(total, counts, sawConfigComplete)
 			// Let the Run goroutine clean up before we return.
-			<-runDone
+			<-runDone //nolint:errcheck // deliberate drain, see comment above
 			return nil
 
 		case err := <-runDone:

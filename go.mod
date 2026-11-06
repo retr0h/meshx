@@ -1,6 +1,6 @@
 module github.com/retr0h/meshx
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/caarlos0/go-version v0.2.2

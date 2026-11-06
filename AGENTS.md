@@ -1,39 +1,42 @@
 # AGENTS.md
 
-Build: `just deps && go build .` | Test: `just test` | Lint: `just ready`
+Test: `just test` | Before committing: `just ready`
 
-## Packages
+Read [docs/development.md](docs/development.md) first. It covers setup, the just
+recipes, the architecture and package layout, renderer and testing conventions,
+and the color palette. [docs/contributing.md](docs/contributing.md) covers the
+pull request workflow, commit messages and code style. All of it applies to
+agents exactly as it applies to people. This file carries only what is specific
+to agents.
 
-| Package                     | What it does                                                          |
-| --------------------------- | --------------------------------------------------------------------- |
-| `internal/radio/`           | Per-radio session: `*State`, `Apply*` handlers, `ops_*` operations    |
-| `internal/bus/`             | In-process pub/sub event bus; slow consumers drop rather than block   |
-| `internal/meshx/model/`     | Canonical wire + persisted shapes — the lingua franca                 |
-| `internal/meshx/pump/`      | Transport ↔ TUI bridge, reconnect policy, proto ↔ model translation   |
-| `internal/meshx/storage/`   | bbolt persistence — messages, nodes, BLE devices                      |
-| `internal/meshx/transport/` | `Client` interface + serial / TCP / BLE implementations + frame codec |
-| `internal/tui/`             | Bubble Tea rendering — Component tree, panes, input, commands         |
+## Running tools
 
-## Testing
+Invoke tools through `mise`, not from your path:
 
-- Table-driven, `foo.go ↔ foo_test.go`, one `Test<Subject>` per public surface
-- bbolt: `storage.New(t.TempDir() + "/test.bolt")`
-- Session: `radio.New(nil, nil, nil)` for tests without a radio
-- Race detector mandatory for bus/pump code
+```bash
+mise exec -- just test
+```
+
+`mise` is active in a person's shell and supplies the versions `.mise.toml`
+declares. An agent's shell has no activation, so a bare `just` resolves to
+whatever is installed globally, usually an older version.
+
+The symptom is a check that fails here and passes in continuous integration, on
+a file nobody edited. When that happens, establish which version ran before
+treating the failure as real.
 
 ## Screenshot
 
-```bash
-MESHX_BLE_UUID=<uuid> vhs asset/ui.tape
+Recording `asset/ui.gif` needs a radio paired with the person's machine. Ask
+them for its UUID rather than scanning for one, and leave the recording to them
+if they have no radio to hand.
+
+## Commit trailer
+
+When committing via Claude Code, end the message with:
+
 ```
+🤖 Generated with [Claude Code](https://claude.ai/code)
 
-Produces `asset/ui.gif` + `asset/ui.png`. User supplies the UUID.
-
-## Standards
-
-- Conventional Commits
-- Consumer interfaces declared where consumed (osapi-io pattern)
-- No inline hex colors — palette in `internal/tui/palette.go`
-- Multi-line function signatures for 2+ params
-- `just ready` before every commit
-- Architecture + deep dive: [`docs/development.md`](./docs/development.md)
+Co-Authored-By: Claude <noreply@anthropic.com>
+```

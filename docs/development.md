@@ -49,6 +49,19 @@ go run . ble probe <uuid>                  # 15s diagnostic FromRadio dump
 go run . --debug ble pair <uuid>
 ```
 
+## Screenshot
+
+The demo GIF in the README is recorded with
+[vhs](https://github.com/charmbracelet/vhs) from `asset/ui.tape`. The tape
+connects to a real radio over Bluetooth, so it needs the UUID of one you have
+paired:
+
+```bash
+MESHX_BLE_UUID=<uuid> vhs asset/ui.tape
+```
+
+It writes `asset/ui.gif`.
+
 ## Architecture
 
 ```

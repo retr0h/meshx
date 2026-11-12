@@ -20,6 +20,9 @@ on:
       - '.mise.toml'
       - '.github/workflows/go.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: macos-latest

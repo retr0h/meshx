@@ -18,6 +18,10 @@ go_coverage_target := "44"
 
 # --- Fetch ---
 
+# List the recipes
+default:
+    @just --list
+
 # Fetch shared justfiles from osapi-justfiles
 fetch:
     mkdir -p .just/remote
